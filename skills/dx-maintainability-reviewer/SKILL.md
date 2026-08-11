@@ -60,8 +60,8 @@ git log --pretty=format: --name-only | sort | uniq -c | sort -rn | head -20
 ### Step 3: Code Complexity Scan
 
 ```bash
-# Long files (>500 lines)
-find . -name "*.ts" -exec sh -c 'wc -l "$1" | awk "\$1 > 500 {print}"' _ {} \;
+# Longest files first — the top of this list is the hotspot set
+find . -name "*.ts" -exec wc -l {} + | sort -rn | head -20
 
 # Long functions (rough heuristic)
 grep -rn "function\|async\|=>" --include="*.ts" -A 100 | head -200
