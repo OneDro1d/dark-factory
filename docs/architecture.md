@@ -37,8 +37,12 @@ dark-factory-<org>/
   hooks/         org-specific hooks only
   patterns/      org non-negotiables
   doctrine.md    org session-start content, injected into the Tier-1 hook template
-  UPSTREAM.lock  the canonical commit this org is tested against
+  org.lock.json  THE authority: the Tier-1 pin + every skill and hook this org installs
 ```
+
+> `org.lock.json` is the single Tier-2 authority. An earlier layout also carried a separate
+> `UPSTREAM.lock` holding only the Tier-1 pin, and one org layer ended up with **both** —
+> two pins for the same upstream, disagreeing, with nothing comparing them. Keep one file.
 
 Same shape everywhere means one mental model and one set of tooling — a parity check becomes
 a folder-for-folder comparison instead of bespoke per-lane logic.
