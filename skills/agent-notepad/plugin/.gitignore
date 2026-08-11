@@ -1,0 +1,6 @@
+# Test / runtime artifacts — never commit.
+__pycache__/
+*.pyc
+tests/.stub-mem.log
+# Memory-mirror staging created inside notepads at runtime.
+.anp-mirror/

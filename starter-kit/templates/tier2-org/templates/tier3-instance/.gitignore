@@ -1,0 +1,32 @@
+# Upstream clone fetched by install.sh. The ref in instance.lock.json is the source of
+# truth — this is a rebuildable cache, never content. Committing it would vendor the whole
+# shared environment into your personal repo.
+vendor/
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+# Deny-all-then-allow. Skills ship a *.example template and nothing else. If a real key
+# ever lands in git, rotate it — deleting the file does not remove it from history.
+.env
+.env.*
+!.env.example
+!*.env.example
+!.env.*.example
+*.pem
+*.key
+*_rsa
+*_ed25519
+.credentials.json
+kubeconfig
+*.kubeconfig
+.claude.json
+
+# ── Runtime scratch ───────────────────────────────────────────────────────────
+.run/
+.playwright-mcp/
+node_modules/
+__pycache__/
+*.log
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

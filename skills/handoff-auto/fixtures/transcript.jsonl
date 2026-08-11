@@ -1,0 +1,5 @@
+{"type":"user","message":{"role":"user","content":"Build the auto-handoff mechanism the dark factory way"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Starting the build."},{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}},{"type":"tool_use","name":"Edit","input":{"file_path":"/home/dev/code/loom-handoff-autocompaction/lib/redact.sh"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"now add the session start restore injector"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"curl -H 'Authorization: Bearer sk-secret123ABCdef456GHIjkl789MNOpqr012'"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Write","input":{"file_path":"/home/dev/code/loom-handoff-autocompaction/hooks/pre-compact.sh"}}]}}

@@ -1,0 +1,36 @@
+{
+  "$comment": "Your Tier 3 instance. This file is the authority for what YOUR machine installs. It pins Tier 2 (the shared __ORG_DISPLAY__ environment) and lists ONLY your personal additions — it deliberately does not re-list Tier 2's skills, because a second copy of that list is a drift waiting to happen. install.sh fetches Tier 2, delegates to its installer for the shared skills and hooks, then layers whatever you declare below on top.",
+
+  "instance": "__INSTANCE_NAME__",
+
+  "$agentNameNote": "Empty until the agent chooses. This is deliberately NOT defaulted from the instance name — a name that arrived by default was never chosen. Start a session, ask your agent to pick one, then set it here and export AGENT_NAME. It must NEVER be used as a release, image tag, or ticket fixVersion — those use the application name plus semver.",
+  "agentName": "__AGENT_NAME__",
+
+  "upstreams": {
+    "__ORG_LAYER_NAME__": {
+      "repo": "__ORG_REPO__",
+      "ref": "__T2_REF__",
+      "role": "Tier 2 — the shared __ORG_DISPLAY__ environment. Brings Tier 1 with it.",
+      "$refSource": "__T2_REF_SOURCE__",
+      "$refNote": "A COMMIT SHA, resolved when this instance was generated. Deliberate: a branch name here means upstream can move under you between installs, and a release branch moves most while it is under review — exactly when new people are onboarding. Pinned, an upstream change can never surprise you mid-task. Taking an update stays a one-line bump, but it happens when you choose. $refSource records the branch this SHA came from, so you know where to look for the next one."
+    }
+  },
+
+  "vendorDir": "vendor",
+
+  "install": {
+    "$comment": "YOUR additions only. Anything here is layered AFTER Tier 2, so a same-named entry overrides Tier 2's — which is how you customise a shared skill without forking the shared repo. Overriding is reported loudly by install.sh, because a silent override is how tiers rot.",
+
+    "skills": {
+    },
+
+    "hooks": {
+    }
+  },
+
+  "notRestorable": {
+    "gh auth login": "credentials cannot live in a lockfile",
+    "MCP connectors": "authenticated interactively — confirm your tool namespace before relying on it",
+    "settings.json hook registration": "yours to edit — the installer places files, it will not touch your settings"
+  }
+}

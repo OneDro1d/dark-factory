@@ -1,0 +1,11 @@
+{
+  "$comment": "The CODE repos this notepad drives (DESIGN §6.4). Driven via absolute paths + `git -C <path>`, never by cd. Every repo should hold a df-context-store (.claude/context/); a missing store surfaces a SessionStart warning when requires_df_context_store is true. Replace the example entry at /scope-init.",
+  "repos": [
+    {
+      "path": "/abs/path/to/code-repo",
+      "branch": "main",
+      "role": "primary"
+    }
+  ],
+  "requires_df_context_store": true
+}

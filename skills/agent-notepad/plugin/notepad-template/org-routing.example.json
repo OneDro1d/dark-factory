@@ -1,0 +1,10 @@
+{
+  "$comment": "Prefix -> git-org routing (DESIGN §3, §5). The notepad's group is the substring before the first hyphen in <group>-<objective> (e.g. proj-arbbot -> group 'proj'). At /scope-init this map decides which GitHub org a new notepad repo is created in. Copy to org-routing.json (gitignore or commit per your policy) and edit. This .example file documents the schema. Keys are YOUR prefixes and values are YOUR orgs — every value here is a placeholder on purpose, because a committed example that names real orgs is a list of the estates you work in.",
+  "default_org": "my-github-org",
+  "routes": {
+    "proj": "my-github-org",
+    "bugs": "my-github-org",
+    "client": "a-client-github-org",
+    "internal": "my-github-org"
+  }
+}

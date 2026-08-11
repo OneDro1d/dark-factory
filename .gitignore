@@ -1,0 +1,16 @@
+.DS_Store
+*.bak
+*.bak.*
+*.orig
+*.retired-*
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+# vendor/ caches are generated per instance and never belong in the canonical repo
+vendor/
+
+# The real landmark list. It IS the list of nouns that must not be published, so
+# committing it would publish exactly what the gate exists to protect. Only the
+# example file with placeholder patterns is tracked.
+boot-kit/scripts/landmarks.conf

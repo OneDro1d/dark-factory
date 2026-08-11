@@ -1,0 +1,76 @@
+name: gate
+
+# The publish gate is the control that stops client landmarks reaching a public repo.
+# It only works if it actually RUNS — every gate failure in this repo's history was a
+# check nobody ran, or one that ran and could not catch anything. So it runs here, on
+# every change, as a required status check.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege. This workflow reads the tree and writes a job summary; it never needs
+# to write to the repo, and it must never be given secrets that a fork PR could reach.
+# NOTE: this is deliberately `pull_request`, NOT `pull_request_target`. The latter runs
+# with repository secrets in the context of the base branch — combined with a checkout of
+# the PR head, that hands write-scoped credentials to untrusted code. Do not change it.
+permissions:
+  contents: read
+
+jobs:
+  publish-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history — P8 scans every blob ever committed)
+        # Pinned to a commit SHA, not a tag: a tag is mutable and can be repointed at
+        # new code by anyone who controls the action's repo.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Self-test — prove every pattern class can FAIL
+        # Runs FIRST and on purpose. A gate that passes proves nothing until you have
+        # seen it fail on an input it must catch; this plants a canary per class and
+        # asserts the gate rejects each one. If this step passes but the gate below
+        # cannot catch anything, the patterns have gone inert.
+        run: bash boot-kit/scripts/gate-selftest.sh
+
+      - name: Publish gate — PLACEHOLDER patterns only, not a real-landmark pass
+        # The step NAME carries the caveat because that is what a reader skimming a green
+        # check actually sees. The job summary below says the same thing at length, and
+        # CONTRIBUTING.md a third time — but a caveat that only exists one expand-click
+        # away from the green tick is a caveat most readers will never meet.
+        run: bash boot-kit/scripts/publish-gate.sh --history
+
+      - name: Report which landmark config was used
+        # THIS IS NOT COSMETIC. `landmarks.conf` holds the real patterns and is
+        # gitignored — it is the list of nouns that must not be published, so committing
+        # it would publish exactly what the gate protects. CI therefore runs against
+        # `landmarks.example.conf`, whose patterns match FICTIONAL companies.
+        #
+        # Consequence: a green check here proves the gate is well-formed, that no pattern
+        # is inert, and that no placeholder landmark leaked. It does NOT prove the branch
+        # is free of REAL landmarks. Only a maintainer running the gate locally with
+        # landmarks.conf can prove that, and CONTRIBUTING.md says so.
+        #
+        # We surface it rather than hiding it, because a check that looks stronger than
+        # it is is worse than no check.
+        if: always()
+        run: |
+          CONF=$(bash boot-kit/scripts/publish-gate.sh 2>&1 | head -1)
+          echo "### Gate configuration" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "$CONF" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          case "$CONF" in
+            *PLACEHOLDER*)
+              echo ':warning: **CI ran with PLACEHOLDER patterns.** This proves the gate is' >> "$GITHUB_STEP_SUMMARY"
+              echo 'well-formed and that no class is inert. It does **not** prove this branch is' >> "$GITHUB_STEP_SUMMARY"
+              echo 'free of real landmarks — `landmarks.conf` is gitignored and unavailable here.' >> "$GITHUB_STEP_SUMMARY"
+              echo 'A maintainer must run `bash boot-kit/scripts/publish-gate.sh --history` locally,' >> "$GITHUB_STEP_SUMMARY"
+              echo 'with the real `landmarks.conf` present, before merging.' >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo 'Gate ran with a real landmark config.' >> "$GITHUB_STEP_SUMMARY"
+              ;;
+          esac

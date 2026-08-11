@@ -1,0 +1,24 @@
+# CODEOWNERS — review is required from these owners for the paths below.
+#
+# Deliberately NOT a catch-all. Most of this repo is documentation, and requiring a
+# maintainer review on every prose change is the kind of friction that gets a rule
+# switched off. What is listed here is the security surface: the files where a mistake
+# publishes something, or silently stops a control from working.
+
+# The gate, its patterns, and its self-test. A change here can make the control inert
+# while it continues to report PASS — the exact failure this repo has hit three times.
+/boot-kit/scripts/            @token-boss
+
+# The rule that defines what may be published at all.
+/CONTENT-BOUNDARY.md          @token-boss
+
+# CI config: a workflow change can disable the gate, or hand secrets to fork code.
+/.github/                     @token-boss
+
+# Enforcement that does not depend on the model choosing to comply.
+/hooks/                       @token-boss
+
+# The licence and the disclosure path.
+/LICENSE                      @token-boss
+/NOTICE                       @token-boss
+/SECURITY.md                  @token-boss

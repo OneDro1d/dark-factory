@@ -1,0 +1,9 @@
+# DIGEST.md is derived (precomputed cross-scope digest from the memory index) — never commit it.
+DIGEST.md
+
+# Memory-mirror staging (rendered journal Markdown fed to the memory index) — derived, never commit.
+.anp-mirror/
+
+# OS / editor cruft
+.DS_Store
+*.swp

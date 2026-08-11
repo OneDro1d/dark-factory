@@ -1,0 +1,33 @@
+{
+  "$comment": "Tier 2 — your organisation's shared agent environment. This file is the authority for WHAT gets installed; install.sh is only the mechanism. It pins Tier 1 (the generic Dark Factory method) by COMMIT SHA and lists every shared skill and hook explicitly. When Tier 1 adds something, your org takes it by a deliberate edit here — never by surprise on the next install.",
+
+  "orgLayer": "__ORG_LAYER_NAME__",
+  "orgDisplay": "__ORG_DISPLAY__",
+  "repo": "__ORG_REPO__",
+
+  "upstreams": {
+    "dark-factory": {
+      "repo": "OneDro1d/dark-factory",
+      "commit": "__T1_REF__",
+      "$refSource": "__T1_REF_SOURCE__",
+      "$refNote": "A COMMIT SHA, resolved when this layer was generated. A branch name here means upstream can move under you between installs. Taking an update is a one-line bump — resolve the new SHA with: git ls-remote https://github.com/OneDro1d/dark-factory.git refs/heads/main"
+    }
+  },
+
+  "vendorDir": "vendor",
+
+  "install": {
+    "$comment": "Filled by new-org-layer.sh from the Tier 1 checkout at generation time, then yours to curate. Sources: 'upstream:<vendored-repo>/<path>' resolves under vendor/; 'local:<path>' resolves in THIS repo — that is where your org's own skills and hooks live (skills/, hooks/). A local entry with the same name as an upstream one overrides it; install.sh reports every override loudly, because a silent override is how tiers rot.",
+    "skills": {},
+    "hooks": {}
+  },
+
+  "mcpNote": "There is no single MCP tool prefix — the namespace depends on how each machine connects (account-level connector vs project-level .mcp.json hub), and two people in the same org can legitimately see different names in the same week. Treat any prefix written in docs as a data point to confirm, never a constant to copy. List the tools in YOUR session and check; if nothing resolves or it is ambiguous, ASK — a wrong prefix looks exactly like a missing tool, and an agent that wrongly concludes a system is unavailable may invent state rather than report the gap.",
+
+  "notRestorable": {
+    "$comment": "Printed by install.sh every run, so a green install is never mistaken for a complete setup.",
+    "gh auth login": "credentials cannot live in a lockfile",
+    "MCP connectors": "account- or project-level, authenticated interactively — confirm your tool namespace before relying on it",
+    "settings.json hook registration": "yours to merge — the installer places files, it does not edit your settings"
+  }
+}

@@ -1,0 +1,78 @@
+#!/usr/bin/env sh
+# Substrate staleness gate (DF Substrate Kit).
+# Blocks a commit when STRUCTURAL change is staged (contracts/schema/topology, or
+# agents/skills) without the matching knowledge-layer doc also staged — so code and
+# the context store stay in lockstep. It catches the MECHANICAL drift class only;
+# semantic facts (findings/decisions) still go through `knowledge-keeper`/`commit-sync`.
+#
+# Install: git config core.hooksPath .claude/hooks   (set by df-context-store on emit)
+# Bypass once (real emergency): git commit --no-verify
+# Disable for this repo: SUBSTRATE_GATE=off git commit ...   (or unset core.hooksPath)
+# Chain: if .claude/hooks/pre-commit.local exists it runs first (husky/etc.).
+set -u
+
+[ "${SUBSTRATE_GATE:-on}" = "off" ] && exit 0
+# Only enforce in a repo that actually has the substrate.
+[ -d ".claude/context" ] || exit 0
+
+# Chain to a local/pre-existing hook first (lets a repo keep husky etc.).
+if [ -x ".claude/hooks/pre-commit.local" ]; then
+  ".claude/hooks/pre-commit.local" "$@" || exit $?
+fi
+
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+[ -z "$staged" ] && exit 0
+
+# Split the staged list on newlines so globs match per-path.
+OLDIFS=$IFS
+IFS='
+'
+
+# any_staged GLOB...  -> 0 if any staged path matches any glob, else 1
+any_staged() {
+  for _f in $staged; do
+    for _g in "$@"; do
+      # shellcheck disable=SC2254  # $_g is intentionally a glob pattern
+      case "$_f" in $_g) return 0 ;; esac
+    done
+  done
+  return 1
+}
+
+violations=0
+msgs=""
+report() { msgs="${msgs}  x  ${1}
+"; violations=$((violations + 1)); }
+
+# ───────────────────────────────────────────────────────────────────────────
+# TRIGGER TABLE — tune for THIS repo's layout. Each rule:
+#   IF a TRIGGER glob is staged AND no REQUIRED doc is staged → block.
+# Keep it conservative (low false-positive); widen as the repo's conventions firm up.
+# ───────────────────────────────────────────────────────────────────────────
+
+# Rule 1 — contracts / schema / messaging / topology changed
+if any_staged '*contracts*' '*.proto' '*.avsc' '*.avdl' '*shared-models*' \
+              '*.sql' '*migration*' '*migrations*'; then
+  if ! any_staged '.claude/context/SERVICE-MAP.md' '.claude/context/DATA-FLOW.md' \
+                  '*/CLAUDE.md' 'CLAUDE.md'; then
+    report "contract/schema/topology changed but none of SERVICE-MAP.md / DATA-FLOW.md / <service>/CLAUDE.md is staged"
+  fi
+fi
+
+# Rule 2 — agent or skill added/removed/renamed → routing table must follow
+if any_staged '.claude/agents/*' '.claude/skills/*'; then
+  if ! any_staged '.claude/agents/README.md'; then
+    report "agents/skills changed but .claude/agents/README.md (routing table) is not staged"
+  fi
+fi
+
+IFS=$OLDIFS
+
+if [ "$violations" -gt 0 ]; then
+  printf '\n[substrate gate] commit blocked — knowledge layer out of sync with code:\n'
+  printf '%s' "$msgs"
+  printf 'Fix: update the context store (run the commit-sync skill), then re-commit.\n'
+  printf 'Emergency bypass (this commit only):  git commit --no-verify\n'
+  exit 1
+fi
+exit 0

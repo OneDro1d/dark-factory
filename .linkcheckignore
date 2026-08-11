@@ -1,0 +1,8 @@
+# .linkcheckignore — known-broken links, each with the reason it is not fixed yet.
+# Format:  <file-glob> -> <target-glob> # reason        (the reason is MANDATORY)
+# Inspect: python3 boot-kit/scripts/link-check.py --list-ignored .
+#
+# THIS FILE IS A DEBT REGISTER, NOT A MUTE BUTTON. Everything below is a real
+# broken link. It is listed so the gate can catch NEW breakage without being
+# permanently red, not because these are acceptable.
+#

@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+# lock-verify.sh — is this instance actually what its lockfile says it is?
+#
+# The whole point of Tier 3: an instance repo holds a LOCKFILE, not content. `vendor/` is a
+# generated cache. This asserts the cache matches the lock, so "in sync" stops meaning
+# "the cache agrees with itself" — the exact failure that hid two hooks for two days.
+#
+#   L1  every upstream in the lock is present in vendor/
+#   L2  every vendor/ dir is declared in the lock       (the reverse direction)
+#   L3  each vendored upstream sits at the PINNED commit
+#   L4  each lane's git identity is available
+#   L5  every skill/hook the lock says to install is installed on the machine
+#   L6  every pin is reachable from a branch on the REMOTE
+#
+# Usage: bash lock-verify.sh [--lock <path>]   Exit: 0 ok · 1 drift
+set -uo pipefail
+
+LOCK="loom.lock.json"
+[ "${1:-}" = "--lock" ] && LOCK="${2:?--lock needs a path}"
+[ -f "$LOCK" ] || { echo "FATAL: no lockfile at $LOCK"; exit 1; }
+command -v jq >/dev/null || { echo "FATAL: jq required"; exit 1; }
+
+ROOT="$(cd "$(dirname "$LOCK")" && pwd)"
+VENDOR="$ROOT/$(jq -r '.vendorDir // "vendor"' "$LOCK")"
+LIVE="${LOOM_LIVE:-$HOME/.claude}"
+DRIFT=0
+pass() { printf 'PASS  %s\n' "$1"; }
+drift() { printf 'DRIFT %s\n' "$1"; DRIFT=1; }
+note() { printf '        %s\n' "$1"; }
+
+echo "=== lock-verify ==="
+echo "lock   = $LOCK"
+echo "vendor = $VENDOR"
+echo "live   = $LIVE"
+echo ""
+
+# ---- L1: lock -> vendor ------------------------------------------------------
+echo "[L1] every locked upstream is vendored"
+MISSING=""
+while read -r name; do
+  [ -n "$name" ] || continue
+  [ -d "$VENDOR/$name" ] || MISSING="$MISSING$name"$'\n'
+done < <(jq -r '.upstreams | keys[]' "$LOCK")
+if [ -n "$MISSING" ]; then
+  drift "L1 locked upstream(s) not vendored:"
+  printf '%s' "$MISSING" | while read -r n; do [ -n "$n" ] && note "$n"; done
+  note "run: bash rehydrate.sh"
+else
+  pass "L1 all locked upstreams present"
+fi
+
+# ---- L2: vendor -> lock (THE DIRECTION THAT USUALLY GOES MISSING) ------------
+# Without this, an undeclared directory in vendor/ is invisible and would survive a
+# rebuild by accident — content with no recorded provenance is exactly what Tier 3 exists
+# to eliminate.
+echo "[L2] every vendored dir is declared in the lock"
+UNDECLARED=""
+if [ -d "$VENDOR" ]; then
+  for d in "$VENDOR"/*/; do
+    [ -d "$d" ] || continue
+    n="$(basename "$d")"
+    jq -e --arg n "$n" '.upstreams[$n]' "$LOCK" >/dev/null 2>&1 || UNDECLARED="$UNDECLARED$n"$'\n'
+  done
+fi
+if [ -n "$UNDECLARED" ]; then
+  drift "L2 vendored but NOT in the lock (unprovenanced content):"
+  printf '%s' "$UNDECLARED" | while read -r n; do [ -n "$n" ] && note "$n"; done
+else
+  pass "L2 no undeclared vendor content"
+fi
+
+# ---- L3: pinned commits ------------------------------------------------------
+echo "[L3] vendored upstreams sit at their pinned commit"
+BADPIN=""; CHECKED=0
+while read -r name; do
+  [ -n "$name" ] || continue
+  want="$(jq -r --arg n "$name" '.upstreams[$n].commit' "$LOCK")"
+  [ -d "$VENDOR/$name/.git" ] || continue
+  CHECKED=$((CHECKED + 1))
+  have="$(git -C "$VENDOR/$name" rev-parse HEAD 2>/dev/null || echo unknown)"
+  [ "$want" = "$have" ] || BADPIN="$BADPIN$name want=${want:0:8} have=${have:0:8}"$'\n'
+done < <(jq -r '.upstreams | keys[]' "$LOCK")
+if [ -n "$BADPIN" ]; then
+  drift "L3 commit mismatch:"
+  printf '%s' "$BADPIN" | while read -r l; do [ -n "$l" ] && note "$l"; done
+elif [ "$CHECKED" -eq 0 ]; then
+  # NOT a pass. With nothing vendored there is nothing to compare, and reporting PASS
+  # here would be a check that cannot fail — the exact false-assurance pattern this
+  # whole gate family exists to avoid. Say so plainly instead.
+  drift "L3 nothing vendored — 0 pins checkable (not a pass; see L1)"
+else
+  pass "L3 all $CHECKED pin(s) match"
+fi
+
+# ---- L4: identities ----------------------------------------------------------
+# One account cannot resolve the other org's repos AT ALL (404, not 403), so a missing
+# identity is a hard rehydrate failure, not a permission warning.
+echo "[L4] required git identities are available"
+if command -v gh >/dev/null 2>&1; then
+  HAVE="$(gh auth status 2>&1 | grep -oE 'account [A-Za-z0-9_-]+' | awk '{print $2}' | sort -u)"
+  MISSID=""
+  while read -r acct; do
+    [ -n "$acct" ] || continue
+    printf '%s\n' "$HAVE" | grep -qx "$acct" || MISSID="$MISSID$acct"$'\n'
+  done < <(jq -r '[.upstreams[].account] | unique[]' "$LOCK")
+  if [ -n "$MISSID" ]; then
+    drift "L4 not logged in as:"
+    printf '%s' "$MISSID" | while read -r a; do [ -n "$a" ] && note "$a (gh auth login)"; done
+  else
+    pass "L4 all required identities present"
+  fi
+else
+  drift "L4 gh not installed — cannot verify identities"
+fi
+
+# ---- L5: installed on the machine -------------------------------------------
+echo "[L5] locked skills/hooks are installed"
+NOTINST=""
+while read -r s; do
+  [ -n "$s" ] || continue
+  [ -e "$LIVE/skills/$s" ] || NOTINST="$NOTINST skill:$s"$'\n'
+done < <(jq -r '(.install.skills // [])[]' "$LOCK")
+while read -r h; do
+  [ -n "$h" ] || continue
+  [ -f "$LIVE/hooks/$h" ] || NOTINST="$NOTINST hook:$h"$'\n'
+done < <(jq -r '(.install.hooks // [])[]' "$LOCK")
+if [ -n "$NOTINST" ]; then
+  drift "L5 declared but not installed:"
+  printf '%s' "$NOTINST" | while read -r l; do [ -n "$l" ] && note "$l"; done
+else
+  pass "L5 everything the lock installs is present"
+fi
+
+# ---- L6: pins are reachable from a branch on the REMOTE ----------------------
+# L3 compares the vendored checkout to the pin — which passes on the machine that
+# already holds the stale objects. After an upstream force-push/history rewrite the
+# pin still exists LOCALLY, so every local check stays green and the break surfaces
+# only on the next fresh clone, where it reads as a bad pin rather than a rewrite.
+# The only truthful referee is the remote itself: a pin nobody can fetch is dead.
+UNVERIFIED=0
+echo "[L6] pinned commits are reachable from a remote branch"
+
+# A multi-identity instance CANNOT check every pin with one active identity. Each upstream
+# names the account that can see it, and the other account gets 404-not-403 — the repo does
+# not appear to exist at all. Checking only the active identity therefore reports UNVERIFIED
+# for every lane whose account happens to be inactive, which is indistinguishable from being
+# offline and trains the reader to skim past it. On a 4-upstream lock that is 1 permanent
+# UNVERIFIED on every single run.
+#
+# So: on a fetch failure, switch to the identity the LOCK names, retry once, and switch back.
+# The switch is a global side effect in a read-only checker, so it is restored by trap — on
+# success, on failure, and on interrupt. If the original account cannot be determined, no
+# switching is attempted at all: leaving the operator's gh in an unexpected state is worse
+# than an UNVERIFIED line.
+# `gh api user --jq .login` asks the API who the ACTIVE token belongs to. The obvious
+# alternative — parsing `gh auth status` — is where this went wrong the first time: the line
+# is "Logged in to github.com account <name> (keyring)", so $NF is "(keyring)", not the name.
+# `gh auth switch --user '(keyring)'` then fails, the failure is swallowed by `|| true`, and
+# the identity silently stays wherever the last upstream left it. Ask the API, do not scrape
+# a human-readable status line.
+L6_ORIG=""
+if command -v gh >/dev/null 2>&1; then
+  L6_ORIG="$(gh api user --jq .login 2>/dev/null || true)"
+fi
+l6_restore() {
+  [ -n "$L6_ORIG" ] && command -v gh >/dev/null 2>&1 && \
+    gh auth switch --user "$L6_ORIG" >/dev/null 2>&1 || true
+}
+trap l6_restore EXIT INT TERM
+
+DEADPIN=""; L6CHECKED=0; L6SKIPPED=""; L6SWITCHED=0
+while read -r name; do
+  [ -n "$name" ] || continue
+  want="$(jq -r --arg n "$name" '.upstreams[$n].commit' "$LOCK")"
+  [ -d "$VENDOR/$name/.git" ] || continue
+  # --prune matters: a branch deleted upstream leaves a stale remote-tracking ref
+  # that would keep vouching for a pin the remote no longer serves.
+  if ! git -C "$VENDOR/$name" fetch --prune --quiet origin 2>/dev/null; then
+    # Retry as the account the lock names for THIS upstream, if that is not already active.
+    acct="$(jq -r --arg n "$name" '.upstreams[$n].account // empty' "$LOCK")"
+    fetched=0
+    if [ -n "$L6_ORIG" ] && [ -n "$acct" ] && [ "$acct" != "null" ] && [ "$acct" != "$L6_ORIG" ]; then
+      if gh auth switch --user "$acct" >/dev/null 2>&1; then
+        L6SWITCHED=1
+        git -C "$VENDOR/$name" fetch --prune --quiet origin 2>/dev/null && fetched=1
+        gh auth switch --user "$L6_ORIG" >/dev/null 2>&1 || true
+      fi
+    fi
+    if [ "$fetched" -eq 0 ]; then
+      L6SKIPPED="$L6SKIPPED$name"$'\n'
+      continue
+    fi
+    note "L6 $name fetched as '$acct' (the lock's account for it), then restored '$L6_ORIG'"
+  fi
+  L6CHECKED=$((L6CHECKED + 1))
+  if ! git -C "$VENDOR/$name" cat-file -e "$want" 2>/dev/null; then
+    DEADPIN="$DEADPIN$name ${want:0:8} — object not found even after fetch (history rewritten upstream?)"$'\n'
+  elif [ -z "$(git -C "$VENDOR/$name" branch -r --contains "$want" 2>/dev/null)" ]; then
+    DEADPIN="$DEADPIN$name ${want:0:8} — exists locally but NO remote branch contains it (force-push/rewrite; a fresh clone cannot check this out)"$'\n'
+  fi
+done < <(jq -r '.upstreams | keys[]' "$LOCK")
+if [ -n "$DEADPIN" ]; then
+  drift "L6 dead pin(s) — unreachable from any remote branch:"
+  printf '%s' "$DEADPIN" | while read -r l; do [ -n "$l" ] && note "$l"; done
+  note "re-pin to a commit on a live branch (git ls-remote settles what the remote serves)"
+fi
+if [ -n "$L6SKIPPED" ]; then
+  # Offline is not drift — an --offline rehydrate after a workspace reset must still
+  # succeed — but it is not a pass either; say UNVERIFIED and taint the final verdict.
+  while read -r n; do
+    [ -n "$n" ] || continue
+    acct="$(jq -r --arg n "$n" '.upstreams[$n].account // "?"' "$LOCK")"
+    # The identity retry already ran and still failed, so identity is no longer the likely
+    # cause — say so, rather than repeating a hypothesis that has been tested and eliminated.
+    note "L6 $n UNVERIFIED — fetch failed even as '$acct'; pin not checked against the remote (offline, or that account has lost access?)"
+    UNVERIFIED=$((UNVERIFIED + 1))
+  done <<< "$L6SKIPPED"
+fi
+if [ -z "$DEADPIN" ] && [ "$L6CHECKED" -gt 0 ]; then
+  pass "L6 all $L6CHECKED pin(s) reachable from a remote branch"
+elif [ -z "$DEADPIN" ] && [ "$L6CHECKED" -eq 0 ] && [ "$UNVERIFIED" -eq 0 ]; then
+  drift "L6 nothing vendored — 0 pins checkable (not a pass; see L1)"
+fi
+
+echo ""
+if [ "$DRIFT" -eq 0 ]; then
+  if [ "$UNVERIFIED" -gt 0 ]; then
+    # Not the same claim as LOCKED: everything checkable passed, but $UNVERIFIED pin(s)
+    # were never compared against the remote. Say so, or offline becomes false assurance.
+    echo "=== RESULT: LOCKED (locally) — $UNVERIFIED pin(s) UNVERIFIED against the remote (offline?) ==="
+  else
+    echo "=== RESULT: LOCKED — this instance matches its lockfile ==="
+  fi
+  exit 0
+else
+  echo "=== RESULT: DRIFT ==="
+  echo "Rehydrate:  bash rehydrate.sh          (lock -> machine)"
+  echo "Re-pin:     edit loom.lock.json        (deliberate; never automatic)"
+  exit 1
+fi

@@ -1,0 +1,16 @@
+{
+  "$comment": "U8 — notepad-scoped hooks. Arms ONLY in notepad sessions; Claude Code MERGES this with the user-level agent-notepad read-hooks (SessionStart/UserPromptSubmit/PreCompact/Stop). The PreToolUse(Bash) commit gate intercepts each `git [ -C <code-repo> ] commit` and applies the df-context-store staleness check (DESIGN §7.6): it governs AGENT code-commits, not manual human commits (arm the code repo's own git pre-commit hook for those). Runtime path convention per DESIGN §15: the installer (U10) copies hooks to the STABLE path ~/.claude/hooks/agent-notepad/ (NOT the branch-fragile repo path). Bypass a single commit with `--no-verify`; disable the gate for a session with AGENT_NOTEPAD_COMMIT_GATE=off.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${HOME}/.claude/hooks/agent-notepad/hooks/commit-gate.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

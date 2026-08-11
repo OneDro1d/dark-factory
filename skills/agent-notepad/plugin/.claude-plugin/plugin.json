@@ -1,0 +1,64 @@
+{
+  "name": "agent-notepad",
+  "version": "1.0.0",
+  "description": "Persistent, per-objective working memory for coding agents — one standalone git notepad per objective that survives compaction, spans multiple code repos from a single session, keeps an append-only journal, and mirrors into an episodic memory index. Evolves and supersedes handoff-auto.",
+  "author": {
+    "name": "Loom / Dark Factory Process"
+  },
+  "keywords": [
+    "memory",
+    "working-memory",
+    "handoff",
+    "compaction",
+    "context",
+    "notepad",
+    "dark-factory"
+  ],
+  "$comment": "The four USER-LEVEL Notes hooks declared here mirror what install.sh merges into ~/.claude/settings.json (that path uses ${HOME}/.claude/hooks/agent-notepad/...; this plugin path uses ${CLAUDE_PLUGIN_ROOT} per DESIGN §15). The PreToolUse commit gate is intentionally NOT declared here — it ships in the notepad template's .claude/settings.json so it arms ONLY inside a notepad session (DESIGN §7.6/§15). The digest builder (hooks/digest-build.sh) is a standalone script triggered by a debounced Stop or a scheduled job, not a native hook event, so it is not declared here either.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt.sh\""
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pre-compact.sh\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/stop.sh\""
+          }
+        ]
+      }
+    ]
+  },
+  "skills": [
+    "${CLAUDE_PLUGIN_ROOT}/../SKILL.md"
+  ]
+}
