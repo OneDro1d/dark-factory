@@ -1,0 +1,79 @@
+{
+  "$comment": "Runnable example — WT_AUTH=none against a public site. Copy this, point it at your app, and replace the beats. `say` is tuned for the synthesizer (acronyms spelled out); `caption` is tuned for reading. Keep them separate.",
+  "voice": "en_US-lessac-medium",
+  "sections": [
+    {
+      "id": "open",
+      "title": "Cold open",
+      "beats": [
+        {
+          "action": { "type": "goto", "url": "https://example.com", "settle": 2000 },
+          "say": "Start with the problem, not the architecture. Say what this software is for, in one sentence, before showing anything.",
+          "caption": "Lead with the problem, not the architecture."
+        },
+        {
+          "action": { "type": "point", "role": "heading", "name": "Example" },
+          "say": "Point at what you are talking about. The cursor is drawn into the recording, so the viewer can follow your attention.",
+          "caption": "The cursor is drawn in — the viewer can follow your attention."
+        },
+        {
+          "action": { "type": "point", "role": "link", "name": "Learn more" },
+          "say": "A point action glides the cursor without clicking. A click action glides, ripples, then really clicks.",
+          "caption": "point = glide only · click = glide, ripple, then click."
+        }
+      ]
+    },
+    {
+      "id": "tour",
+      "title": "The tour",
+      "beats": [
+        {
+          "action": { "type": "scroll", "dy": 200 },
+          "say": "Scroll to bring the relevant part of the page into frame.",
+          "caption": "Scroll to frame what matters."
+        },
+        {
+          "action": { "type": "none" },
+          "say": "Most beats do nothing at all. They hold the current view while you explain it. Use those to say the thing the visuals cannot carry on their own.",
+          "caption": "Most beats hold the view and let the narration carry the point."
+        }
+      ]
+    },
+    {
+      "id": "cards",
+      "title": "Material with no good screen",
+      "beats": [
+        {
+          "action": {
+            "type": "card",
+            "title": "When to use a card",
+            "bullets": [
+              "Architecture, trade-offs, caveats — anything with no screen worth filming",
+              "A step too slow or too non-deterministic to record honestly",
+              "The closing summary of what works and what does not",
+              "Bullets reveal one at a time, in step with the narration"
+            ],
+            "reveal": 1
+          },
+          "say": "A card draws a full screen panel inside the live page, revealing one bullet at a time.",
+          "caption": "A card: full-screen, revealed one bullet at a time."
+        },
+        {
+          "action": { "type": "card", "title": "When to use a card", "bullets": [], "reveal": 2 },
+          "say": "Use it when a step would be dishonest to film. A generation job that takes minutes and differs between runs is better described than staged.",
+          "caption": "Better described than staged."
+        },
+        {
+          "action": { "type": "card", "title": "When to use a card", "bullets": [], "reveal": 3 },
+          "say": "And use it to close. Say plainly what works and what does not. That is what makes the rest of the recording credible.",
+          "caption": "Close by saying plainly what works and what does not."
+        },
+        {
+          "action": { "type": "card", "title": "When to use a card", "bullets": [], "reveal": 4 },
+          "say": "If you find yourself narrating ninety seconds over a nearly empty screen, that is the signal to convert those beats to a card.",
+          "caption": "90 seconds over an empty screen = convert it to a card."
+        }
+      ]
+    }
+  ]
+}
