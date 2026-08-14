@@ -1,0 +1,17 @@
+{
+  "name": "df-app-walkthrough",
+  "private": true,
+  "type": "module",
+  "description": "Record a narrated, captioned walkthrough video of a web app — locally, with no recording service and no API key.",
+  "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "check": "bash scripts/check-prereqs.sh",
+    "narration": "node scripts/build-narration.mjs",
+    "record": "node scripts/record-walkthrough.mjs",
+    "assemble": "node scripts/assemble.mjs",
+    "verify": "node scripts/verify.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.55.0"
+  }
+}
