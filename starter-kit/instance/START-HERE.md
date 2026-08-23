@@ -66,9 +66,12 @@ Three things to set, and one to leave alone:
   have lanes yet: the preflight then reports `unknown` for that probe, which is the honest
   answer. A guessed lane reports as a fact.
 - **`install.skills` / `install.skillSources`** — the skills you want, and where each comes
-  from. Every name must have a matching source entry; a name with no source is reported,
-  never guessed at. `../../skills/` in this repo lists what is available, e.g.
-  `"vinculum-loop": "dark-factory/skills/vinculum-loop"`.
+  from. Every name must have a matching source entry and every source entry must have a
+  name; `lock-verify` (L7) checks both directions, because either half alone installs
+  nothing while still reading like a declaration. `../../skills/` in this repo lists what is
+  available, e.g. `"vinculum-loop": "dark-factory/skills/vinculum-loop"`. A source is
+  resolved under your vendor directory unless it begins with `local:`, which resolves inside
+  your own instance — that is how you declare a skill or hook you wrote yourself.
 - **Leave `probed` alone.** Tools write it; you do not.
 
 Anything still holding a `__PLACEHOLDER__` is a value nobody supplied, and step 3 names it

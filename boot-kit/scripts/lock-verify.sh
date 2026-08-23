@@ -11,6 +11,7 @@
 #   L4  each lane's git identity is available
 #   L5  every skill/hook the lock says to install is installed on the machine
 #   L6  every pin is reachable from a branch on the REMOTE
+#   L7  every declared skill/hook names a source, and every source names a declaration
 #
 # Usage: bash lock-verify.sh [--lock <path>]   Exit: 0 ok · 1 drift
 set -uo pipefail
@@ -226,6 +227,45 @@ if [ -z "$DEADPIN" ] && [ "$L6CHECKED" -gt 0 ]; then
   pass "L6 all $L6CHECKED pin(s) reachable from a remote branch"
 elif [ -z "$DEADPIN" ] && [ "$L6CHECKED" -eq 0 ] && [ "$UNVERIFIED" -eq 0 ]; then
   drift "L6 nothing vendored — 0 pins checkable (not a pass; see L1)"
+fi
+
+# ---- L7: declarations and sources agree, in BOTH directions -----------------
+# `install.skills` is a list of NAMES and `install.skillSources` is a map of name ->
+# source. Two structures for one fact, so they can disagree, and each disagreement is
+# silent in a different way:
+#
+#   name with no source     installs nothing. rehydrate WARNs once, during an install
+#                           nobody re-reads, and the lockfile still appears to declare it.
+#   source with no name     installs nothing either, and reads as a declaration. This is
+#                           how a skill stops being installed when someone edits the list
+#                           and forgets the map — the lockfile still mentions it by name.
+#
+# A single map keyed by name could not express either state. That shape was considered and
+# not taken (the array is what four consumers and every existing lockfile already read), so
+# the guarantee it would have given for free is bought back here instead.
+#
+# Keys beginning with `$` are documentation, not entries — the shipped templates carry a
+# `$comment` inside both *Sources maps.
+echo "[L7] declarations and sources agree"
+L7BAD=""
+for kind in skills hooks; do
+  case "$kind" in skills) smap=skillSources ;; hooks) smap=hookSources ;; esac
+  while read -r n; do
+    [ -n "$n" ] || continue
+    v="$(jq -r --arg n "$n" --arg m "$smap" '.install[$m][$n] // empty' "$LOCK")"
+    [ -n "$v" ] || L7BAD="$L7BAD ${kind%s}:$n declared with no $smap entry"$'\n'
+  done < <(jq -r --arg k "$kind" '(.install[$k] // [])[]' "$LOCK")
+  while read -r n; do
+    [ -n "$n" ] || continue
+    jq -e --arg n "$n" --arg k "$kind" '(.install[$k] // []) | index($n)' "$LOCK" >/dev/null 2>&1 \
+      || L7BAD="$L7BAD ${kind%s}:$n has a $smap entry but is not declared in install.$kind"$'\n'
+  done < <(jq -r --arg m "$smap" '(.install[$m] // {}) | keys[] | select(startswith("$") | not)' "$LOCK")
+done
+if [ -n "$L7BAD" ]; then
+  drift "L7 declarations and sources disagree:"
+  printf '%s' "$L7BAD" | while read -r l; do [ -n "$l" ] && note "$l"; done
+else
+  pass "L7 every declaration has a source and every source has a declaration"
 fi
 
 echo ""

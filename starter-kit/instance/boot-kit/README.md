@@ -47,14 +47,27 @@ twice.
 **A hook only takes effect in a NEW session.** Hooks are read once, at session start.
 "My hook edit did nothing" is almost always one of these two.
 
-### Known limit: the installer resolves hook sources under `vendor/` only
+### Where a source can point
 
-`hookSources` paths are resolved relative to your vendor directory, so a hook you write
-*inside your instance* cannot be installed by re-running `install.sh` — it has nowhere to
-resolve from. To ship your own hooks today, put them in a repo, add it to `upstreams`, and
-point `hookSources` at the vendored path. This is a real gap, written down rather than
-worked around: a second resolution rule for local paths would mean two ways to say where a
-hook comes from, and two ways to say one thing is how the answers start disagreeing.
+A `hookSources` (or `skillSources`) value takes one of three forms:
+
+| value | resolves against |
+|---|---|
+| `local:boot-kit/hooks/mine.sh` | **your instance** — the directory holding the lockfile |
+| `upstream:dark-factory/hooks/x.sh` | your vendor directory |
+| `dark-factory/hooks/x.sh` | your vendor directory — the bare form, and the one every existing lockfile uses |
+
+`local:` is how you ship a hook or a skill of your **own**: write it inside your instance,
+point at it, re-run `install.sh`. Without it an instance cannot own a hook at all — it
+would have to push its own file into some other repo and vendor it back.
+
+This was deliberately **one** rule and not two: the value carries a scheme, so there is
+still a single place that says where a hook comes from. `local:` is resolved against the
+**lockfile's** directory, never against the installer's own location — which is what makes
+it safe when the installer itself is the vendored copy.
+
+A source containing `..` is refused rather than normalised. A `..` could not escape before,
+because every source was confined to `vendor/` by construction.
 
 ## The hub
 

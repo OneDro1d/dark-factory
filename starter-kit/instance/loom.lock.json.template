@@ -38,14 +38,14 @@
   "$upstreamsNote": "Add your own upstreams inside `upstreams`, one object each, same shape as dark-factory. `account` is optional and only matters when a machine holds several git identities: it names the one that can resolve THAT repo, and the wrong identity fails as a 404 that reads like 'repo does not exist' rather than as 'wrong account'. This note sits OUTSIDE the map on purpose -- the installer iterates every key of `upstreams` and would try to clone a comment.",
 
   "install": {
-    "$comment": "Skills SYMLINK (an edit in vendor/ is live in the next session). Hooks COPY, because __HOME__ inside them is substituted per machine -- so a hook edit needs a reinstall AND a new session. Each name must have a matching entry in its *Sources map; a name with no source is reported, never guessed at.",
+    "$comment": "Skills SYMLINK (an edit in vendor/ is live in the next session). Hooks COPY, because __HOME__ inside them is substituted per machine -- so a hook edit needs a reinstall AND a new session. Each name must have a matching entry in its *Sources map AND each *Sources entry must have a name: lock-verify L7 checks both directions, because either half on its own installs nothing while still reading like a declaration. A source value is resolved under vendorDir unless it begins with `local:`, which resolves inside THIS instance; `upstream:` is the explicit spelling of the default. A value containing `..` is refused, never normalised.",
     "skills": [],
     "skillSources": {
-      "$comment": "skill-name -> path under vendorDir, e.g. \"vinculum-loop\": \"dark-factory/skills/vinculum-loop\"."
+      "$comment": "skill-name -> source. Under vendorDir by default, e.g. \"vinculum-loop\": \"dark-factory/skills/vinculum-loop\". Prefix `local:` for a skill this instance owns outright, e.g. \"my-skill\": \"local:boot-kit/skills/my-skill\". Keys beginning with $ are documentation, not entries."
     },
     "hooks": ["df-instance-start.sh"],
     "hookSources": {
-      "$comment": "hook-file-name -> path under vendorDir. Resolved under vendorDir ONLY -- a hook written inside your own instance has nowhere to resolve from, so to ship one of your own, put it in a repo, add that repo to `upstreams`, and point here at the vendored path.",
+      "$comment": "hook-file-name -> source. Under vendorDir by default. To ship a hook of your OWN, write it inside this instance and prefix the path with `local:` -- e.g. \"my-hook.sh\": \"local:boot-kit/hooks/my-hook.sh\". `local:` is resolved against THIS lockfile's directory, not against the installer's own location, so it still means your instance when the installer is the vendored copy.",
       "df-instance-start.sh": "dark-factory/starter-kit/instance/boot-kit/hooks/df-instance-start.sh"
     }
   },

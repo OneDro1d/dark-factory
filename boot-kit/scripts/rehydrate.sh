@@ -42,6 +42,33 @@ LIVE="${LOOM_LIVE:-$HOME/.claude}"
 ORIG_ACCT=""
 command -v gh >/dev/null 2>&1 && ORIG_ACCT="$(gh auth status 2>&1 | awk '/Active account: true/{found=1} /account /{if(!a)a=$NF} END{print a}')"
 
+# Resolve a *Sources value to an absolute path on this machine.
+#
+#   local:<path>     relative to ROOT — the directory holding the lockfile, i.e. THIS
+#                    instance repo. Without it an instance cannot own a skill or hook at
+#                    all: it has to put its own file in some other repo and vendor it back.
+#   upstream:<path>  relative to vendorDir. The explicit spelling of the bare form.
+#   <path>           relative to vendorDir. The legacy bare form, and still the majority
+#                    of every existing lockfile — it keeps working, unchanged, forever.
+#
+# ROOT is the lockfile's directory, NOT this script's. That distinction is the whole
+# reason `local:` is safe here: a vendored copy of this script, run from an instance
+# root, still resolves `local:` into the INSTANCE. A script that derived its root from
+# its own file location would resolve it into the vendor cache — the wrong tree, and
+# silently so.
+resolve_src() {
+  case "$1" in
+    local:*)    printf '%s/%s' "$ROOT" "${1#local:}" ;;
+    upstream:*) printf '%s/%s' "$VENDOR" "${1#upstream:}" ;;
+    *)          printf '%s/%s' "$VENDOR" "$1" ;;
+  esac
+}
+
+# A source that climbs out of the tree it names is rejected, never normalised. `local:`
+# makes this reachable for the first time: before it, every source was confined to
+# vendorDir by construction.
+src_escapes() { case "$1" in *..*) return 0 ;; *) return 1 ;; esac; }
+
 say() { printf '%s\n' "$1"; }
 act() { if [ "$DRY" -eq 1 ]; then printf 'would  %s\n' "$1"; else printf '%s\n' "$1"; fi; }
 
@@ -112,8 +139,9 @@ while read -r s; do
   [ -n "$s" ] || continue
   src="$(jq -r --arg s "$s" '.install.skillSources[$s] // empty' "$LOCK")"
   [ -n "$src" ] || { say "  WARN $s has no skillSources entry"; continue; }
-  abs="$VENDOR/$src"
-  if [ ! -d "$abs" ]; then say "  MISS $s ($src not vendored)"; continue; fi
+  if src_escapes "$src"; then say "  REFUSED $s ($src climbs out of its tree)"; continue; fi
+  abs="$(resolve_src "$src")"
+  if [ ! -d "$abs" ]; then say "  MISS $s ($src not present)"; continue; fi
   act "  link $s -> $src"
   if [ "$DRY" -eq 0 ]; then
     rm -rf "$LIVE/skills/$s"
@@ -131,8 +159,9 @@ while read -r h; do
   [ -n "$h" ] || continue
   src="$(jq -r --arg h "$h" '.install.hookSources[$h] // empty' "$LOCK")"
   [ -n "$src" ] || { say "  WARN $h has no hookSources entry"; continue; }
-  abs="$VENDOR/$src"
-  if [ ! -f "$abs" ]; then say "  MISS $h ($src not vendored)"; continue; fi
+  if src_escapes "$src"; then say "  REFUSED $h ($src climbs out of its tree)"; continue; fi
+  abs="$(resolve_src "$src")"
+  if [ ! -f "$abs" ]; then say "  MISS $h ($src not present)"; continue; fi
   act "  copy $h <- $src"
   if [ "$DRY" -eq 0 ]; then
     sed "s|__HOME__|$HOME|g" "$abs" > "$LIVE/hooks/$h"
