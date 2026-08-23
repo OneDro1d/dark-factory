@@ -602,11 +602,33 @@ def probe_layout(lock):
     The set of lanes is NOT hardcoded here: which lanes exist is a Tier-2/3 fact (each
     org names its own), so this engine reads whatever keys the lockfile's own
     `codeLayout` declares, sorted for stable output, rather than assuming any fixed set.
+
+    TWO THINGS THAT LOOK LIKE NOTHING AND ARE NOT (fixed on review of the import):
+
+    1. Iterating the declared keys means a lockfile that declares NO codeLayout emits NO
+       findings at all. Reading whatever is declared is right; reporting SILENCE when
+       nothing is declared is not. "No lanes were declared" is a fact worth one `unknown`
+       line -- absence has no shared path, so nothing else in this probe would ever say it.
+       An empty section and a healthy one must not look identical in the report.
+
+    2. `$`-prefixed keys are prose, not lanes. The house convention is that any JSON key
+       starting with `$` is a comment for the human reading the file. Without this skip a
+       lockfile carrying `codeLayout.$comment` gets that comment treated as a directory
+       name, joined onto codeRoot, found missing, and reported as DRIFT -- a fabricated
+       finding from a file that is completely correct, and one that would block a
+       supervisor start. Verified against a real lockfile carrying such a comment.
     """
     out = []
     code_root = lock.get("codeRoot") or ""
     layout = lock.get("codeLayout") or {}
-    for lane in sorted(layout.keys()):
+    lanes = sorted(k for k in layout.keys() if not k.startswith("$"))
+    if not lanes:
+        out.append(finding("lane", "codeLayout", "unknown",
+                           "no lanes declared in codeLayout -- this probe cannot say "
+                           "where any lane lives on this machine. Not a finding about "
+                           "the machine: a gap in the record."))
+        return out
+    for lane in lanes:
         val = layout[lane]
         if val is None:
             out.append(finding("lane", lane, "ok", "none on this machine (declared null)"))
