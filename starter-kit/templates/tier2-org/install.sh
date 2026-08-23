@@ -113,14 +113,80 @@ while read -r name; do
   fi
 done < <(jq -r '.upstreams | keys[]' "$LOCK")
 
-# resolve "upstream:x/y" | "local:x/y" -> an absolute path on this machine
-resolve() {
+# --- BEGIN shared install-source reader (keep BYTE-IDENTICAL across the tier templates) ---
+# Every tier reads `install` the way the engine does, so a lockfile means one thing
+# wherever it is read:
+#
+#   install.<kind>         an ARRAY of names   — the declaration
+#   install.<kind>Sources  a MAP name->source  — where each one comes from
+#
+#   local:<path>     resolved against the LOCKFILE's directory — this repo. Without it a
+#                    layer cannot own a skill or a hook at all: it would have to push its
+#                    own file into some other repo and vendor it back.
+#   upstream:<path>  resolved against vendorDir. The explicit spelling of the default.
+#   <path>           resolved against vendorDir. The legacy bare form, unchanged.
+#
+# ROOT is the LOCKFILE's directory, never this script's. That distinction is the whole
+# safety of `local:`: a copy of this installer run from a different root must still mean
+# THAT root, not the tree the copy happens to sit in. The failure it prevents is silent by
+# construction — the wrong file installs successfully.
+#
+# This block is duplicated rather than shared because each tier template has to stand
+# alone in a fresh clone with nothing vendored yet. The duplication is not left to
+# goodwill: starter-kit/tests/test-org-layer-shape.sh asserts the two copies are
+# byte-identical, so drift between them is a test failure, not a discovery.
+ROOT="$(pwd)"
+
+resolve_src() {
   case "$1" in
-    upstream:*) printf '%s/%s/%s' "$(pwd)" "$VENDOR" "${1#upstream:}" ;;
-    local:*)    printf '%s/%s'    "$(pwd)" "${1#local:}" ;;
-    *)          printf '' ;;
+    local:*)    printf '%s/%s'    "$ROOT" "${1#local:}" ;;
+    upstream:*) printf '%s/%s/%s' "$ROOT" "$VENDOR" "${1#upstream:}" ;;
+    *)          printf '%s/%s/%s' "$ROOT" "$VENDOR" "$1" ;;
   esac
 }
+
+# A source that climbs out of the tree it names is refused, never normalised.
+src_escapes() { case "$1" in *..*) return 0 ;; *) return 1 ;; esac; }
+
+# The old shape was a single MAP keyed by name. It is REFUSED, not read: an installer that
+# understands both shapes forever is exactly how a third reading appears. The fix is one
+# command, so the refusal names it and installs nothing.
+lock_shape_guard() {
+  local kind t
+  for kind in skills hooks; do
+    t="$(jq -r --arg k "$kind" '.install[$k] | type' "$LOCK" 2>/dev/null)"
+    case "$t" in
+      array|null) ;;
+      object) die "install.$kind in $LOCK is a MAP — that is the old shape, from before
+   names and sources were split. Convert it once, then re-run this installer:
+
+     python3 <dark-factory checkout>/boot-kit/scripts/df-lock-migrate.py --lock $LOCK --apply
+
+   Nothing was installed." ;;
+      *) die "install.$kind in $LOCK has unexpected type '$t' — expected an array." ;;
+    esac
+  done
+}
+
+# `skills` pairs with `skillSources`, `hooks` with `hookSources` — the stem is SINGULAR.
+# Derived by rule rather than spelled per call site, so the two cannot drift apart.
+smap_key()   { printf '%sSources' "${1%s}"; }
+declared()   { jq -r --arg k "$1" '(.install[$k] // []) | .[]' "$LOCK"; }
+source_for() { jq -r --arg m "$(smap_key "$1")" --arg n "$2" '(.install[$m] // {})[$n] // empty' "$LOCK"; }
+
+# A name with no source and a source with no name both install NOTHING while still
+# reading like a declaration. The array+map pair can express each; a single map could
+# express neither, which is the one advantage the old shape had. It is bought back here.
+orphan_sources() {
+  jq -r --arg k "$1" --arg m "$(smap_key "$1")" '.install as $i
+      | (($i[$m] // {}) | keys[])
+      | select(startswith("$") | not)
+      | . as $n
+      | select(([(($i[$k]) // [])[]] | index($n)) == null)' "$LOCK"
+}
+# --- END shared install-source reader ---
+
+lock_shape_guard
 
 # ---- 2. skills --------------------------------------------------------------
 # SYMLINKED, not copied. A copy is a parallel store, and parallel stores drift — which is
@@ -132,16 +198,21 @@ SK_OK=0; SK_MISS=0; SK_PEND=0
 
 while read -r s; do
   [ -n "$s" ] || continue
-  src="$(jq -r --arg s "$s" '.install.skills[$s] // empty' "$LOCK")"
-  abs="$(resolve "$src")"
-  if [ -z "$abs" ]; then warn "$s: unrecognised source '$src'"; SK_MISS=$((SK_MISS+1)); continue; fi
+  src="$(source_for skills "$s")"
+  if [ -z "$src" ]; then
+    warn "$s: declared in install.skills with no entry in install.skillSources — installs nothing"
+    SK_MISS=$((SK_MISS+1)); continue
+  fi
+  if src_escapes "$src"; then
+    warn "$s: source '$src' climbs out of the tree it names — refused, not normalised"
+    SK_MISS=$((SK_MISS+1)); continue
+  fi
+  abs="$(resolve_src "$src")"
   # In a dry run vendor/ is legitimately empty, so an absent upstream skill is expected,
   # not a fault. Reporting it as missing would make the dry run cry wolf dozens of times
   # and train the reader to skim past the warnings that DO matter.
   if [ ! -d "$abs" ]; then
-    if [ "$DRY" -eq 1 ] && [ "${src#upstream:}" != "$src" ]; then
-      SK_PEND=$((SK_PEND+1)); continue
-    fi
+    case "$src:$DRY" in local:*) : ;; *:1) SK_PEND=$((SK_PEND+1)); continue ;; esac
     warn "$s: not present at ${src}"; SK_MISS=$((SK_MISS+1)); continue
   fi
   if [ "$DRY" -eq 1 ]; then SK_OK=$((SK_OK+1)); continue; fi
@@ -158,7 +229,12 @@ while read -r s; do
   rm -rf "$LIVE/skills/$s"
   ln -s "$abs" "$LIVE/skills/$s"
   SK_OK=$((SK_OK+1))
-done < <(jq -r '.install.skills | keys[]' "$LOCK")
+done < <(declared skills)
+while read -r o; do
+  [ -n "$o" ] || continue
+  warn "$o: has an install.skillSources entry but is NOT in install.skills — installs nothing, and still reads like a declaration"
+  SK_MISS=$((SK_MISS+1))
+done < <(orphan_sources skills)
 if [ "$DRY" -eq 1 ]; then
   ok "$SK_OK local skills resolved, $SK_PEND would come from the upstream fetch, $SK_MISS missing"
 else
@@ -175,12 +251,18 @@ HK_OK=0; HK_MISS=0; HK_PEND=0
 
 while read -r h; do
   [ -n "$h" ] || continue
-  src="$(jq -r --arg h "$h" '.install.hooks[$h] // empty' "$LOCK")"
-  abs="$(resolve "$src")"
-  if [ -z "$abs" ] || [ ! -f "$abs" ]; then
-    if [ "$DRY" -eq 1 ] && [ "${src#upstream:}" != "$src" ]; then
-      HK_PEND=$((HK_PEND+1)); continue
-    fi
+  src="$(source_for hooks "$h")"
+  if [ -z "$src" ]; then
+    warn "$h: declared in install.hooks with no entry in install.hookSources — installs nothing"
+    HK_MISS=$((HK_MISS+1)); continue
+  fi
+  if src_escapes "$src"; then
+    warn "$h: source '$src' climbs out of the tree it names — refused, not normalised"
+    HK_MISS=$((HK_MISS+1)); continue
+  fi
+  abs="$(resolve_src "$src")"
+  if [ ! -f "$abs" ]; then
+    case "$src:$DRY" in local:*) : ;; *:1) HK_PEND=$((HK_PEND+1)); continue ;; esac
     warn "$h: not present at ${src}"; HK_MISS=$((HK_MISS+1)); continue
   fi
   if [ "$DRY" -eq 0 ]; then
@@ -188,7 +270,12 @@ while read -r h; do
     chmod +x "$LIVE/hooks/$h"
   fi
   HK_OK=$((HK_OK+1))
-done < <(jq -r '.install.hooks | keys[]' "$LOCK")
+done < <(declared hooks)
+while read -r o; do
+  [ -n "$o" ] || continue
+  warn "$o: has an install.hookSources entry but is NOT in install.hooks — installs nothing, and still reads like a declaration"
+  HK_MISS=$((HK_MISS+1))
+done < <(orphan_sources hooks)
 if [ "$DRY" -eq 1 ]; then
   ok "$HK_OK local hooks resolved, $HK_PEND would come from the upstream fetch, $HK_MISS missing"
 else
@@ -201,20 +288,20 @@ if [ "$SKIP_VERIFY" -eq 0 ] && [ "$DRY" -eq 0 ]; then
   step "4. verify"
   V_FAIL=0
 
-  want_sk="$(jq -r '.install.skills | length' "$LOCK")"
+  want_sk="$(jq -r '(.install.skills // []) | length' "$LOCK")"
   have_sk=0
   while read -r s; do
     [ -n "$s" ] || continue
     if [ -e "$LIVE/skills/$s" ]; then have_sk=$((have_sk+1)); else warn "V1 missing skill: $s"; V_FAIL=1; fi
-  done < <(jq -r '.install.skills | keys[]' "$LOCK")
+  done < <(declared skills)
   [ "$have_sk" -eq "$want_sk" ] && ok "V1 all $want_sk locked skills present" || { warn "V1 $have_sk/$want_sk skills present"; V_FAIL=1; }
 
-  want_hk="$(jq -r '.install.hooks | length' "$LOCK")"
+  want_hk="$(jq -r '(.install.hooks // []) | length' "$LOCK")"
   have_hk=0
   while read -r h; do
     [ -n "$h" ] || continue
     if [ -x "$LIVE/hooks/$h" ]; then have_hk=$((have_hk+1)); else warn "V2 missing or non-executable hook: $h"; V_FAIL=1; fi
-  done < <(jq -r '.install.hooks | keys[]' "$LOCK")
+  done < <(declared hooks)
   [ "$have_hk" -eq "$want_hk" ] && ok "V2 all $want_hk locked hooks executable" || { warn "V2 $have_hk/$want_hk hooks ready"; V_FAIL=1; }
 
   # A symlink that resolves nowhere is worse than an absent one: the skill silently does

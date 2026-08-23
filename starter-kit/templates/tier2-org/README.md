@@ -56,6 +56,44 @@ hooks, and **start a new session**.
 What does NOT belong here: personal doctrine (Tier 3), the generic method (Tier 1 — send
 upstream PRs instead), secrets (nowhere in git, ever).
 
+## Declaring a skill or a hook
+
+`org.lock.json` says it twice, on purpose:
+
+```json
+"install": {
+  "skills": ["vinculum-loop", "our-own-skill"],
+  "skillSources": {
+    "vinculum-loop":  "upstream:dark-factory/skills/vinculum-loop",
+    "our-own-skill":  "local:skills/our-own-skill"
+  }
+}
+```
+
+The **array** is the declaration; the **`*Sources` map** says where each one comes from.
+A source is resolved under `vendor/` unless it starts with `local:`, which resolves inside
+*this* repo — and against this **lockfile's** directory, not the installer's own location,
+so it still means this repo when the installer is a vendored copy. `upstream:` is the
+explicit spelling of the default; a bare path means the same thing. A value containing
+`..` is refused, never normalised.
+
+Both halves are required. A name with no source, and a source with no name, each install
+nothing while still reading like a declaration — `install.sh` reports either, and
+`lock-verify` L7 fails on either.
+
+### If your layer predates this shape
+
+Older layers wrote `install.skills` as a single map of name → source. The installer
+**refuses** that shape rather than reading it — an installer that understands both forever
+is how a third reading appears. Convert once, then carry on:
+
+```sh
+python3 vendor/dark-factory/boot-kit/scripts/df-lock-migrate.py --lock org.lock.json          # inspect
+python3 vendor/dark-factory/boot-kit/scripts/df-lock-migrate.py --lock org.lock.json --apply  # write
+```
+
+The same applies to a developer's `instance.lock.json`.
+
 ## Taking a Tier 1 update
 
 ```sh

@@ -17,9 +17,15 @@
   "vendorDir": "vendor",
 
   "install": {
-    "$comment": "Filled by new-org-layer.sh from the Tier 1 checkout at generation time, then yours to curate. Sources: 'upstream:<vendored-repo>/<path>' resolves under vendor/; 'local:<path>' resolves in THIS repo — that is where your org's own skills and hooks live (skills/, hooks/). A local entry with the same name as an upstream one overrides it; install.sh reports every override loudly, because a silent override is how tiers rot.",
-    "skills": {},
-    "hooks": {}
+    "$comment": "Filled by new-org-layer.sh from the Tier 1 checkout at generation time, then yours to curate. A DECLARATION is a name in the `skills`/`hooks` ARRAY; where it comes from is the matching entry in `skillSources`/`hookSources`. Sources: 'upstream:<vendored-repo>/<path>' resolves under vendor/; a bare '<vendored-repo>/<path>' means the same thing (the legacy form); 'local:<path>' resolves in THIS repo — that is where your org's own skills and hooks live (skills/, hooks/), and `local:` is resolved against THIS lockfile's directory, not against the installer's own location. A value containing '..' is refused, never normalised. A local entry with the same name as an upstream one overrides it; install.sh reports every override loudly, because a silent override is how tiers rot. This is the same shape lock-verify L7 checks, in both directions.",
+    "skills": [],
+    "skillSources": {
+      "$comment": "skill-name -> source. Keys beginning with $ are documentation, not entries. Every name above must appear here and every entry here must be named above -- either half alone installs nothing while still reading like a declaration."
+    },
+    "hooks": [],
+    "hookSources": {
+      "$comment": "hook-file-name -> source. Same both-directions rule as skillSources."
+    }
   },
 
   "mcpNote": "There is no single MCP tool prefix — the namespace depends on how each machine connects (account-level connector vs project-level .mcp.json hub), and two people in the same org can legitimately see different names in the same week. Treat any prefix written in docs as a data point to confirm, never a constant to copy. List the tools in YOUR session and check; if nothing resolves or it is ambiguous, ASK — a wrong prefix looks exactly like a missing tool, and an agent that wrongly concludes a system is unavailable may invent state rather than report the gap.",

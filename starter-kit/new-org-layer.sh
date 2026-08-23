@@ -82,19 +82,24 @@ fi
 mkdir -p "$DEST_DIR" || die "cannot create $DEST_DIR"
 cp -R "$TEMPLATE" "$TARGET" || die "copy failed"
 
-# Build the skill and hook maps from the Tier 1 checkout this script runs in, so the
+# Build the skill and hook lists from the Tier 1 checkout this script runs in, so the
 # generated lockfile starts complete and explicit rather than referencing "everything".
-SKILLS_JSON="$(
-  for d in "$T1_ROOT/skills"/*/; do
-    [ -d "$d" ] || continue
-    basename "$d"
-  done | jq -R '{(.): ("upstream:dark-factory/skills/" + .)}' | jq -s 'add // {}'
+#
+# The shape is the one every tier reads: an ARRAY of names is the declaration, and a
+# matching *Sources MAP says where each one comes from. Both halves are written here
+# together, because either alone installs nothing while still reading like a declaration
+# — which is exactly what lock-verify L7 exists to catch.
+SKILL_NAMES="$(
+  for d in "$T1_ROOT/skills"/*/; do [ -d "$d" ] || continue; basename "$d"; done | jq -R . | jq -s '.'
 )"
-HOOKS_JSON="$(
-  for f in "$T1_ROOT/hooks"/*; do
-    [ -f "$f" ] || continue
-    basename "$f"
-  done | jq -R '{(.): ("upstream:dark-factory/hooks/" + .)}' | jq -s 'add // {}'
+SKILL_SOURCES="$(
+  printf '%s' "$SKILL_NAMES" | jq 'map({(.): ("upstream:dark-factory/skills/" + .)}) | add // {}'
+)"
+HOOK_NAMES="$(
+  for f in "$T1_ROOT/hooks"/*; do [ -f "$f" ] || continue; basename "$f"; done | jq -R . | jq -s '.'
+)"
+HOOK_SOURCES="$(
+  printf '%s' "$HOOK_NAMES" | jq 'map({(.): ("upstream:dark-factory/hooks/" + .)}) | add // {}'
 )"
 
 # Substitute org-level placeholders. Instance-level placeholders (__INSTANCE_NAME__,
@@ -117,10 +122,16 @@ while IFS= read -r f; do
     "$f" && rm -f "$f.bak"
 done < <(find "$TARGET" -type f -not -path '*/.git/*')
 
-# Fill the generated skill/hook maps (jq, not sed — they are JSON, not text).
+# Fill the generated lists and source maps (jq, not sed — they are JSON, not text). The
+# template's `$comment` inside each *Sources map is preserved: it is documentation, not an
+# entry, and every reader skips `$`-prefixed keys.
 LOCK="$TARGET/org.lock.json"
-jq --argjson sk "$SKILLS_JSON" --argjson hk "$HOOKS_JSON" \
-  '.install.skills = $sk | .install.hooks = $hk' "$LOCK" > "$LOCK.tmp" || die "lockfile fill failed"
+jq --argjson skn "$SKILL_NAMES" --argjson sks "$SKILL_SOURCES" \
+   --argjson hkn "$HOOK_NAMES"  --argjson hks "$HOOK_SOURCES" \
+  '.install.skills       = $skn
+   | .install.skillSources = (.install.skillSources // {}) * $sks
+   | .install.hooks        = $hkn
+   | .install.hookSources  = (.install.hookSources // {}) * $hks' "$LOCK" > "$LOCK.tmp" || die "lockfile fill failed"
 mv "$LOCK.tmp" "$LOCK"
 
 chmod +x "$TARGET/install.sh" "$TARGET/scripts/new-instance.sh"
@@ -132,8 +143,8 @@ if command -v git >/dev/null 2>&1; then
   git -C "$TARGET" add -A
 fi
 
-SK_COUNT="$(printf '%s' "$SKILLS_JSON" | jq 'length')"
-HK_COUNT="$(printf '%s' "$HOOKS_JSON" | jq 'length')"
+SK_COUNT="$(printf '%s' "$SKILL_NAMES" | jq 'length')"
+HK_COUNT="$(printf '%s' "$HOOK_NAMES"  | jq 'length')"
 printf '\n%s✓%s created %s (%s skills, %s hooks from Tier 1)\n' "$GRN" "$OFF" "$TARGET" "$SK_COUNT" "$HK_COUNT"
 cat <<EOF
 

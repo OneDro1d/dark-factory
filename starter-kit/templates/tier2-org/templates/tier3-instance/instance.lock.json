@@ -19,12 +19,15 @@
   "vendorDir": "vendor",
 
   "install": {
-    "$comment": "YOUR additions only. Anything here is layered AFTER Tier 2, so a same-named entry overrides Tier 2's — which is how you customise a shared skill without forking the shared repo. Overriding is reported loudly by install.sh, because a silent override is how tiers rot.",
+    "$comment": "YOUR additions only. Anything here is layered AFTER Tier 2, so a same-named entry overrides Tier 2's — which is how you customise a shared skill without forking the shared repo. Overriding is reported loudly by install.sh, because a silent override is how tiers rot. A name in the `skills`/`hooks` ARRAY is the declaration; the matching `skillSources`/`hookSources` entry says where it comes from. Both halves are required: either alone installs nothing while still reading like a declaration, and install.sh reports both directions.",
 
-    "skills": {
+    "skills": [],
+    "skillSources": {
+      "$comment": "skill-name -> source. Prefix `local:` for a skill this instance owns outright, e.g. \"my-skill\": \"local:skills/my-skill\" — `local:` resolves against THIS lockfile's directory, so it still means your instance when the installer is a vendored copy. `upstream:<path>` (or a bare path) resolves under vendorDir. A value containing '..' is refused. Keys beginning with $ are documentation, not entries."
     },
-
-    "hooks": {
+    "hooks": [],
+    "hookSources": {
+      "$comment": "hook-file-name -> source. Same rules as skillSources."
     }
   },
 

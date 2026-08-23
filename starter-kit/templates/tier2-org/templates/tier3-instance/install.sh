@@ -42,6 +42,81 @@ AGENT="$(jq -r '.agentName // empty' "$LOCK")"
 VENDOR="$(jq -r '.vendorDir // "vendor"' "$LOCK")"
 LIVE="${CLAUDE_HOME:-$HOME/.claude}"
 
+# --- BEGIN shared install-source reader (keep BYTE-IDENTICAL across the tier templates) ---
+# Every tier reads `install` the way the engine does, so a lockfile means one thing
+# wherever it is read:
+#
+#   install.<kind>         an ARRAY of names   — the declaration
+#   install.<kind>Sources  a MAP name->source  — where each one comes from
+#
+#   local:<path>     resolved against the LOCKFILE's directory — this repo. Without it a
+#                    layer cannot own a skill or a hook at all: it would have to push its
+#                    own file into some other repo and vendor it back.
+#   upstream:<path>  resolved against vendorDir. The explicit spelling of the default.
+#   <path>           resolved against vendorDir. The legacy bare form, unchanged.
+#
+# ROOT is the LOCKFILE's directory, never this script's. That distinction is the whole
+# safety of `local:`: a copy of this installer run from a different root must still mean
+# THAT root, not the tree the copy happens to sit in. The failure it prevents is silent by
+# construction — the wrong file installs successfully.
+#
+# This block is duplicated rather than shared because each tier template has to stand
+# alone in a fresh clone with nothing vendored yet. The duplication is not left to
+# goodwill: starter-kit/tests/test-org-layer-shape.sh asserts the two copies are
+# byte-identical, so drift between them is a test failure, not a discovery.
+ROOT="$(pwd)"
+
+resolve_src() {
+  case "$1" in
+    local:*)    printf '%s/%s'    "$ROOT" "${1#local:}" ;;
+    upstream:*) printf '%s/%s/%s' "$ROOT" "$VENDOR" "${1#upstream:}" ;;
+    *)          printf '%s/%s/%s' "$ROOT" "$VENDOR" "$1" ;;
+  esac
+}
+
+# A source that climbs out of the tree it names is refused, never normalised.
+src_escapes() { case "$1" in *..*) return 0 ;; *) return 1 ;; esac; }
+
+# The old shape was a single MAP keyed by name. It is REFUSED, not read: an installer that
+# understands both shapes forever is exactly how a third reading appears. The fix is one
+# command, so the refusal names it and installs nothing.
+lock_shape_guard() {
+  local kind t
+  for kind in skills hooks; do
+    t="$(jq -r --arg k "$kind" '.install[$k] | type' "$LOCK" 2>/dev/null)"
+    case "$t" in
+      array|null) ;;
+      object) die "install.$kind in $LOCK is a MAP — that is the old shape, from before
+   names and sources were split. Convert it once, then re-run this installer:
+
+     python3 <dark-factory checkout>/boot-kit/scripts/df-lock-migrate.py --lock $LOCK --apply
+
+   Nothing was installed." ;;
+      *) die "install.$kind in $LOCK has unexpected type '$t' — expected an array." ;;
+    esac
+  done
+}
+
+# `skills` pairs with `skillSources`, `hooks` with `hookSources` — the stem is SINGULAR.
+# Derived by rule rather than spelled per call site, so the two cannot drift apart.
+smap_key()   { printf '%sSources' "${1%s}"; }
+declared()   { jq -r --arg k "$1" '(.install[$k] // []) | .[]' "$LOCK"; }
+source_for() { jq -r --arg m "$(smap_key "$1")" --arg n "$2" '(.install[$m] // {})[$n] // empty' "$LOCK"; }
+
+# A name with no source and a source with no name both install NOTHING while still
+# reading like a declaration. The array+map pair can express each; a single map could
+# express neither, which is the one advantage the old shape had. It is bought back here.
+orphan_sources() {
+  jq -r --arg k "$1" --arg m "$(smap_key "$1")" '.install as $i
+      | (($i[$m] // {}) | keys[])
+      | select(startswith("$") | not)
+      | . as $n
+      | select(([(($i[$k]) // [])[]] | index($n)) == null)' "$LOCK"
+}
+# --- END shared install-source reader ---
+
+lock_shape_guard
+
 printf 'instance : %s\nagent    : %s\nlive     : %s\n' "$INSTANCE" "${AGENT:-<unset>}" "$LIVE"
 case "$INSTANCE" in *__INSTANCE_NAME[_]_*) warn "instance name is still the template placeholder — edit $LOCK" ;; esac
 [ "$DRY" -eq 1 ] && warn "DRY RUN — nothing will be written"
@@ -100,8 +175,16 @@ LOCAL_SK=0; LOCAL_HK=0; OVERRIDE=0
 
 while read -r s; do
   [ -n "$s" ] || continue
-  src="$(jq -r --arg s "$s" '.install.skills[$s]' "$LOCK")"
-  abs="$(pwd)/$src"
+  src="$(source_for skills "$s")"
+  if [ -z "$src" ]; then
+    warn "$s: declared in install.skills with no entry in install.skillSources — installs nothing"
+    continue
+  fi
+  if src_escapes "$src"; then
+    warn "$s: source '$src' climbs out of the tree it names — refused, not normalised"
+    continue
+  fi
+  abs="$(resolve_src "$src")"
   [ -d "$abs" ] || { warn "skill $s: nothing at $src"; continue; }
   if [ -e "$LIVE/skills/$s" ] && [ "$(readlink "$LIVE/skills/$s" 2>/dev/null)" != "$abs" ]; then
     warn "$s OVERRIDES a Tier 2 skill — intended? A silent override is how tiers rot."
@@ -111,18 +194,35 @@ while read -r s; do
     rm -rf "$LIVE/skills/$s"; ln -s "$abs" "$LIVE/skills/$s"
   fi
   LOCAL_SK=$((LOCAL_SK+1))
-done < <(jq -r '(.install.skills // {}) | keys[]' "$LOCK")
+done < <(declared skills)
+while read -r o; do
+  [ -n "$o" ] || continue
+  warn "$o: has an install.skillSources entry but is NOT in install.skills — installs nothing, and still reads like a declaration"
+done < <(orphan_sources skills)
 
 while read -r h; do
   [ -n "$h" ] || continue
-  src="$(jq -r --arg h "$h" '.install.hooks[$h]' "$LOCK")"
-  [ -f "$src" ] || { warn "hook $h: nothing at $src"; continue; }
+  src="$(source_for hooks "$h")"
+  if [ -z "$src" ]; then
+    warn "$h: declared in install.hooks with no entry in install.hookSources — installs nothing"
+    continue
+  fi
+  if src_escapes "$src"; then
+    warn "$h: source '$src' climbs out of the tree it names — refused, not normalised"
+    continue
+  fi
+  abs="$(resolve_src "$src")"
+  [ -f "$abs" ] || { warn "hook $h: nothing at $src"; continue; }
   [ -f "$LIVE/hooks/$h" ] && { warn "$h OVERRIDES a Tier 2 hook — intended?"; OVERRIDE=$((OVERRIDE+1)); }
   if [ "$DRY" -eq 0 ]; then
-    sed "s|__HOME__|$HOME|g" "$src" > "$LIVE/hooks/$h"; chmod +x "$LIVE/hooks/$h"
+    sed "s|__HOME__|$HOME|g" "$abs" > "$LIVE/hooks/$h"; chmod +x "$LIVE/hooks/$h"
   fi
   LOCAL_HK=$((LOCAL_HK+1))
-done < <(jq -r '(.install.hooks // {}) | keys[]' "$LOCK")
+done < <(declared hooks)
+while read -r o; do
+  [ -n "$o" ] || continue
+  warn "$o: has an install.hookSources entry but is NOT in install.hooks — installs nothing, and still reads like a declaration"
+done < <(orphan_sources hooks)
 
 ok "$LOCAL_SK instance skill(s), $LOCAL_HK instance hook(s), $OVERRIDE override(s)"
 
