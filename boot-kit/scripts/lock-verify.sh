@@ -120,22 +120,80 @@ else
   drift "L4 gh not installed — cannot verify identities"
 fi
 
-# ---- L5: installed on the machine -------------------------------------------
-echo "[L5] locked skills/hooks are installed"
+# ---- L5: installed on the machine, AND pointing where this lock says --------
+# L5 used to ask only "does $LIVE/skills/<name> exist". A skill is installed as a SYMLINK,
+# so existence says nothing about what it resolves to -- and $LIVE is shared by every
+# instance on the machine. Install two instances and the second one's links sit in the same
+# directory as the first's. Whichever installed last wins, both report LOCKED, and each is
+# running some of the other's skills.
+#
+# Found by installing four instances into one $LIVE in sequence: 8 of one instance's 9
+# declared skills resolved into a DIFFERENT instance's vendor tree, with rc=0 and drift=0.
+# Confirmed by repointing a declared skill at a decoy directory holding entirely different
+# content -- still rc=0, still LOCKED. The check could not fail.
+#
+# It is invisible while every instance pins the same upstream commit, because the content
+# happens to be identical. Pins are bumped ONE INSTANCE AT A TIME, so "two instances at
+# different pins" is the ordinary steady state, not the exotic one: the first bump is the
+# day one instance silently starts running another's older skills.
+#
+# So resolve the link and compare it with what THIS lockfile declares as the source.
+# Resolution mirrors the installer's, deliberately -- `local:` inside the instance,
+# anything else under vendorDir -- because two tools disagreeing about what a source string
+# means is how this class of defect arrives in the first place.
+phys() {                       # physical path of $1, symlinks resolved, or empty
+  [ -e "$1" ] || return 1
+  if [ -d "$1" ]; then (cd "$1" 2>/dev/null && pwd -P); else
+    _d=$(dirname "$1"); _b=$(basename "$1")
+    (cd "$_d" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$_b")
+  fi
+}
+
+echo "[L5] locked skills/hooks are installed, and resolve to THIS instance"
 NOTINST=""
+MISPOINT=""
 while read -r s; do
   [ -n "$s" ] || continue
-  [ -e "$LIVE/skills/$s" ] || NOTINST="$NOTINST skill:$s"$'\n'
+  if [ ! -e "$LIVE/skills/$s" ]; then
+    NOTINST="$NOTINST skill:$s"$'\n'
+    continue
+  fi
+  src="$(jq -r --arg s "$s" '.install.skillSources[$s] // empty' "$LOCK")"
+  # No source is L7's finding, not L5's. Reporting it twice trains you to read neither.
+  [ -n "$src" ] || continue
+  case "$src" in
+    local:*)    want="$ROOT/${src#local:}" ;;
+    upstream:*) want="$VENDOR/${src#upstream:}" ;;
+    *)          want="$VENDOR/$src" ;;
+  esac
+  got_p="$(phys "$LIVE/skills/$s" || true)"
+  want_p="$(phys "$want" || true)"
+  if [ -z "$want_p" ]; then
+    MISPOINT="$MISPOINT$s|declared source does not exist: $want"$'\n'
+  elif [ "$got_p" != "$want_p" ]; then
+    MISPOINT="$MISPOINT$s|resolves to $got_p, this lock declares $want_p"$'\n'
+  fi
 done < <(jq -r '(.install.skills // [])[]' "$LOCK")
 while read -r h; do
   [ -n "$h" ] || continue
   [ -f "$LIVE/hooks/$h" ] || NOTINST="$NOTINST hook:$h"$'\n'
 done < <(jq -r '(.install.hooks // [])[]' "$LOCK")
-if [ -n "$NOTINST" ]; then
-  drift "L5 declared but not installed:"
-  printf '%s' "$NOTINST" | while read -r l; do [ -n "$l" ] && note "$l"; done
+if [ -n "$NOTINST" ] || [ -n "$MISPOINT" ]; then
+  [ -n "$NOTINST" ] && {
+    drift "L5 declared but not installed:"
+    printf '%s' "$NOTINST" | while read -r l; do [ -n "$l" ] && note "$l"; done
+  }
+  [ -n "$MISPOINT" ] && {
+    drift "L5 installed but pointing OUTSIDE this instance:"
+    printf '%s' "$MISPOINT" | while IFS='|' read -r n d; do
+      [ -n "$n" ] && note "$n -> $d"
+    done
+    note "another instance sharing this LOOM_LIVE installed over these links."
+    note "re-run this instance's install.sh, then re-check. Both instances reporting"
+    note "LOCKED is exactly what this check exists to stop."
+  }
 else
-  pass "L5 everything the lock installs is present"
+  pass "L5 everything the lock installs is present and resolves to this instance"
 fi
 
 # ---- L6: pins are reachable from a branch on the REMOTE ----------------------
