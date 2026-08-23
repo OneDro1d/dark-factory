@@ -1,6 +1,6 @@
 ---
 name: df-infrastructure
-description: Dark Factory Infrastructure stage: produce the Deployment and Infrastructure Spec — DTAP placement, where data lives, trust boundaries mapped to enforcement mechanisms, secrets, and a verified observability surface. Triggers on "infrastructure", "deployment", "trust boundary", "where data lives", "deploy across environments".
+description: 'Dark Factory Infrastructure stage: produce the Deployment and Infrastructure Spec — DTAP placement, where data lives, trust boundaries mapped to enforcement mechanisms, secrets, and a verified observability surface. Triggers on "infrastructure", "deployment", "trust boundary", "where data lives", "deploy across environments".'
 ---
 
 # Dark Factory — Infrastructure Architect (where data lives + the boundaries)

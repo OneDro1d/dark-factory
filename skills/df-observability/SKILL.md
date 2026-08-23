@@ -1,6 +1,6 @@
 ---
 name: df-observability
-description: Dark Factory Observability stage: make the consumable surface (dashboards and queryable traces keyed to scenarios, verified rendering live data) a named deliverable — a /metrics endpoint nobody can see is not observability. Triggers on "observability", "dashboards", "Grafana", "correlationId trace", "telemetry surface".
+description: 'Dark Factory Observability stage: make the consumable surface (dashboards and queryable traces keyed to scenarios, verified rendering live data) a named deliverable — a /metrics endpoint nobody can see is not observability. Triggers on "observability", "dashboards", "Grafana", "correlationId trace", "telemetry surface".'
 ---
 
 # Dark Factory — Observability Standard (the agents' eyes)
