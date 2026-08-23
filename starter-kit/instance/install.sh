@@ -57,7 +57,18 @@ say "ok    lockfile, git, jq"
 
 # A placeholder that survived bootstrap is a value nobody supplied. Naming them here is
 # cheap; discovering them as a clone of the wrong commit is not.
-UNFILLED="$(grep -oE '__[A-Z_]+__' "$LOCK" | sort -u | tr '\n' ' ')"
+#
+# Walk the JSON, do not grep the file. The lockfile's own prose EXPLAINS the placeholder
+# convention and mentions __HOME__ by name, so a text scan reports the documentation as
+# unfilled data -- a warning that is wrong on every correct lockfile, which is the fastest
+# way to teach someone to skip reading warnings. Only leaf VALUES count, and keys starting
+# with `$` are notes for the human, not fields.
+UNFILLED="$(jq -r '
+  [ paths(type == "string") as $p
+    | select( [ $p[] | tostring | startswith("$") ] | any | not )
+    | getpath($p)
+    | select(test("^__[A-Z_]+__$")) ]
+  | unique | join(" ")' "$LOCK" 2>/dev/null)"
 [ -n "$UNFILLED" ] && say "WARN  unresolved placeholders still in the lockfile: $UNFILLED"
 
 VENDOR_REL="$(jq -r '.vendorDir // "vendor"' "$LOCK")"
@@ -79,7 +90,9 @@ else
   # Plain git over https on purpose: the public method must install with git alone. A
   # hosting CLI is only needed for PRIVATE upstreams, and rehydrate.sh handles those in
   # step 3, where the identity question actually arises.
-  mkdir -p "$VENDOR"
+  # Guarded: a --dry-run that creates the vendor directory has already changed the
+  # machine, and "print the plan, change nothing" is the one promise the flag makes.
+  [ "$DRY" -eq 0 ] && mkdir -p "$VENDOR"
   if [ -d "$T1/.git" ]; then
     act "fetch    $T1_NAME"
     [ "$DRY" -eq 0 ] && { git -C "$T1" fetch --quiet origin || say "  WARN fetch failed — falling back to what is already here"; }
