@@ -1,0 +1,21 @@
+{
+  "$comment": "MCP HUB TEMPLATE. Copy the `mcpServers` block into your harness config (Claude Code reads ~/.claude.json) and fill in the placeholders. It is a TEMPLATE and not a working config on purpose: a default that resolves would point your sessions at a host you never chose, and the first symptom would be a hub you did not intend answering questions about work you did not intend to send it. Nothing here is secret and nothing here should become secret -- see `$auth` below.",
+
+  "$hubUrl": "__HUB_URL__ is the MCP endpoint your hub serves. Your hub provider gives you this; it usually ends in /mcp. There is no default and there will never be one. If you do not have a hub yet, delete this file: the method works without one, you just lose shared memory and connectors.",
+
+  "$auth": "The token is written as ${DF_HUB_TOKEN}, an ENVIRONMENT REFERENCE, not the token itself. Two reasons, and the second is the one people learn the hard way. (1) A config file gets copied, committed, screenshotted and pasted into issues; an env var does not travel with it. (2) Auth is therefore INHERITED FROM THE ENVIRONMENT, so a headless or scheduled run reaches the hub only if that variable is exported in the process that spawned it -- otherwise the child boots cleanly, fails every write, and keeps going. Export it in your shell profile, and check it is set before launching anything unattended. `df-preflight` checks exactly this and reports it as its own finding class.",
+
+  "$naming": "Name each server for the hub it points at, not for the tools behind it. The tool list changes whenever you connect or disconnect an upstream; the hub does not. Add one object per hub if you use more than one -- separate hubs stay separate, and a single merged hub is how content crosses a boundary you meant to keep.",
+
+  "$verify": "After filling this in, prove it works before relying on it: `python3 boot-kit/scripts/df-preflight.py --report` makes a live tools/list call against every configured hub. A present Authorization header proves nothing -- tokens expire, and an expired one looks identical to a working one until something needs it.",
+
+  "mcpServers": {
+    "__HUB_NAME__": {
+      "type": "http",
+      "url": "__HUB_URL__",
+      "headers": {
+        "Authorization": "Bearer ${DF_HUB_TOKEN}"
+      }
+    }
+  }
+}

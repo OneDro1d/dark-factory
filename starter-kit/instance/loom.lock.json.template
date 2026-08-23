@@ -43,9 +43,10 @@
     "skillSources": {
       "$comment": "skill-name -> path under vendorDir, e.g. \"vinculum-loop\": \"dark-factory/skills/vinculum-loop\"."
     },
-    "hooks": [],
+    "hooks": ["df-instance-start.sh"],
     "hookSources": {
-      "$comment": "hook-file-name -> path under vendorDir, e.g. \"context-budget.py\": \"dark-factory/hooks/context-budget.py\"."
+      "$comment": "hook-file-name -> path under vendorDir. Resolved under vendorDir ONLY -- a hook written inside your own instance has nowhere to resolve from, so to ship one of your own, put it in a repo, add that repo to `upstreams`, and point here at the vendored path.",
+      "df-instance-start.sh": "dark-factory/starter-kit/instance/boot-kit/hooks/df-instance-start.sh"
     }
   },
 
@@ -63,6 +64,7 @@
     "$comment": "Printed by install.sh on every run, so that a green install is never mistaken for a complete setup. The point of naming these is that the gap stays visible: a restore that quietly omits a step is worse than one that fails.",
     "git hosting login": "credentials cannot live in a lockfile, and should not want to",
     "MCP hub connection": "your hub URL and bearer token are yours; see AUTHENTICATION.md and the boot-kit MCP template",
-    "settings.json hook registration": "the installer places hook files, it does not edit your settings"
+    "settings.json hook registration": "the installer places hook files, it does not edit your settings -- merge boot-kit/settings.template.json by hand, because a script that rewrites a shared settings file silently deletes another tool's configuration",
+    "output style selection": "copy boot-kit/output-style.md into your harness output-styles directory and select it"
   }
 }

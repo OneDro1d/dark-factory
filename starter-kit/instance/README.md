@@ -36,6 +36,7 @@ installer can do for you.
 | `install.sh` | run whenever. Copied into the instance; that copy is the one you use. |
 | `loom.lock.json.template` | the instance lockfile — the authority for what is installed. |
 | `dot-gitignore.template` | becomes the instance's `.gitignore`. |
+| `boot-kit/` | what the harness loads at session start: the SessionStart hook, the settings and hub templates, the output style. See `boot-kit/README.md`. |
 
 ## Two rules the shape depends on
 
@@ -48,8 +49,19 @@ directory is declared — is the one that usually goes missing.
 "same" instance, and it moves most while it is under review, which is exactly when people
 onboard onto it. `bootstrap.sh` resolves a SHA; an unresolved ref is written loudly.
 
+## What the installer will not do for you
+
+Three of the four boot-kit pieces are installed by hand, and they stay that way. The
+session hook is declared in the lockfile and copied from the vendored upstream like any
+other hook. The settings entry, the hub config and the output style each land in a file
+shared with everything else you run — and a script that rewrites those silently removes
+another tool's configuration, with the loss showing up much later as behaviour that used to
+happen and now does not.
+
+`install.sh` prints all three on **every** run, not once, so a green install is never read
+as a complete setup. `boot-kit/README.md` says which is which and why.
+
 ## Still to come
 
-`START-HERE.md`, `README.md`, `CLAUDE.md`, `AUTHENTICATION.md`, the boot-kit templates
-(session hook, settings, MCP, output style) and a worked example mission are separate
+`START-HERE.md`, `CLAUDE.md`, `AUTHENTICATION.md` and a worked example mission are separate
 pieces of the same build. This directory is the skeleton they hang on.

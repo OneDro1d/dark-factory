@@ -97,6 +97,16 @@ chmod +x "$TARGET/install.sh"
 
 cp "$SELF/dot-gitignore.template" "$TARGET/.gitignore" 2>/dev/null || true
 
+# The boot-kit templates you MERGE by hand: harness settings, the hub config, the output
+# style. Copied, not installed -- each of them lands in a file shared with everything else
+# you run, and a script that rewrites those silently deletes another tool's configuration.
+# The session hook is deliberately NOT copied here: it is declared in the lockfile and
+# installed from the vendored upstream, so there is one store of it and nothing to drift.
+mkdir -p "$TARGET/boot-kit"
+for f in README.md settings.template.json mcp.template.json output-style.md; do
+  cp "$SELF/boot-kit/$f" "$TARGET/boot-kit/$f" 2>/dev/null || say "WARN  could not copy boot-kit/$f"
+done
+
 mkdir -p "$TARGET/.df/missions" "$TARGET/handoffs" "$TARGET/sessions"
 
 # A notepad is identified by holding this file: df-preflight walks up from $PWD looking
@@ -123,5 +133,9 @@ say "  bash install.sh"
 say ""
 say "NOT DONE BY THIS SCRIPT, and not doable by any script:"
 say "  - git hosting login"
-say "  - your MCP hub URL and bearer token (see AUTHENTICATION.md)"
-say "  - registering hooks in your settings.json"
+say "  - your MCP hub URL and bearer token (boot-kit/mcp.template.json)"
+say "  - registering hooks in your settings.json (boot-kit/settings.template.json)"
+say "  - selecting the output style (boot-kit/output-style.md)"
+say ""
+say "  Read boot-kit/README.md: it says which of those is automatable and which is not,"
+say "  and why the three that are not will stay that way."
