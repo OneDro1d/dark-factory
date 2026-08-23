@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# df-mission — operator control surface for autonomous missions.
+#
+# WHY A CLI AND NOT ONLY A SKILL
+# ------------------------------
+# `status`, `say` and `stop` have to work when no Claude session is running — especially
+# `stop`. If the only way to halt a runaway loop were to start a session and ask an agent
+# to do it, the brake would depend on the thing it is braking.
+#
+# The SKILL (/<profile>-dark-factory) owns the framing conversation, because that is a
+# judgement call a bash prompt cannot hold. This owns everything after it.
+#
+#   df-mission start <id> --profile <profile> [--interval SEC] [--max-iter N] [--max-usd N]
+#   df-mission status [id]
+#   df-mission say <id> "text"
+#   df-mission stop <id>
+#   df-mission list
+#   df-mission profile          what `start` defaults to, and where that came from
+set -uo pipefail
+
+# readlink -f, not dirname alone: this script is normally reached through a symlink on
+# PATH, and dirname would resolve the kit to a package-manager global bin dir — silently
+# the wrong repo.
+#
+# The engine ships under boot-kit/scripts/ within whatever kit/repo installs it; two
+# levels up from this script's own directory is that kit/repo's own root.
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+KIT_ROOT="$(cd "$(dirname "$SELF")/../.." && pwd)"
+SCRIPTS="$KIT_ROOT/boot-kit/scripts"
+
+# The NOTEPAD is where you launched from, not where the scripts live. One notepad per
+# objective, and its repos.manifest.json is the mission's scope — so missions belong to it
+# too. Walking up from $PWD is the same convention dispatch.sh uses.
+find_notepad() {
+  local d="$PWD"
+  while [ "$d" != "/" ]; do
+    if [ -f "$d/repos.manifest.json" ]; then echo "$d"; return 0; fi
+    d="$(dirname "$d")"
+  done
+  echo "$KIT_ROOT"
+}
+NOTEPAD="${NOTEPAD:-$(find_notepad)}"
+ROOT="$NOTEPAD/.df/missions"
+
+# The DEFAULT PROFILE is the instance's to declare, never the engine's to know. This engine
+# is meant to be PINNED: a kit names a commit of it and installs these scripts unmodified.
+# A default baked in here defeats that in the quietest way available — the consumer edits
+# the one line it disagrees with, and from that moment owns a fork it will keep calling a
+# pin. Measured the day the engine was imported into its own repo: all six scripts had
+# already diverged from the copy they came from, and this default was one of the diffs.
+#
+# Precedence, strongest first — and it deliberately matches df-preflight's, because two
+# tools in one repo that disagree about which lockfile describes this machine will each be
+# right somewhere and report the other machine's facts as this one's drift:
+#   1. $DF_PROFILE          — the explicit override, for an instance the walk cannot reach
+#   2. $LOOM_LOCK           — the same lockfile pointer df-preflight honours first
+#   3. $NOTEPAD/loom.lock.json
+#   4. "default"            — the built-in, which names no estate
+#
+# An unreadable or malformed lockfile yields the built-in and exit 0, never an error: an
+# unknown is not a fact, and taking the operator's brake offline over a stray comma is a
+# worse failure than starting with a generic profile. An EMPTY declared value is treated as
+# undeclared for the same reason — "" would render /-dark-factory into every prompt and
+# preflight call, a silent mis-target rather than a visible one.
+lock_default_profile() {   # lock_default_profile <lockfile> -> value on stdout, or nothing
+  local f="$1"
+  [ -f "$f" ] || return 1
+  local v=""
+  if command -v jq >/dev/null 2>&1; then
+    v="$(jq -er '.defaultProfile // empty' "$f" 2>/dev/null || true)"
+  else
+    # No jq: a deliberately narrow scan. It matches only a well-formed string value on one
+    # line, so a malformed file yields nothing and falls through, which is the wanted
+    # behaviour rather than a lucky one.
+    v="$(sed -n 's/.*"defaultProfile"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -1)"
+  fi
+  [ -n "$v" ] || return 1
+  printf '%s' "$v"
+}
+
+# Sets PROFILE_VALUE and PROFILE_SOURCE. Never fails.
+resolve_default_profile() {
+  if [ -n "${DF_PROFILE:-}" ]; then
+    PROFILE_VALUE="$DF_PROFILE"; PROFILE_SOURCE="\$DF_PROFILE"; return 0
+  fi
+  local f v
+  for f in "${LOOM_LOCK:-}" "$NOTEPAD/loom.lock.json"; do
+    [ -n "$f" ] || continue
+    if v="$(lock_default_profile "$f")"; then
+      PROFILE_VALUE="$v"; PROFILE_SOURCE="$f"; return 0
+    fi
+  done
+  PROFILE_VALUE=default; PROFILE_SOURCE="built-in"
+}
+
+# The value alone, for callers that want it inline.
+resolve_default_profile_value() { resolve_default_profile; printf '%s' "$PROFILE_VALUE"; }
+
+# Read-only: prints what `start` would default to, and where that came from. It launches
+# nothing, so the resolution can be proven — by an operator or by a test — without a
+# supervisor, a budget or a model.
+cmd_profile() {
+  resolve_default_profile
+  printf '%s\n' "$PROFILE_VALUE"
+  printf 'source: %s\n' "$PROFILE_SOURCE"
+}
+
+die() { echo "df-mission: $*" >&2; exit 1; }
+mdir() { echo "$ROOT/$1"; }
+
+cmd_list() {
+  [ -d "$ROOT" ] || { echo "no missions yet"; return 0; }
+  for d in "$ROOT"/*/; do
+    [ -d "$d" ] || continue
+    n="$(basename "$d")"
+    s="$(cat "$d/state" 2>/dev/null || echo '?')"
+    hb="$(cat "$d/heartbeat" 2>/dev/null || echo never)"
+    pid="$(cat "$d/pid" 2>/dev/null || true)"
+    alive=stopped
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive="running(pid $pid)"
+    printf '%-28s %-9s %-18s last-tick %s\n' "$n" "$s" "$alive" "$hb"
+  done
+}
+
+cmd_status() {
+  local id="${1:-}"
+  [ -n "$id" ] || { cmd_list; return 0; }
+  local d; d="$(mdir "$id")"
+  [ -d "$d" ] || die "no such mission: $id"
+  local pid alive
+  pid="$(cat "$d/pid" 2>/dev/null || true)"
+  alive="NOT RUNNING"
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then alive="running (pid $pid)"; fi
+
+  echo "mission   $id"
+  echo "profile   $(cat "$d/profile" 2>/dev/null || echo '?')"
+  echo "state     $(cat "$d/state" 2>/dev/null || echo '?')"
+  echo "process   $alive"
+  # The heartbeat is the honest signal. A detached loop dies silently when the workspace
+  # restarts, so "state: CONTINUE" alone would read as healthy long after it stopped.
+  echo "last tick $(cat "$d/heartbeat" 2>/dev/null || echo never)"
+  # grep -c already prints 0 when nothing matches AND exits 1, so a `|| echo 0` fallback
+  # printed a SECOND zero on its own line. Count files directly instead.
+  local iters
+  iters="$(find "$d/iterations" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)"
+  echo "iterations $iters"
+  local pending
+  pending="$(ls -A "$d/inbox" 2>/dev/null | wc -l)"
+  echo "inbox     $pending note(s) pending"
+  echo
+  echo "── last 12 supervisor lines ──"
+  tail -n 12 "$d/supervisor.log" 2>/dev/null || echo "(no log yet)"
+}
+
+cmd_say() {
+  local id="${1:?mission id}"; shift
+  local d; d="$(mdir "$id")"
+  [ -d "$d" ] || die "no such mission: $id"
+  mkdir -p "$d/inbox"
+  local f="$d/inbox/$(date -u +%Y%m%dT%H%M%SZ).md"
+  printf '%s\n' "$*" > "$f"
+  echo "queued for the next iteration: $f"
+  echo "(the running iteration will not see it — notes are drained between iterations)"
+}
+
+cmd_stop() {
+  local id="${1:?mission id}"
+  local d; d="$(mdir "$id")"
+  [ -d "$d" ] || die "no such mission: $id"
+  echo STOP > "$d/state"
+  local pid; pid="$(cat "$d/pid" 2>/dev/null || true)"
+  echo "state set to STOP — the supervisor exits after the current iteration."
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    echo "supervisor pid $pid still running; to end it NOW (abandoning the in-flight"
+    echo "iteration, which will not write its handoff): kill $pid"
+  fi
+}
+
+cmd_start() {
+  local id="${1:?mission id}"; shift
+  local profile="$(resolve_default_profile_value)" interval=0 max_iter=25 max_usd="" channel=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --profile)  profile="$2"; shift 2 ;;
+      --interval) interval="$2"; shift 2 ;;
+      --max-iter) max_iter="$2"; shift 2 ;;
+      --max-usd)  max_usd="$2"; shift 2 ;;
+      --channel)  channel="$2"; shift 2 ;;
+      *) die "unknown arg $1" ;;
+    esac
+  done
+
+  local d; d="$(mdir "$id")"
+  [ -f "$d/MISSION.md" ] || die "no $d/MISSION.md — frame the mission first (/${profile}-dark-factory)"
+
+  mkdir -p "$d/inbox" "$d/iterations"
+  echo "$profile" > "$d/profile"
+  [ -n "$channel" ] && printf '%s\n' "$channel" > "$d/notify-channel"
+  [ -s "$d/state" ] || echo CONTINUE > "$d/state"
+
+  if [ ! -s "$d/notify-channel" ]; then
+    echo "WARNING: no --channel set. DONE/BLOCKED will be recorded locally only," >&2
+    echo "         which means you will not be told. Set one before walking away." >&2
+  fi
+
+  local args=(--mission "$d" --interval "$interval" --max-iter "$max_iter")
+  [ -n "$max_usd" ] && args+=(--max-usd "$max_usd")
+
+  # NOTEPAD is passed EXPLICITLY, not re-derived: the supervisor runs detached with no
+  # meaningful cwd, so a second discovery pass there would land on the kit root and
+  # silently rescope the mission to the wrong manifest.
+  NOTEPAD="$NOTEPAD" nohup "$SCRIPTS/df-supervisor.sh" "${args[@]}" >>"$d/nohup.log" 2>&1 &
+  disown
+  sleep 2
+  echo "started mission $id (profile=$profile, notepad=$NOTEPAD, max-iter=$max_iter, interval=${interval}s)"
+  cmd_status "$id"
+}
+
+case "${1:-}" in
+  start)  shift; cmd_start "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  say)    shift; cmd_say "$@" ;;
+  stop)   shift; cmd_stop "$@" ;;
+  list)   cmd_list ;;
+  profile) cmd_profile ;;
+  *) sed -n '3,20p' "$0"; exit 64 ;;
+esac

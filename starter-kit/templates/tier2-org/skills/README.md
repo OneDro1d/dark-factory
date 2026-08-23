@@ -4,7 +4,8 @@ Skills written by and for __ORG_DISPLAY__ — one directory per skill, each with
 `SKILL.md` (frontmatter: `name`, `description`; the description is what triggers the
 skill, so write it as trigger conditions).
 
-Register each in `../org.lock.json` as `"<name>": "local:skills/<name>"` and re-run
+Register each in `../org.lock.json` — the name in the `install.skills` array, and
+`"<name>": "local:skills/<name>"` in `install.skillSources` — then re-run
 `../install.sh`. **A skill on disk but absent from the lockfile is installed by nothing
 and reported by nothing.**
 

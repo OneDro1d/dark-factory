@@ -1,7 +1,8 @@
 # Org hooks
 
 Scripts your agent harness runs at session boundaries, shared org-wide. Register each in
-`../org.lock.json` as `"<name>": "local:hooks/<name>"`.
+`../org.lock.json`: the file name in the `install.hooks` array, and
+`"<name>": "local:hooks/<name>"` in `install.hookSources`. Both halves are required.
 
 - **Hooks are COPIED, not symlinked** — an edit here does nothing until `install.sh`
   re-runs, and only takes effect in a NEW session.

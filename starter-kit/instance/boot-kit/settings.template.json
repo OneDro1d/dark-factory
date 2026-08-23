@@ -1,0 +1,23 @@
+{
+  "$comment": "HARNESS SETTINGS TEMPLATE -- MERGE THIS, DO NOT COPY IT OVER YOUR OWN. Claude Code reads ~/.claude/settings.json (and a per-project .claude/settings.json). Both are shared with everything else you run, so replacing one wholesale silently removes other tools' hooks and permissions, and the loss shows up later as behaviour that used to happen and now does not. Merge the `hooks.SessionStart` ARRAY ENTRY below into whatever array is already there.",
+
+  "$path": "The command below points at ~/.claude/hooks/, which is where the installer puts hooks -- NOT at the file inside this kit. Hooks are COPIED on install, never symlinked, because per-machine substitution happens during that copy. Two consequences worth holding: editing the kit's copy changes nothing until you re-run install.sh, and a change only takes effect in a NEW session, because hooks are read once at session start.",
+
+  "$verifyFirst": "Before registering any hook, run it by hand and confirm it prints parseable JSON -- a hook that errors or prints prose is discarded silently, so a broken one is indistinguishable from one that had nothing to say:  printf '{\"cwd\":\"'\"$PWD\"'\"}' | bash ~/.claude/hooks/df-instance-start.sh | jq .",
+
+  "$timeout": "The timeout is a floor on every session start. Keep hooks to file reads; anything that can block on a network or a lock belongs in a command you run, not in the path every session waits on.",
+
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/df-instance-start.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

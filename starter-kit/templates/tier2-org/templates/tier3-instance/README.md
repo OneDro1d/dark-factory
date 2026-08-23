@@ -40,14 +40,19 @@ yours: personal doctrine, experiments, work in progress.
 
 1. Create `skills/<name>/SKILL.md` (frontmatter: `name`, `description` — the description is
    what triggers it, write it for the matcher, not the reader).
-2. Register it: `"<name>": "skills/<name>"` under `install.skills` in `instance.lock.json`.
+2. Register it in `instance.lock.json` — the name in the `install.skills` **array**, and
+   `"<name>": "local:skills/<name>"` in `install.skillSources`. Both halves are required:
+   either alone installs nothing while still reading like a declaration, and `install.sh`
+   reports the mismatch in whichever direction it happens.
 3. `bash install.sh` — skills symlink, so later edits are live immediately.
 
 ### A hook
 
 1. Create `hooks/<name>` (use `__HOME__` for the home directory — the installer substitutes
    it per machine).
-2. Register it under `install.hooks`, run `install.sh`, wire it in `~/.claude/settings.json`,
+2. Register it — the file name in the `install.hooks` array plus
+   `"<name>": "local:hooks/<name>"` in `install.hookSources` — run `install.sh`, wire it in
+   `~/.claude/settings.json`,
    and start a new session — hooks are copies, so every edit needs a reinstall.
 
 ## Taking a Tier 2 update

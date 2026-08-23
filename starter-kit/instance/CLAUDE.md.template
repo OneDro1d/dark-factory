@@ -1,0 +1,129 @@
+# __INSTANCE_NAME__ — a Dark Factory instance
+
+<!--
+  This file is rendered from starter-kit/instance/CLAUDE.md.template by bootstrap.sh and
+  lands in your instance as CLAUDE.md, where your harness auto-loads it every session.
+
+  It ships as a .template, not as CLAUDE.md, for the same reason the lockfile does: a file
+  named CLAUDE.md sitting in the kit would be auto-loaded by anyone working ON the kit, and
+  would inject instructions meant for an instance into a session about the kit itself.
+
+  Edit your copy freely. Instructions you never follow are worse than none: they teach the
+  agent that this file is decorative, and the rule you actually needed goes unread with the
+  rest of them.
+-->
+
+This directory is one machine's instance of the Dark Factory method. It is **two things at
+once**, and holding both is what keeps it useful:
+
+1. A **notepad** — per-objective working memory (`NOTES.md`, `handoffs/`, `sessions/`,
+   `repos.manifest.json`, `.df/missions/`).
+2. A **declaration** — `loom.lock.json` says what is installed on this machine, and is the
+   authority for it.
+
+## Read first, every session, and stop when you have enough
+
+1. `NOTES.md` — working memory. **Blockers live here.** Created as you work; empty is a
+   valid state, not a missing file.
+2. `.df/missions/<id>/MISSION.md` — the frame and the hard stops for whatever is running
+3. the newest file in `handoffs/` — what the last session was in the middle of
+4. `repos.manifest.json` — which repos this objective actually drives
+5. `loom.lock.json` — what is installed, and where each piece came from
+
+Stop as soon as you can act. Re-deriving something the notepad already records is the most
+common way a session spends its context before it starts.
+
+## The lockfile is the authority; the installer is only mechanism
+
+Anything on disk that `loom.lock.json` does not declare is installed by nothing and reported
+by nothing, so as far as every tool is concerned it does not exist. `lock-verify.sh` checks
+**both** directions, and the second one — every vendored directory is declared — is the one
+that usually goes missing.
+
+- **Pin commits, never branches.** A branch moves under you between two installs of the
+  "same" instance, and it moves most while it is under review, which is exactly when people
+  onboard onto it.
+- **Take an update by bumping one line**, then re-run `install.sh`.
+- **Never hand-edit `probed`.** Tools write it. `df-preflight --apply` records there what it
+  probed and you confirmed, and those values override the declarations above them.
+
+## Skills symlink; hooks copy
+
+This asymmetry is the cause of most "my change did nothing":
+
+| | installed as | so an edit takes effect |
+|---|---|---|
+| skills | a **symlink** into `vendor/` | in the next session — editing the vendored source is live |
+| hooks | a **copy**, with `__HOME__` substituted per machine | only after `install.sh` **and** a new session |
+
+Hooks are read once, at session start. A hook installed mid-session does nothing at all, and
+a SessionStart hook that errors or prints non-JSON is discarded **silently** — so a broken
+hook and a hook with nothing to say look identical from inside a session. Run it directly
+before blaming it.
+
+Because installed skills are symlinks into `vendor/`, `grep -r` over this directory will not
+find their contents the way you expect. Follow the link, or grep the vendored path.
+
+## How work is judged here
+
+The method's one bet: **an agent's confident summary is indistinguishable from a correct
+one.** So summaries are not accepted — only raw, re-checkable evidence is.
+
+- **Cite `file:line`, exit codes, literal counts, verbatim output.** "Tests pass" is a
+  claim; the test runner's output with its counts is evidence.
+- **A blocked, skipped or denied check is not a pass.** A scan that could not run, a command
+  that failed, a permission that was refused → the result is **UNVERIFIED**, never "fine".
+- **`unknown` is not `drift`.** Could-not-probe is an absence of evidence, not a fact about
+  the world. Recording one as the other is how a network blip becomes a permanent lie in a
+  lockfile.
+- **Never trust a gate you have not seen fail.** Plant a violation, watch it fire, then
+  believe its clean run. A check that has never been run against an input it must catch is
+  not known to work.
+- **Delegate only what you can verify without redoing.** A task may go to a sub-agent iff the
+  promise can be stated crisply *and* it returns evidence you can check independently. If you
+  cannot name the evidence, do it inline.
+- **Never hide a signal that should cost attention.** Compress noise; never compress a caveat.
+
+## Stop before anything irreversible
+
+Reversible work in a dev context is yours to decide. These are not, and the correct move is
+to stop and ask rather than to proceed carefully:
+
+- pushing to a shared or protected branch, force-pushing, or rewriting history
+- publishing, releasing, tagging, changing a repo's visibility, or any outbound message
+- deleting data, or any action against a production system
+- anything that spends money
+
+**Published history cannot be recalled.** A hosting provider keeps serving unreferenced
+objects by SHA, so a force-push does not remove what was published. Treat the moment of
+publication as the point of no return, because it is.
+
+## Where things go
+
+| what | where |
+|---|---|
+| task progress, blockers | `NOTES.md` (rewrite it; it is state, not a log) |
+| a deliberate checkpoint someone else could resume from | `handoffs/<date>-<topic>.md` |
+| a mission's frame and hard stops | `.df/missions/<id>/` |
+| durable knowledge that outlives this objective | the store your instance is bound to |
+| what is installed on this machine | `loom.lock.json` — never a note about it |
+
+## Fill these in
+
+Everything above is generic and true of any instance. What is specific to **yours** goes
+below, and if it stays empty the agent will infer it — usually wrongly.
+
+### What this instance is for
+
+_One or two sentences. The objective, not the tooling._
+
+### Repos in scope
+
+_Authoritative list is `repos.manifest.json`. Note here only the things a manifest cannot
+carry: which identity can push where, which branch is canonical when it is not the default,
+which checkout is a decoy._
+
+### Hard rules for this instance
+
+_Anything that must never happen here, and the failure that taught you so. A rule without
+its reason is the first one dropped under pressure._
