@@ -102,7 +102,13 @@ if command -v gh >/dev/null 2>&1; then
   while read -r acct; do
     [ -n "$acct" ] || continue
     printf '%s\n' "$HAVE" | grep -qx "$acct" || MISSID="$MISSID$acct"$'\n'
-  done < <(jq -r '[.upstreams[].account] | unique[]' "$LOCK")
+    # `// empty`, not a bare lookup: an upstream that needs NO identity (a public repo
+    # cloned over https) has no `account`, and jq -r renders that absent value as the
+    # four-character string "null" -- which is non-empty, so it was checked as though it
+    # were an account named "null" and reported as missing. That is false drift on the
+    # most ordinary case there is, and it fired on the FIRST run of a fresh public
+    # install, where a spurious DRIFT is exactly what teaches someone to ignore the gate.
+  done < <(jq -r '[.upstreams[].account // empty] | unique[]' "$LOCK")
   if [ -n "$MISSID" ]; then
     drift "L4 not logged in as:"
     printf '%s' "$MISSID" | while read -r a; do [ -n "$a" ] && note "$a (gh auth login)"; done

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+
+  "$comment": "ONE MACHINE'S INSTANCE OF THE DARK FACTORY METHOD. This file is the authority for what is installed here; install.sh is only the mechanism. Content that exists on disk but is not declared here is installed by nothing and reported by nothing -- so as far as every tool is concerned it does not exist. Placeholders are written __LIKE_THIS__ and are filled in by bootstrap.sh; anything still bearing one after a bootstrap is a value nobody supplied, and the installer says so rather than defaulting it.",
+
+  "instance": {
+    "name": "__INSTANCE_NAME__",
+    "agentName": "",
+    "$agentNameNote": "The agent names itself, on first run, in conversation. It ships EMPTY and is never defaulted -- a name handed down by a template is the template's name, not the agent's. Whatever it becomes, it never turns into a release name, an image tag, or a ticket fixVersion: releases are named after the APPLICATION plus a version.",
+    "createdAt": "__CREATED_AT__"
+  },
+
+  "machine": {
+    "$comment": "Which machine this lockfile describes. Read by df-preflight when more than one candidate lockfile exists, so that one checkout can carry several machines' instances without any of them reporting another machine's facts as local drift. Deliberately NOT keyed on hostname: an ephemeral container's hostname changes on every restart, so it would look stable and silently stop matching.",
+    "platform": "__PLATFORM__",
+    "home": "__HOME_DIR__"
+  },
+
+  "codeRoot": "__CODE_ROOT__",
+  "$codeRootNote": "The directory your checkouts live under. df-preflight walks it to find a repo by its ORIGIN REMOTE, never by directory name -- names drift when a checkout is cloned or renamed, remotes do not.",
+
+  "codeLayout": {
+    "$comment": "lane -> directory, relative to codeRoot (or absolute if it starts with /). A lane is one grouping of repos you work in; name them however your work is actually divided. `null` means 'this lane legitimately does not exist on this machine' and is reported as ok, not as a gap. Leave the object EMPTY until you have lanes: df-preflight then reports `unknown` for the lane probe, which is the honest answer -- an empty layout is a gap in the record, not a fact about the machine."
+  },
+
+  "vendorDir": "vendor",
+  "$vendorDirNote": "A GENERATED CACHE, never edited by hand and never the source of truth. lock-verify checks it in BOTH directions: every locked upstream is present, AND every present directory is locked. Without the second check an undeclared directory survives a rebuild by accident, and content with no recorded provenance is exactly what this tier exists to eliminate.",
+
+  "upstreams": {
+    "dark-factory": {
+      "repo": "OneDro1d/dark-factory",
+      "url": "https://github.com/OneDro1d/dark-factory.git",
+      "commit": "__T1_COMMIT__",
+      "$refSource": "__T1_REF_SOURCE__",
+      "$refNote": "A COMMIT SHA, resolved at bootstrap time. Never a branch name: a branch moves under you between installs, and it moves most while it is under review -- which is exactly when people onboard onto it. Take an update by bumping this one line: git ls-remote https://github.com/OneDro1d/dark-factory.git refs/heads/main"
+    }
+  },
+  "$upstreamsNote": "Add your own upstreams inside `upstreams`, one object each, same shape as dark-factory. `account` is optional and only matters when a machine holds several git identities: it names the one that can resolve THAT repo, and the wrong identity fails as a 404 that reads like 'repo does not exist' rather than as 'wrong account'. This note sits OUTSIDE the map on purpose -- the installer iterates every key of `upstreams` and would try to clone a comment.",
+
+  "install": {
+    "$comment": "Skills SYMLINK (an edit in vendor/ is live in the next session). Hooks COPY, because __HOME__ inside them is substituted per machine -- so a hook edit needs a reinstall AND a new session. Each name must have a matching entry in its *Sources map; a name with no source is reported, never guessed at.",
+    "skills": [],
+    "skillSources": {
+      "$comment": "skill-name -> path under vendorDir, e.g. \"vinculum-loop\": \"dark-factory/skills/vinculum-loop\"."
+    },
+    "hooks": [],
+    "hookSources": {
+      "$comment": "hook-file-name -> path under vendorDir, e.g. \"context-budget.py\": \"dark-factory/hooks/context-budget.py\"."
+    }
+  },
+
+  "scope": {
+    "$comment": "What this machine is deliberately NOT set up for. An entry in `excluded` makes df-preflight REFUSE that profile before it probes anything, instead of reporting its absence as drift to be repaired -- because on a machine that has excluded it, 'still missing' is the correct state and will stay correct forever.",
+    "estates": [],
+    "excluded": {}
+  },
+
+  "probed": {
+    "$comment": "WRITTEN BY TOOLS, not by you. df-preflight --apply records here what it probed and you confirmed, and those values override the declarations above. Left empty on a fresh instance: nothing has been probed yet, and an empty record is honest where a guessed one is not."
+  },
+
+  "notRestorable": {
+    "$comment": "Printed by install.sh on every run, so that a green install is never mistaken for a complete setup. The point of naming these is that the gap stays visible: a restore that quietly omits a step is worse than one that fails.",
+    "git hosting login": "credentials cannot live in a lockfile, and should not want to",
+    "MCP hub connection": "your hub URL and bearer token are yours; see AUTHENTICATION.md and the boot-kit MCP template",
+    "settings.json hook registration": "the installer places hook files, it does not edit your settings"
+  }
+}
