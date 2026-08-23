@@ -181,9 +181,10 @@ session. (Substitute your harness's hooks directory if it is not `~/.claude`.)
   which of it is automatable
 - [`../../README.md`](../../README.md) — the method itself: the stages, the control loop, the
   delegability test
-- `AUTHENTICATION.md` — what a hub is and how to point at your own. **Not written yet**; it is
-  a separate piece of this build, and it is referenced without a link on purpose so that the
-  link checker keeps telling the truth about what exists.
+- [`AUTHENTICATION.md`](AUTHENTICATION.md) — what a hub is, how to point at your own, and
+  what each kind of connector needs. Read it **before** step 5 if you are configuring a hub:
+  the token is an environment reference, and a headless run whose parent never exported it
+  boots cleanly and then fails every hub write in silence.
 
 The one thing to carry out of this page: **a green run is not evidence.** Every check here
 tells you what it could not see, and the parts that stay manual stay visible on purpose.

@@ -35,6 +35,7 @@ installer can do for you.
 | file | what it is |
 |---|---|
 | [`START-HERE.md`](START-HERE.md) | **read this first.** The ten-minute path, step by step, with the checkpoint at each one. |
+| [`AUTHENTICATION.md`](AUTHENTICATION.md) | the hub, the token, and the connectors. Read it before pointing the kit at a hub. |
 | `bootstrap.sh` | run once. Generates your instance directory beside this checkout. |
 | `install.sh` | run whenever. Copied into the instance; that copy is the one you use. |
 | `loom.lock.json.template` | the instance lockfile — the authority for what is installed. |
@@ -58,16 +59,23 @@ onboard onto it. `bootstrap.sh` resolves a SHA; an unresolved ref is written lou
 
 ```sh
 bash tests/test-bootstrap-docs.sh          # bootstrap hands the instance its instructions
+bash tests/test-authentication-doc.sh      # no credential-shaped literal reaches the hub page
 bash boot-kit/tests/test-boot-kit.sh       # the four boot-kit pieces
 ```
 
-Both print a literal pass/fail count: a suite that says "ok" without saying how many
-assertions ran cannot be told from one that ran none. Both work entirely in a temp
+All three print a literal pass/fail count: a suite that says "ok" without saying how many
+assertions ran cannot be told from one that ran none. All three work entirely in a temp
 directory and touch no real harness config.
 
-**Neither runs in CI.** `gate.yml` is scoped to the publish boundary — the landmark gate and
+**None of them runs in CI.** `gate.yml` is scoped to the publish boundary — the landmark gate and
 its self-tests — and these are correctness tests, not boundary tests. Run them before you
 change `bootstrap.sh`, `install.sh` or anything under `boot-kit/`.
+
+`test-authentication-doc.sh` is the near-exception and worth knowing about: its three
+credential rules need no private config, so unlike the landmark gate it tells the truth
+wherever it runs. It exists because the check that would catch a real hub URL pasted into
+`AUTHENTICATION.md` is exactly the check CI cannot perform — `gate.yml` runs the publish
+gate with the *example* landmark config, whose patterns match fictional hosts.
 
 ## What the installer will not do for you
 
@@ -83,8 +91,12 @@ as a complete setup. `boot-kit/README.md` says which is which and why.
 
 ## Still to come
 
-`AUTHENTICATION.md` and a worked example mission are separate pieces of the same build.
-`AUTHENTICATION.md` is referenced from `install.sh` and from `START-HERE.md` without a
-markdown link, deliberately: the link checker walks every relative link in this repo, and a
-link to a file that does not exist yet would either fail the gate or have to be suppressed —
-and a suppression is how a genuinely broken link later goes unnoticed.
+A worked example mission is the one piece of this build still outstanding.
+
+[`AUTHENTICATION.md`](AUTHENTICATION.md) is written, and the references to it in
+`START-HERE.md` and this file are now real markdown links. They were deliberately plain
+text until the file existed: the link checker walks every relative link in this repo, so a
+link to a file not yet written would either fail the gate or need a suppression — and a
+suppression is how a genuinely broken link later goes unnoticed. The reference inside
+`install.sh` stays plain because it is printed to a terminal, where a markdown link is
+noise.
