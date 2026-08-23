@@ -15,6 +15,7 @@
 #   df-mission say <id> "text"
 #   df-mission stop <id>
 #   df-mission list
+#   df-mission profile          what `start` defaults to, and where that came from
 set -uo pipefail
 
 # readlink -f, not dirname alone: this script is normally reached through a symlink on
@@ -40,6 +41,69 @@ find_notepad() {
 }
 NOTEPAD="${NOTEPAD:-$(find_notepad)}"
 ROOT="$NOTEPAD/.df/missions"
+
+# The DEFAULT PROFILE is the instance's to declare, never the engine's to know. This engine
+# is meant to be PINNED: a kit names a commit of it and installs these scripts unmodified.
+# A default baked in here defeats that in the quietest way available — the consumer edits
+# the one line it disagrees with, and from that moment owns a fork it will keep calling a
+# pin. Measured the day the engine was imported into its own repo: all six scripts had
+# already diverged from the copy they came from, and this default was one of the diffs.
+#
+# Precedence, strongest first — and it deliberately matches df-preflight's, because two
+# tools in one repo that disagree about which lockfile describes this machine will each be
+# right somewhere and report the other machine's facts as this one's drift:
+#   1. $DF_PROFILE          — the explicit override, for an instance the walk cannot reach
+#   2. $LOOM_LOCK           — the same lockfile pointer df-preflight honours first
+#   3. $NOTEPAD/loom.lock.json
+#   4. "default"            — the built-in, which names no estate
+#
+# An unreadable or malformed lockfile yields the built-in and exit 0, never an error: an
+# unknown is not a fact, and taking the operator's brake offline over a stray comma is a
+# worse failure than starting with a generic profile. An EMPTY declared value is treated as
+# undeclared for the same reason — "" would render /-dark-factory into every prompt and
+# preflight call, a silent mis-target rather than a visible one.
+lock_default_profile() {   # lock_default_profile <lockfile> -> value on stdout, or nothing
+  local f="$1"
+  [ -f "$f" ] || return 1
+  local v=""
+  if command -v jq >/dev/null 2>&1; then
+    v="$(jq -er '.defaultProfile // empty' "$f" 2>/dev/null || true)"
+  else
+    # No jq: a deliberately narrow scan. It matches only a well-formed string value on one
+    # line, so a malformed file yields nothing and falls through, which is the wanted
+    # behaviour rather than a lucky one.
+    v="$(sed -n 's/.*"defaultProfile"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -1)"
+  fi
+  [ -n "$v" ] || return 1
+  printf '%s' "$v"
+}
+
+# Sets PROFILE_VALUE and PROFILE_SOURCE. Never fails.
+resolve_default_profile() {
+  if [ -n "${DF_PROFILE:-}" ]; then
+    PROFILE_VALUE="$DF_PROFILE"; PROFILE_SOURCE="\$DF_PROFILE"; return 0
+  fi
+  local f v
+  for f in "${LOOM_LOCK:-}" "$NOTEPAD/loom.lock.json"; do
+    [ -n "$f" ] || continue
+    if v="$(lock_default_profile "$f")"; then
+      PROFILE_VALUE="$v"; PROFILE_SOURCE="$f"; return 0
+    fi
+  done
+  PROFILE_VALUE=default; PROFILE_SOURCE="built-in"
+}
+
+# The value alone, for callers that want it inline.
+resolve_default_profile_value() { resolve_default_profile; printf '%s' "$PROFILE_VALUE"; }
+
+# Read-only: prints what `start` would default to, and where that came from. It launches
+# nothing, so the resolution can be proven — by an operator or by a test — without a
+# supervisor, a budget or a model.
+cmd_profile() {
+  resolve_default_profile
+  printf '%s\n' "$PROFILE_VALUE"
+  printf 'source: %s\n' "$PROFILE_SOURCE"
+}
 
 die() { echo "df-mission: $*" >&2; exit 1; }
 mdir() { echo "$ROOT/$1"; }
@@ -114,7 +178,7 @@ cmd_stop() {
 
 cmd_start() {
   local id="${1:?mission id}"; shift
-  local profile=default interval=0 max_iter=25 max_usd="" channel=""
+  local profile="$(resolve_default_profile_value)" interval=0 max_iter=25 max_usd="" channel=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --profile)  profile="$2"; shift 2 ;;
@@ -158,5 +222,6 @@ case "${1:-}" in
   say)    shift; cmd_say "$@" ;;
   stop)   shift; cmd_stop "$@" ;;
   list)   cmd_list ;;
+  profile) cmd_profile ;;
   *) sed -n '3,20p' "$0"; exit 64 ;;
 esac
