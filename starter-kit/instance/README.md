@@ -14,6 +14,8 @@ the org layer's only extra move is to pin a shared Tier 2 between you and Tier 1
 
 ## Ten-minute path
 
+The whole path with its checkpoints is [`START-HERE.md`](START-HERE.md). In brief:
+
 ```sh
 git clone https://github.com/OneDro1d/dark-factory.git
 cd dark-factory
@@ -32,11 +34,14 @@ installer can do for you.
 
 | file | what it is |
 |---|---|
+| [`START-HERE.md`](START-HERE.md) | **read this first.** The ten-minute path, step by step, with the checkpoint at each one. |
 | `bootstrap.sh` | run once. Generates your instance directory beside this checkout. |
 | `install.sh` | run whenever. Copied into the instance; that copy is the one you use. |
 | `loom.lock.json.template` | the instance lockfile — the authority for what is installed. |
 | `dot-gitignore.template` | becomes the instance's `.gitignore`. |
-| `boot-kit/` | what the harness loads at session start: the SessionStart hook, the settings and hub templates, the output style. See `boot-kit/README.md`. |
+| `CLAUDE.md.template` | becomes the instance's `CLAUDE.md` — the project instructions the harness auto-loads. Rendered by `bootstrap.sh`; its links resolve at the instance, not here, which is why it is not a `.md` and is not walked by the link checker. |
+| `boot-kit/` | what the harness loads at session start: the SessionStart hook, the settings and hub templates, the output style. See [`boot-kit/README.md`](boot-kit/README.md). |
+| `tests/` | this directory's own suite. See below. |
 
 ## Two rules the shape depends on
 
@@ -48,6 +53,21 @@ directory is declared — is the one that usually goes missing.
 **Pin commits, never branches.** A branch moves under you between two installs of the
 "same" instance, and it moves most while it is under review, which is exactly when people
 onboard onto it. `bootstrap.sh` resolves a SHA; an unresolved ref is written loudly.
+
+## Tests
+
+```sh
+bash tests/test-bootstrap-docs.sh          # bootstrap hands the instance its instructions
+bash boot-kit/tests/test-boot-kit.sh       # the four boot-kit pieces
+```
+
+Both print a literal pass/fail count: a suite that says "ok" without saying how many
+assertions ran cannot be told from one that ran none. Both work entirely in a temp
+directory and touch no real harness config.
+
+**Neither runs in CI.** `gate.yml` is scoped to the publish boundary — the landmark gate and
+its self-tests — and these are correctness tests, not boundary tests. Run them before you
+change `bootstrap.sh`, `install.sh` or anything under `boot-kit/`.
 
 ## What the installer will not do for you
 
@@ -63,5 +83,8 @@ as a complete setup. `boot-kit/README.md` says which is which and why.
 
 ## Still to come
 
-`START-HERE.md`, `CLAUDE.md`, `AUTHENTICATION.md` and a worked example mission are separate
-pieces of the same build. This directory is the skeleton they hang on.
+`AUTHENTICATION.md` and a worked example mission are separate pieces of the same build.
+`AUTHENTICATION.md` is referenced from `install.sh` and from `START-HERE.md` without a
+markdown link, deliberately: the link checker walks every relative link in this repo, and a
+link to a file that does not exist yet would either fail the gate or have to be suppressed —
+and a suppression is how a genuinely broken link later goes unnoticed.

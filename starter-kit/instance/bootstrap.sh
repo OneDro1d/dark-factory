@@ -97,6 +97,18 @@ chmod +x "$TARGET/install.sh"
 
 cp "$SELF/dot-gitignore.template" "$TARGET/.gitignore" 2>/dev/null || true
 
+# The instance's project instructions. Rendered, not copied: it carries the instance name,
+# and it ships as a .template so that a file named CLAUDE.md never sits in the kit itself --
+# a harness would auto-load it into sessions ABOUT the kit and inject instructions meant for
+# an instance. sed is safe here where it was not for the lockfile: the only substitution is
+# a name already validated to hold no shell or regex metacharacters.
+if [ -f "$SELF/CLAUDE.md.template" ]; then
+  sed "s|__INSTANCE_NAME__|$NAME|g" "$SELF/CLAUDE.md.template" > "$TARGET/CLAUDE.md" \
+    || say "WARN  could not render CLAUDE.md"
+else
+  say "WARN  CLAUDE.md.template missing — the instance ships with no project instructions"
+fi
+
 # The boot-kit templates you MERGE by hand: harness settings, the hub config, the output
 # style. Copied, not installed -- each of them lands in a file shared with everything else
 # you run, and a script that rewrites those silently deletes another tool's configuration.
@@ -127,6 +139,7 @@ say "  lockfile   loom.lock.json      (pinned: ${T1_COMMIT:0:8})"
 say "  pin source $T1_SOURCE"
 say ""
 say "NEXT"
+say "  read starter-kit/instance/START-HERE.md — the ten-minute path, with the checkpoints"
 say "  cd $TARGET"
 say "  \$EDITOR loom.lock.json     # set codeRoot / codeLayout, then list the skills and hooks you want"
 say "  bash install.sh"
