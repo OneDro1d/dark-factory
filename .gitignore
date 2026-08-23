@@ -10,6 +10,12 @@ node_modules/
 # vendor/ caches are generated per instance and never belong in the canonical repo
 vendor/
 
+# df-app-walkthrough installs its toolchain and writes its media beside the skill.
+# All of it is regenerable and none of it belongs in the canonical repo.
+skills/df-app-walkthrough/.voices/
+skills/df-app-walkthrough/package-lock.json
+.walkthrough/
+
 # The real landmark list. It IS the list of nouns that must not be published, so
 # committing it would publish exactly what the gate exists to protect. Only the
 # example file with placeholder patterns is tracked.
