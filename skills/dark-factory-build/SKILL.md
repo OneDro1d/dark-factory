@@ -1,6 +1,6 @@
 ---
 name: dark-factory-build
-description: End-to-end Dark Factory build orchestrator: intent to shipped software via the df-* stages, test-first, adversarially verified, autonomous in dev/non-prod, documented as stage docs plus tickets. Triggers on "build this the dark factory way", "run a dark factory build", "take this spec to done end-to-end".
+description: 'End-to-end Dark Factory build orchestrator: intent to shipped software via the df-* stages, test-first, adversarially verified, autonomous in dev/non-prod, documented as stage docs plus tickets. Triggers on "build this the dark factory way", "run a dark factory build", "take this spec to done end-to-end".'
 ---
 
 # Dark Factory Build — end-to-end orchestrator

@@ -1,6 +1,6 @@
 ---
 name: vinculum-loop
-description: Run the autonomous, evidence-gated, Promise-Theory-verified control loop (the Vinculum governed loop + Dark Factory process) on any dev project. Use when the user wants to hand over a mission objective with full autonomy under a 2-trigger notify contract (done | blocked-on-all-fronts), evidence-gated decisions (Promise Theory, not self-reports), and an A/B/C decision policy. This is the single entry point that explains how the loop works and points to the dark-factory-build orchestrator. Trigger phrases: "run the loop", "vinculum loop", "give me a mission and full autonomy", "autonomous build".
+description: 'Run the autonomous, evidence-gated, Promise-Theory-verified control loop (the Vinculum governed loop + Dark Factory process) on any dev project. Use when the user wants to hand over a mission objective with full autonomy under a 2-trigger notify contract (done | blocked-on-all-fronts), evidence-gated decisions (Promise Theory, not self-reports), and an A/B/C decision policy. This is the single entry point that explains how the loop works and points to the dark-factory-build orchestrator. Trigger phrases: "run the loop", "vinculum loop", "give me a mission and full autonomy", "autonomous build".'
 ---
 
 # Vinculum Loop — the autonomous, governed dev loop for any project

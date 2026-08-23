@@ -1,6 +1,6 @@
 ---
 name: scope-retire
-description: Archive a completed or abandoned agent-notepad while keeping its journal history intact. Marks the notepad retired (SCOPE.md status + a final journal milestone), stops it from auto-loading and syncing on future sessions, and preserves the append-only sessions/ history and handoffs for later recall — it never deletes the journal, the memory index entries, or the remote. Reversible: a later scope-init re-activates it. Use when an objective is done, a scope is being wound down, or a notepad should be shelved. Triggers on "scope-retire", "retire this scope", "archive the notepad", "close out this objective", "wind down the scope".
+description: 'Archive a completed or abandoned agent-notepad while keeping its journal history intact. Marks the notepad retired (SCOPE.md status + a final journal milestone), stops it from auto-loading and syncing on future sessions, and preserves the append-only sessions/ history and handoffs for later recall — it never deletes the journal, the memory index entries, or the remote. Reversible: a later scope-init re-activates it. Use when an objective is done, a scope is being wound down, or a notepad should be shelved. Triggers on "scope-retire", "retire this scope", "archive the notepad", "close out this objective", "wind down the scope".'
 ---
 
 # scope-retire — archive a notepad, keep the history

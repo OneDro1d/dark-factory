@@ -1,6 +1,6 @@
 ---
 name: df-tdd-developer
-description: Dark Factory Developer stage: build a service test-first (RED-GREEN-REFACTOR) where the test list is the PO validation rules and scenarios, not invented. Go and Python examples. Triggers on "TDD", "write tests", "test-first", "implement the service", "RED GREEN REFACTOR".
+description: 'Dark Factory Developer stage: build a service test-first (RED-GREEN-REFACTOR) where the test list is the PO validation rules and scenarios, not invented. Go and Python examples. Triggers on "TDD", "write tests", "test-first", "implement the service", "RED GREEN REFACTOR".'
 ---
 
 # Dark Factory — TDD Developer

@@ -1,6 +1,6 @@
 ---
 name: df-qa
-description: Run the Dark Factory QA stage — execute the validation rules as tests, capture unforgeable evidence per scenario (by correlationId), run the holdout, and return a Works? verdict. QA is the OBSERVER: a self-report is not an assessment. Use when testing a deployed system, mapping PO scenarios to test cases, verifying with observability evidence, or judging a release. Triggers on "QA", "test plan", "verdict", "evidence", "holdout", "E2E test", "does it work", "verify the release".
+description: 'Run the Dark Factory QA stage — execute the validation rules as tests, capture unforgeable evidence per scenario (by correlationId), run the holdout, and return a Works? verdict. QA is the OBSERVER: a self-report is not an assessment. Use when testing a deployed system, mapping PO scenarios to test cases, verifying with observability evidence, or judging a release. Triggers on "QA", "test plan", "verdict", "evidence", "holdout", "E2E test", "does it work", "verify the release".'
 ---
 
 # Dark Factory — QA (validation rules executed)

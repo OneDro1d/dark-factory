@@ -1,6 +1,6 @@
 ---
 name: df-product-owner
-description: Dark Factory Product Owner stage: define Vision, Requirements as data contracts plus validation rules, and Test Scenarios — the semantics every later stage derives from. Triggers on "product owner", "requirements", "acceptance criteria", "test scenarios", "data contract", "what should we build".
+description: 'Dark Factory Product Owner stage: define Vision, Requirements as data contracts plus validation rules, and Test Scenarios — the semantics every later stage derives from. Triggers on "product owner", "requirements", "acceptance criteria", "test scenarios", "data contract", "what should we build".'
 ---
 
 # Dark Factory — Product Owner (define the semantics)

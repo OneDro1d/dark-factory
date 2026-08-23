@@ -1,6 +1,6 @@
 ---
 name: df-solution-architect
-description: Dark Factory Solution Architect stage: turn PO semantics into a Data Model, Data Flow (transform graph, pure|effect, idempotency, compensation) and Service Map, assigning each validation rule an enforcement locus. Triggers on "architecture", "data model", "data flow", "service map", "schema", "Avro contract", "solution architect".
+description: 'Dark Factory Solution Architect stage: turn PO semantics into a Data Model, Data Flow (transform graph, pure|effect, idempotency, compensation) and Service Map, assigning each validation rule an enforcement locus. Triggers on "architecture", "data model", "data flow", "service map", "schema", "Avro contract", "solution architect".'
 ---
 
 # Dark Factory — Solution Architect (formalize the transform graph)

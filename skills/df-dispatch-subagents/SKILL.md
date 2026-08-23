@@ -1,6 +1,6 @@
 ---
 name: df-dispatch-subagents
-description: Dispatch sub-agents under Promise Theory: state the promise plus the exact unforgeable evidence required, withhold holdout cases, verify the evidence not the self-report. USE EVERY TIME you spawn a sub-agent. Triggers on "dispatch sub-agent", "spawn agent", "parallel agents", "delegate", "fan out".
+description: 'Dispatch sub-agents under Promise Theory: state the promise plus the exact unforgeable evidence required, withhold holdout cases, verify the evidence not the self-report. USE EVERY TIME you spawn a sub-agent. Triggers on "dispatch sub-agent", "spawn agent", "parallel agents", "delegate", "fan out".'
 ---
 
 # Dark Factory — Dispatching Sub-Agents (Promise Theory)

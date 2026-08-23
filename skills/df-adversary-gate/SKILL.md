@@ -1,6 +1,6 @@
 ---
 name: df-adversary-gate
-description: Run the adversary gate: assess whether presented evidence proves a promise was kept, without redoing the work and never trusting a self-report. Use before trusting any "done/passing" claim, PR, or handoff. Triggers on "adversary review", "verify", "gate", "assess evidence", "is this really done".
+description: 'Run the adversary gate: assess whether presented evidence proves a promise was kept, without redoing the work and never trusting a self-report. Use before trusting any "done/passing" claim, PR, or handoff. Triggers on "adversary review", "verify", "gate", "assess evidence", "is this really done".'
 ---
 
 # Dark Factory — Adversary / Verification Gate
