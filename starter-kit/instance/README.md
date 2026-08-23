@@ -23,12 +23,17 @@ bash starter-kit/instance/bootstrap.sh my-instance
 cd ../my-instance
 $EDITOR loom.lock.json      # codeRoot, codeLayout, then the skills and hooks you want
 bash install.sh
+df-mission start EXAMPLE-FIRST-RUN --profile default --max-iter 5 --max-usd 5
 ```
 
 `bootstrap.sh` writes the directory and resolves the Tier-1 pin from the remote **now**.
 `install.sh` is the re-runnable half: fetch at the pins, copy the engine in, install
 skills and hooks, put `df-mission` on PATH, then verify. It ends by naming what no
 installer can do for you.
+
+The last line runs the worked example — the first thing that tests the pieces *together*
+rather than one at a time. It writes only inside its own mission directory and needs no
+hub. See [the worked example](#the-worked-example) below.
 
 ## What is here
 
@@ -42,6 +47,7 @@ installer can do for you.
 | `dot-gitignore.template` | becomes the instance's `.gitignore`. |
 | `CLAUDE.md.template` | becomes the instance's `CLAUDE.md` — the project instructions the harness auto-loads. Rendered by `bootstrap.sh`; its links resolve at the instance, not here, which is why it is not a `.md` and is not walked by the link checker. |
 | `boot-kit/` | what the harness loads at session start: the SessionStart hook, the settings and hub templates, the output style. See [`boot-kit/README.md`](boot-kit/README.md). |
+| `example-mission/` | the worked example, copied by `bootstrap.sh` into the instance as `.df/missions/EXAMPLE-FIRST-RUN/`. A real mission, safe on any machine because its own `HARD-STOPS.md` confines every write to its own directory. Its `.md` files carry no relative links: they are written to be read from the instance, not from here. |
 | `tests/` | this directory's own suite. See below. |
 
 ## Two rules the shape depends on
@@ -60,16 +66,22 @@ onboard onto it. `bootstrap.sh` resolves a SHA; an unresolved ref is written lou
 ```sh
 bash tests/test-bootstrap-docs.sh          # bootstrap hands the instance its instructions
 bash tests/test-authentication-doc.sh      # no credential-shaped literal reaches the hub page
+bash tests/test-example-mission.sh         # the worked example lands where df-mission looks
 bash boot-kit/tests/test-boot-kit.sh       # the four boot-kit pieces
 ```
 
-All three print a literal pass/fail count: a suite that says "ok" without saying how many
-assertions ran cannot be told from one that ran none. All three work entirely in a temp
+All four print a literal pass/fail count: a suite that says "ok" without saying how many
+assertions ran cannot be told from one that ran none. All four work entirely in a temp
 directory and touch no real harness config.
 
 **None of them runs in CI.** `gate.yml` is scoped to the publish boundary — the landmark gate and
 its self-tests — and these are correctness tests, not boundary tests. Run them before you
 change `bootstrap.sh`, `install.sh` or anything under `boot-kit/`.
+
+`test-example-mission.sh` asserts the example's preconditions **with `df-mission` itself**
+rather than by re-implementing its path resolution — a re-implementation passes while the
+real thing fails. It never launches an iteration: that would cost money and would make the
+suite least trustworthy exactly where it matters most.
 
 `test-authentication-doc.sh` is the near-exception and worth knowing about: its three
 credential rules need no private config, so unlike the landmark gate it tells the truth
@@ -89,9 +101,22 @@ happen and now does not.
 `install.sh` prints all three on **every** run, not once, so a green install is never read
 as a complete setup. `boot-kit/README.md` says which is which and why.
 
-## Still to come
+## The worked example
 
-A worked example mission is the one piece of this build still outstanding.
+`example-mission/` is a real mission the kit ships enabled. `bootstrap.sh` copies it into
+the instance as `.df/missions/EXAMPLE-FIRST-RUN/`, and step 7 of
+[`START-HERE.md`](START-HERE.md) runs it.
+
+Shipping a runnable mission in a kit strangers install is only defensible because of where
+its boundary is drawn: the confinement lives in the example's own `HARD-STOPS.md`, which is
+the file the prompt renderer inlines **verbatim** into every iteration. Stated anywhere
+else it would be one indirection away from the thing that reads it.
+
+It is also the kit's own answer to a fair objection — that a generic loop which needs a
+hosted tracker is not generic. The example's tracker is a file. The discipline the method
+depends on is the claim convention, not the product that stores it.
+
+## A note on what came before
 
 [`AUTHENTICATION.md`](AUTHENTICATION.md) is written, and the references to it in
 `START-HERE.md` and this file are now real markdown links. They were deliberately plain

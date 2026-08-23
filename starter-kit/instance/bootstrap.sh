@@ -121,6 +121,19 @@ done
 
 mkdir -p "$TARGET/.df/missions" "$TARGET/handoffs" "$TARGET/sessions"
 
+# The worked example mission. Copied rather than generated, and copied with a FIXED id, so
+# that every instance's first run is the same run and a report from one is comparable with
+# a report from another. It is confined to its own directory by its own HARD-STOPS.md --
+# that confinement is the whole reason it is safe to ship enabled.
+EXAMPLE_ID="EXAMPLE-FIRST-RUN"
+if [ -d "$SELF/example-mission" ]; then
+  mkdir -p "$TARGET/.df/missions/$EXAMPLE_ID"
+  cp "$SELF/example-mission"/*.md "$TARGET/.df/missions/$EXAMPLE_ID/" \
+    || say "WARN  could not copy the example mission"
+else
+  say "WARN  example-mission/ missing -- the instance ships with no worked example"
+fi
+
 # A notepad is identified by holding this file: df-preflight walks up from $PWD looking
 # for it to decide WHICH REPOS a mission is about. Ship it empty rather than omit it --
 # absent, every mission silently scopes to nothing and every repo probe is skipped.
@@ -143,6 +156,9 @@ say "  read starter-kit/instance/START-HERE.md — the ten-minute path, with the
 say "  cd $TARGET"
 say "  \$EDITOR loom.lock.json     # set codeRoot / codeLayout, then list the skills and hooks you want"
 say "  bash install.sh"
+say "  df-mission start $EXAMPLE_ID --profile default --max-iter 5 --max-usd 5"
+say "                             # the worked example: proves the loop, writes only inside"
+say "                             # .df/missions/$EXAMPLE_ID/, needs no hub and no network"
 say ""
 say "NOT DONE BY THIS SCRIPT, and not doable by any script:"
 say "  - git hosting login"

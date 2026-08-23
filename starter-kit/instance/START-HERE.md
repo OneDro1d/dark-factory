@@ -161,6 +161,34 @@ A SessionStart hook that errors, or prints anything that is not JSON, is discard
 **silently** — so a broken hook and a hook with nothing to say look identical from inside a
 session. (Substitute your harness's hooks directory if it is not `~/.claude`.)
 
+## 7 · Run the worked example, before you frame anything of your own
+
+`bootstrap.sh` installed one mission already: `EXAMPLE-FIRST-RUN`, under
+`.df/missions/`. It is a real mission — a supervisor runs it, fresh iterations claim its
+tickets — and it is safe to run on any machine because its own `HARD-STOPS.md` confines
+every write to its own directory. It makes no network call and touches no hub.
+
+```sh
+df-mission start EXAMPLE-FIRST-RUN --profile default --max-iter 5 --max-usd 5
+df-mission status EXAMPLE-FIRST-RUN
+```
+
+It leaves behind `RESULT.md` in that directory: what the runtime here was *shown* to do,
+what it could not be shown to do, and which of the two a reader on another machine should
+expect to differ. Read the second section first — a run with no blind spots has not looked
+hard enough at itself.
+
+Run this before framing a mission of your own. Everything above this line is a check that
+the pieces are present; this is the first thing that tells you they work together. It also
+shows you the three overrides a mission makes against the generic iteration prompt — its
+own tracker (`TICKETS.md`, a file, because the discipline is the claim convention and not
+any particular product), its own handoff directory, and no estate binding at all.
+
+**If it stops at `BLOCKED`, that is not a failed install.** The example is written so a
+blocked run with a well-named reason is a successful run: read `state` and the ticket it
+was on. The failure mode to worry about is the opposite one — a `DONE` whose `RESULT.md`
+has an empty "what could not be shown" section.
+
 ---
 
 ## When it goes wrong
@@ -173,6 +201,8 @@ session. (Substitute your harness's hooks directory if it is not `~/.claude`.)
 | a skill you declared is "unknown" | the session started before the install, or `skillSources` has no entry for that name |
 | the hook does nothing | old session, or it is not valid JSON — run it directly, above |
 | every hub call fails, nothing else is wrong | the token variable is not exported in **this** process |
+| `df-mission: no such mission` for the example | you are not inside the instance directory, or an inherited `$NOTEPAD` is pointing at a different notepad — it wins over the upward walk |
+| the example finishes `DONE` with nothing it could not verify | read it again; that section being empty is the defect the ticket warns about |
 
 ## What to read next
 
