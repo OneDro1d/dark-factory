@@ -33,6 +33,26 @@ removed. If this repo ever needs rebuilding, rebuild it the same way: empty, the
 
 `publish-gate.sh --history` scans every blob ever committed for exactly this failure.
 
+It scans them by **reachability**, because "every blob in this clone" and "everything the
+world can fetch" are not the same set — and treating them as one made the gate unfixable:
+
+| class | what it means | verdict |
+|---|---|---|
+| **published** | reachable from a remote-tracking ref — already fetchable by anyone | FAIL, and a force-push will not undo it; rebuild |
+| **pending** | reachable from `HEAD`, from no remote — the next push would publish it | FAIL, but still fixable: drop the commit first |
+| **local-only** | in this clone and nowhere else (a stale branch whose remote ref was pruned) | WARN — a fact about this working copy, not a publish blocker |
+
+A stale local branch used to read as a published leak, and the gate then prescribed
+"rebuild from a fresh git init" for a condition that did not exist upstream. A gate that
+fires on something the maintainer cannot fix is one people learn to override, which is how
+the next real finding gets waved through. Where a clone has **no** remote-tracking refs the
+distinction cannot be drawn, so P8 falls back to scanning everything and failing hard: an
+unknown must never be recorded as an ok.
+
+`boot-kit/scripts/tests/test-p8-reachability.sh` plants a committed canary in each class,
+in a scratch repo, and asserts the verdict — the classes are only safe to separate if each
+is proven to fire on its own input.
+
 ### 2. Landmarks, not vocabulary
 
 Name-based exclusion is not a boundary. The 2026-07-12 leak came through a *generically
@@ -59,7 +79,8 @@ false assurance. Tune it toward precision, and keep the recall in the *history* 
 
 ## Before every push, and before any re-publication
 
-1. `bash boot-kit/scripts/publish-gate.sh --history` → must print **CLEAN**
+1. `bash boot-kit/scripts/publish-gate.sh --history` → must print **CLEAN** (a `WARN`
+   about local-only history does not block; prune the branch or leave it)
 2. Re-read `README.md` and `docs/` by eye — a gate catches strings, not implications
 3. Confirm no skill references a path outside this repo
 4. Confirm the org repos exist and carry everything that was split out, so nothing is lost

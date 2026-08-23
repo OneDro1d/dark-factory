@@ -35,6 +35,14 @@ jobs:
         # cannot catch anything, the patterns have gone inert.
         run: bash boot-kit/scripts/gate-selftest.sh
 
+      - name: P8 reachability — prove published / pending / local-only are distinguished
+        # P8 splits one fatal class into three, and separating classes is only safe if
+        # each is proven to fire on its own input. This plants a committed canary per
+        # class in a scratch repo under the runner's TMPDIR — never in this checkout,
+        # because a test that proved P8 by committing a landmark here would create the
+        # exact condition P8 exists to detect. Works with the placeholder config.
+        run: bash boot-kit/scripts/tests/test-p8-reachability.sh
+
       - name: Publish gate — PLACEHOLDER patterns only, not a real-landmark pass
         # The step NAME carries the caveat because that is what a reader skimming a green
         # check actually sees. The job summary below says the same thing at length, and

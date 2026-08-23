@@ -25,6 +25,9 @@ FAIL=0
 hit()  { printf 'FAIL  %s\n' "$1"; FAIL=1; }
 pass() { printf 'PASS  %s\n' "$1"; }
 note() { printf '        %s\n' "$1"; }
+# A finding that is NOT a publish blocker. Kept distinct from hit() on purpose: folding
+# a fact-about-this-clone into the fatal class is what made the gate unfixable-by-design.
+warn() { printf 'WARN  %s\n' "$1"; }
 
 # Two files exist to ENUMERATE these patterns, so they match by construction:
 #   - this script (the patterns themselves)
@@ -245,14 +248,89 @@ if [ "$SCAN_HISTORY" -eq 1 ]; then
   # the failure the paragraph above describes. Fixing one half of a rule and not the
   # other is how a gate ends up contradicting itself.
   HIST_PAT="${P1_PATTERN}|${P2_PATTERN}|${P3_PATTERN}|${P4_PATTERN}|${P5_PATTERN}"
-  HIST="$(cd "$REPO" && git grep -n -I -E -i "$HIST_PAT" \
-    $(git rev-list --all 2>/dev/null) -- . "${EXCL[@]}" "${P5_EXCL[@]}" 2>/dev/null | head -10)"
-  if [ -n "$HIST" ]; then
-    hit "P8 landmark found in git HISTORY — a working-tree deletion will NOT fix this"
-    printf '%s\n' "$HIST" | while IFS= read -r l; do note "${l:0:160}"; done
-    note "the repo must be rebuilt from a fresh git init, not patched"
+
+  # ── REACHABILITY CLASSES ────────────────────────────────────────────────────
+  # `git rev-list --all` is every commit in THIS CLONE, which is not the same set as
+  # "what the world can fetch". A clone accumulates local-only branches — reviewed,
+  # merged upstream, their remote refs long since pruned — and those commits stay in
+  # the object store forever. Scanning them and calling the result "history" made the
+  # gate report a leak that does not exist upstream, and then prescribe an IRREVERSIBLE
+  # remedy ("rebuild from a fresh git init") for it. A gate that fires on something the
+  # maintainer cannot fix is one people learn to override, which is how the next real
+  # finding gets waved through. So classify by REACHABILITY, and let the class pick both
+  # the severity and the remedy:
+  #
+  #   PUBLISHED  reachable from a remote-tracking ref — already fetchable by anyone.
+  #              FATAL, and genuinely unfixable by patching.
+  #   PENDING    reachable from HEAD but not from any remote — about to be published by
+  #              the next push. FATAL, but fixable here: drop the commit before pushing.
+  #   LOCAL-ONLY reachable from neither — present in this clone and nowhere else.
+  #              A fact about this working copy, NOT a publish blocker. Warn, name it.
+  #
+  # The distinction requires remote-tracking refs to exist. Where there are none we
+  # cannot tell published from unpublished, and an UNKNOWN must never be recorded as an
+  # OK — so that case falls back to the old behaviour: scan everything, fail hard.
+  REMOTE_REFS="$(cd "$REPO" && git for-each-ref --format='%(refname)' refs/remotes/ 2>/dev/null)"
+
+  hist_grep() {  # hist_grep <newline-separated commit list>; prints up to 10 hits
+    local revs="$1"
+    [ -n "$revs" ] || return 0
+    # $revs is deliberately UNQUOTED — git grep takes the revisions as separate argv
+    # entries, and they must sit BEFORE the `--` that starts the pathspec. Piping them
+    # through xargs appends them AFTER the pathspec instead, where git reads them as
+    # paths that do not exist: the grep then matches nothing and the class reports clean.
+    # That is exactly the false-assurance shape this gate exists to refuse, and it was
+    # caught here only because the local-only class was KNOWN to have a hit.
+    # shellcheck disable=SC2086
+    (cd "$REPO" && git grep -n -I -E -i "$HIST_PAT" $revs \
+      -- . "${EXCL[@]}" "${P5_EXCL[@]}" 2>/dev/null | head -10) || true
+  }
+
+  if [ -z "$REMOTE_REFS" ]; then
+    HIST="$(hist_grep "$(cd "$REPO" && git rev-list --all 2>/dev/null)")"
+    if [ -n "$HIST" ]; then
+      hit "P8 landmark found in git HISTORY — a working-tree deletion will NOT fix this"
+      printf '%s\n' "$HIST" | while IFS= read -r l; do note "${l:0:160}"; done
+      note "the repo must be rebuilt from a fresh git init, not patched"
+    else
+      pass "P8 history clean across $BLOBS objects"
+    fi
+    note "no remote-tracking refs in this clone — published vs local-only is UNKNOWN,"
+    note "so every commit was treated as published. Fetch a remote for a finer verdict."
   else
-    pass "P8 history clean across $BLOBS objects"
+    PUB_REVS="$(cd "$REPO" && git rev-list $REMOTE_REFS 2>/dev/null)"
+    PEND_REVS="$(cd "$REPO" && git rev-list HEAD --not $REMOTE_REFS 2>/dev/null)"
+    LOCAL_REVS="$(cd "$REPO" && git rev-list --all --not $REMOTE_REFS HEAD 2>/dev/null)"
+
+    PUB_HIT="$(hist_grep "$PUB_REVS")"
+    PEND_HIT="$(hist_grep "$PEND_REVS")"
+    LOCAL_HIT="$(hist_grep "$LOCAL_REVS")"
+
+    if [ -n "$PUB_HIT" ]; then
+      hit "P8 landmark is ALREADY PUBLISHED — reachable from a remote branch"
+      printf '%s\n' "$PUB_HIT" | while IFS= read -r l; do note "${l:0:160}"; done
+      note "a working-tree deletion will NOT fix this, and neither will a force-push:"
+      note "the objects stay fetchable by SHA. The repo must be rebuilt from a fresh git init."
+    fi
+    if [ -n "$PEND_HIT" ]; then
+      hit "P8 landmark is on HEAD and NOT yet published — the next push would publish it"
+      printf '%s\n' "$PEND_HIT" | while IFS= read -r l; do note "${l:0:160}"; done
+      note "still fixable: drop or rewrite the offending commit BEFORE pushing."
+    fi
+    if [ -n "$LOCAL_HIT" ]; then
+      warn "P8 landmark in LOCAL-ONLY history — this clone only, not published, not on HEAD"
+      printf '%s\n' "$LOCAL_HIT" | while IFS= read -r l; do note "${l:0:160}"; done
+      note "not a publish blocker. Prune the stale local branches to clear it:"
+      printf '%s\n' "$LOCAL_HIT" | cut -d: -f1 | sort -u | while IFS= read -r c; do
+        b="$(cd "$REPO" && git branch --contains "$c" --format='%(refname:short)' 2>/dev/null | tr '\n' ' ')"
+        [ -n "$b" ] && note "  ${c:0:12} is on: $b"
+      done
+    fi
+    if [ -z "$PUB_HIT" ] && [ -z "$PEND_HIT" ] && [ -z "$LOCAL_HIT" ]; then
+      pass "P8 history clean across $BLOBS objects"
+    elif [ -z "$PUB_HIT" ] && [ -z "$PEND_HIT" ]; then
+      pass "P8 nothing published and nothing pending — publishable history is clean"
+    fi
   fi
 else
   echo ""
