@@ -74,7 +74,7 @@ To **QA**: the built services (deployed by the Infra lane), their tests, and the
 
 - Custom AMQP code instead of the shared messaging library (anti-pattern).
 - `Log.Error` (panics in this stack's shared messaging library) instead of `Log.Warn`.
-- Build Spec that restates the architecture instead of priming a working agent (the Fulcrum CLAUDE.md is the bar: quick commands, real file paths, smoke test).
+- Build Spec that restates the architecture instead of priming a working agent (a working service's own CLAUDE.md is the bar: quick commands, real file paths, smoke test).
 - Inventing a message contract the SA did not define — should be an SA loop-back, not a local decision.
 - `latest` tags / 2 replicas (anti-patterns).
 

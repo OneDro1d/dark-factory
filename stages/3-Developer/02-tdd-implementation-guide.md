@@ -44,9 +44,9 @@ If a case isn't covered by an upstream rule or scenario, that's a gap — loop b
 Stay in your lane — no duplication:
 
 - **Developer (this stage):** **unit** tests (single transform) + **integration** tests (a couple of services across the AMQP bus). All green before handoff.
-- **QA (stage 5):** **E2E** (JMeter against the deployed cluster) + **holdout** (Argus). Do not rebuild E2E here.
+- **QA (stage 5):** **E2E** (JMeter against the deployed cluster) + **the held-back acceptance suite**. Do not rebuild E2E here.
 
-> **Blind synthesis (anti-Goodhart).** Your own tests drive your build loop — but the **acceptance evidence (the PO Test Scenarios and the QA/Argus holdout) is withheld from you.** You are verified against cases you never saw, which is what proves you implemented the *spec* and not just *your own test*. Don't ask for the holdout: building to it is the lookup-degeneration failure (`if known_input: return known_answer`). See [`reference/operating-agents-promise-theory.md`](../../reference/operating-agents-promise-theory.md).
+> **Blind synthesis (anti-Goodhart).** Your own tests drive your build loop — but the **acceptance evidence (the PO Test Scenarios and the QA held-back acceptance suite) is withheld from you.** You are verified against cases you never saw, which is what proves you implemented the *spec* and not just *your own test*. Don't ask for the holdout: building to it is the lookup-degeneration failure (`if known_input: return known_answer`). See [`reference/operating-agents-promise-theory.md`](../../reference/operating-agents-promise-theory.md).
 
 ## Exit gate
 

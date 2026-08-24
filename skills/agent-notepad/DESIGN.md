@@ -159,4 +159,4 @@ So `op_mirror` renders the journal into a **Markdown digest** under a staging di
 11. U6 adapter passes in **stub mode** (no live palace) and in **live mode** (real `mempalace`).
 
 ## 17. Out of scope (v1)
-Cross-group auto-sharing; automatic `/clear`; a GUI; governing manual human code-commits (agent commits only); signed/provenance journals (v2 via df-substrate); conflict-free multi-machine concurrent editing of the *same* scope (v1 = append-only + last-writer-wins on `NOTES.md`).
+Cross-group auto-sharing; automatic `/clear`; a GUI; governing manual human code-commits (agent commits only); signed/provenance journals (v2, via a signed-provenance substrate); conflict-free multi-machine concurrent editing of the *same* scope (v1 = append-only + last-writer-wins on `NOTES.md`).

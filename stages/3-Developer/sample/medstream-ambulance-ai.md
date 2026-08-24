@@ -20,7 +20,7 @@ status: sample
 | Health | `:8080/healthz` | default |
 | Metrics | `:9090/metrics` | + labels `vitals_type`, `classification`, `confidence` |
 | Language | Go + the shared messaging library | Go (multi-arch) |
-| DLQ | single-requeue → DLQ | bindings `vitals.dlq`, replay via `fulcrum-ctl` |
+| DLQ | single-requeue → DLQ | bindings `vitals.dlq`, replay via `medstream-ctl` |
 
 ## Message contracts
 

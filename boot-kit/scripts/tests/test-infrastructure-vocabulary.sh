@@ -2,8 +2,8 @@
 # test-infrastructure-vocabulary.sh — the stage guides must describe shared infrastructure
 # by CAPABILITY, and every lesson they teach about it must survive that description.
 #
-# WHY THIS EXISTS. Eighteen lines across `docs/`, `reference/`, `skills/` and four `stages/`
-# named two proper nouns that are, from a reader's side, unreachable: they are libraries in
+# WHY THIS EXISTS. Thirty-five lines across `docs/`, `reference/`, `skills/` and five `stages/`
+# named six proper nouns that are, from a reader's side, unreachable: they are repositories in
 # a private organisation with no public documentation of any kind. A stranger following
 # "fork the skeleton, <library> init comes free" cannot fork anything, and — worse — cannot
 # tell whether they are missing a product or reading a house word for "the message bus".
@@ -36,12 +36,23 @@
 #
 #   R1  the reference layer still states the boot sequence by capability — it is the source
 #       every stage guide below is made to agree with, so if it drifts the rest are moot.
-#   R2  each of the 18 sites: the line that carries the lesson also carries the vocabulary.
+#   R2  each of the 35 sites: the line that carries the lesson also carries the vocabulary.
 #   R3  the discovered site count matches the inventory, so a site cannot be quietly dropped
 #       from the table and the suite still report all-green on a smaller world.
 #
 # Both directions are exercised. A check never seen to fail on the input it exists to catch
 # is not known to work; canaries are written to $TMPDIR and never to the tracked tree.
+#
+# TWO THINGS THE SECOND WAVE OF SITES ADDED, BOTH ABOUT THE *MUST* COLUMN.
+#   * A MUST must require something the DEFECTIVE text does not have. Seven of the sites
+#     below already said `holdout` before they were fixed -- the product name sat in a
+#     parenthetical beside it -- so a MUST of `holdout` would have been GREEN on the very
+#     line it exists to change. Each of those asks for `held-back acceptance suite`, a
+#     phrase the unfixed line does not contain. Check this by running the assertion
+#     BEFORE the edit and watching it fail; a lone GREEN in a RED batch is the signal.
+#   * An ANCHOR that matches several lines lets a neighbour answer for the subject. Every
+#     anchor below was checked to match exactly one line in its file at the time it was
+#     written; two candidates were tightened after matching two. Re-check when you add a row.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -80,6 +91,23 @@ SITES=(
 "stages/6-Operations/sample/medstream-ambulance-ai.md|on-call note: inspect actions are logged|inspect action|immutable"
 "reference/operating-agents-promise-theory.md|T1 evidence: the audit ledger|T1 — mechanical|immutable audit ledger [^(]"
 "reference/operating-agents-promise-theory.md|attribution: where a Merkle root is anchored|Merkle root|immutable"
+"skills/df-qa/SKILL.md|holdout ownership: what QA holds and never hands over|Never hand the holdout|held-back acceptance suite"
+"skills/df-qa/SKILL.md|pyramid order: the last rung|Run the pyramid in order|held-back acceptance suite"
+"skills/df-tdd-developer/SKILL.md|blind synthesis: the evidence withheld from the builder|lookup-degeneration|held-back acceptance suite"
+"stages/3-Developer/02-tdd-implementation-guide.md|pyramid: QA owns E2E and the holdout|Do not rebuild E2E here|held-back acceptance suite"
+"stages/3-Developer/02-tdd-implementation-guide.md|blind synthesis: do not ask for the holdout|Blind synthesis|held-back acceptance suite"
+"stages/5-QA/00-qa-guide.md|test assets: the holdout is a named deliverable|regression suite|[Hh]eld-back acceptance suite"
+"stages/5-QA/00-qa-guide.md|pyramid order: the last rung|Run the pyramid in order|held-back acceptance suite"
+"stages/4-Infrastructure-Architect/00-infrastructure-architect-guide.md|dashboards as code: where they live|provision sinks|checked in beside the service"
+"stages/3-Developer/00-developer-guide.md|priming bar: a working service CLAUDE.md|restates the architecture|own CLAUDE\\.md is the bar"
+"stages/3-Developer/sample/medstream-ambulance-ai.md|anatomy row: DLQ replay is a command someone runs|single-requeue|medstream-ctl"
+"stages/4-Infrastructure-Architect/sample/medstream-ambulance-ai.md|knob: stop the intake API|settings\\.yaml intake\\.rate|medstream-ctl pause intake"
+"stages/4-Infrastructure-Architect/sample/medstream-ambulance-ai.md|knob: stop the summary builder|HPA max cap|medstream-ctl pause"
+"stages/6-Operations/sample/medstream-ambulance-ai.md|knob: stop the classifier consumer|pause classifier consumer|medstream-ctl pause vitals-classifier"
+"stages/6-Operations/sample/medstream-ambulance-ai.md|knob: redirect the handoff|route handoff to backup|medstream-ctl route handoff"
+"stages/6-Operations/sample/medstream-ambulance-ai.md|knob: inspect by replaying the DLQ|replay summary DLQ|medstream-ctl dlq-replay"
+"stages/6-Operations/templates/operations-runbook-template.md|knob: slow is a config change, not a CLI action|rate-limit ingestion|control CLI"
+"skills/agent-notepad/DESIGN.md|non-goals: signed provenance is a v2 layer|provenance journals|signed-provenance substrate"
 )
 
 echo "=== shared infrastructure is described by capability, and the lessons survive ==="
@@ -154,7 +182,7 @@ echo
 
 # ---- R3 -- the inventory is the size it claims to be ------------------------------------
 echo "R3  the site table still covers the whole inventory"
-EXPECTED=18
+EXPECTED=35
 if [ "$CHECKED" -eq "$EXPECTED" ]; then
   ok "checked $CHECKED site(s), the full inventory"
 else
