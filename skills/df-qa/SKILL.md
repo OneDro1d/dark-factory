@@ -19,14 +19,14 @@ Testing a deployed system, mapping PO Test Scenarios to test cases, capturing pe
 - Capture evidence **by correlationId** — a scenario "passed" only if its run is traceable in observability (metric/log/trace). **Observation, not assertion.**
 
 ## The holdout = the anti-Goodhart firewall
-QA holds the **acceptance/holdout cases (Argus)** that the Developer agent never saw. Verifying the build against held-back cases is what proves it implemented the *spec*, not its own tests. Never hand the holdout to the builder.
+QA holds the **held-back acceptance suite** — the cases the Developer agent never saw. Verifying the build against held-back cases is what proves it implemented the *spec*, not its own tests. Never hand the holdout to the builder.
 
 ## Pre-test gate (the eyes must work first)
 Before running scenarios, confirm the **Observability Surface** renders live data and the `$correlationId` query resolves (see `df-observability`). Broken eyes block the verdict — evidence capture is impossible without them.
 
 ## Instructions
 1. **Map, don't invent** — every test case starts from a PO scenario (one scenario → ≥1 case).
-2. Run the pyramid in order: unit (from Dev) → integration → E2E (JMeter) → holdout (Argus). Stop at the first quality-gate breach.
+2. Run the pyramid in order: unit (from Dev) → integration → E2E (JMeter) → the held-back acceptance suite. Stop at the first quality-gate breach.
 3. Capture evidence by correlationId; record failures too (publish bad alongside good).
 4. **Verdict:** Pass / Conditional / Fail. A "pass" with no observability evidence is not earned. Route a Fail to the owning lane (code → Developer, deploy → Infra, requirement → PO).
 

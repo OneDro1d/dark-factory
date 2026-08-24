@@ -50,8 +50,8 @@ Prometheus + Loki + OTel → CloudWatch (prod) / in-cluster (dev); Alertmanager 
 
 | Service | Slow | Stop | Redirect | Inspect |
 |---|---|---|---|---|
-| intake-api | `settings.yaml intake.rate` | `fulcrum-ctl pause intake` | standby region route | log stream |
-| summary-builder | HPA max cap | `fulcrum-ctl pause` | n/a | `dlq-replay summary-builder` |
+| intake-api | `settings.yaml intake.rate` | `medstream-ctl pause intake` | standby region route | log stream |
+| summary-builder | HPA max cap | `medstream-ctl pause` | n/a | `dlq-replay summary-builder` |
 | handoff-notifier | n/a | drain | backup hospital endpoint (**human**) | replay handoff DLQ |
 
 ## Runtime trust enforcement
@@ -74,7 +74,7 @@ Prometheus + Loki + OTel → CloudWatch (prod) / in-cluster (dev); Alertmanager 
 
 ## Compliance posture
 
-HIPAA: EBS + S3 encryption (AES-256/KMS), 6y audit retention, PHI segregation per service, Armarium audit for any ML recommendation that influences clinical handoff.
+HIPAA: EBS + S3 encryption (AES-256/KMS), 6y audit retention, PHI segregation per service, immutable-ledger audit for any ML recommendation that influences clinical handoff.
 
 ## Notes
 

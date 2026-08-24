@@ -63,7 +63,7 @@
   "notRestorable": {
     "$comment": "Printed by install.sh on every run, so that a green install is never mistaken for a complete setup. The point of naming these is that the gap stays visible: a restore that quietly omits a step is worse than one that fails.",
     "git hosting login": "credentials cannot live in a lockfile, and should not want to",
-    "MCP hub connection": "your hub URL and bearer token are yours; see AUTHENTICATION.md and the boot-kit MCP template",
+    "MCP hub connection": "the boot-kit MCP template ships a working default hub, so what is left un-restorable is the TOKEN -- it is yours, it lives in the environment as ${DF_HUB_TOKEN}, and no installer can mint it for you. Sign up and create one at https://synapse.onedroid.ai, or point the template at your own hub instead; see AUTHENTICATION.md and boot-kit/mcp.template.json",
     "settings.json hook registration": "the installer places hook files, it does not edit your settings -- merge boot-kit/settings.template.json by hand, because a script that rewrites a shared settings file silently deletes another tool's configuration",
     "output style selection": "copy boot-kit/output-style.md into your harness output-styles directory and select it"
   }

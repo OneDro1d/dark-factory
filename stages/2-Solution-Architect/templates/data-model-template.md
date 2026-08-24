@@ -49,7 +49,7 @@ Per message type, the key that makes reprocessing safe (at-least-once + DLQ, Pat
 
 ## PHI/PII handling
 
-Per entity: at-rest encryption, in-transit, audit sink (Armarium for safety-grade), segregation boundary, retention + deletion path.
+Per entity: at-rest encryption, in-transit, audit sink (an immutable ledger for safety-grade), segregation boundary, retention + deletion path.
 
 ## Open items
 

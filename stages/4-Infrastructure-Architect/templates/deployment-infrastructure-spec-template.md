@@ -44,7 +44,7 @@ Record only what differs from the platform default (the standard Dev → Test �
 |---|---|---|
 | Metrics | Prometheus | `:9090/metrics` |
 | Logs | Loki + Promtail | stdout |
-| Traces | OTel collector → <backend> | TwistyGo `tracing.InjectAMQP` |
+| Traces | OTel collector → <backend> | the shared messaging library's AMQP trace injector |
 | Alerts | Alertmanager → <pager> | Prometheus rules |
 | Dashboards | Grafana | `deployments/grafana/` |
 
@@ -92,7 +92,7 @@ For each SA-designed knob, the concrete mechanism Operations will use.
 
 ## Compliance posture
 
-HIPAA: encryption at rest + in transit, audit retention 6y, PHI segregation, Armarium/N-DIM audit for safety-grade decisions. FedRAMP-readiness: <yes/no + target>.
+HIPAA: encryption at rest + in transit, audit retention 6y, PHI segregation, immutable-ledger audit for safety-grade decisions. FedRAMP-readiness: <yes/no + target>.
 
 ## What is NOT here
 

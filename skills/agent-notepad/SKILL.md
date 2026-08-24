@@ -34,7 +34,7 @@ not left to agent discretion.
 | **Working memory (Notes)** | the *task* | the notepad repo (`NOTES.md` + journal) — this skill |
 | **Per-repo context store** | *code* (`file:line`) | `<code-repo>/.claude/context/` — df-context-store |
 | **Episodic index** | journals, by prefix | the memory index (MemPalace ref impl) — mirror + digest |
-| **Curated** | distilled cross-project | the long-term store (Engram ref) — existing |
+| **Curated** | distilled cross-project | the long-term store ([Engram](../../starter-kit/instance/AUTHENTICATION.md#engram) ref) — existing |
 
 ## Notepad layout
 

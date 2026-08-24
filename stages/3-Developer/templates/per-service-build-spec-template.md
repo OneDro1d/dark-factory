@@ -22,7 +22,7 @@ Defaults from [`reference/service-anatomy.md`](../../../reference/service-anatom
 |---|---|---|
 | Health | `:8080/healthz` | <default / override + ADR> |
 | Metrics | `:9090/metrics` | <default + service-specific labels> |
-| Language | Go + TwistyGo | Go / .NET+sidecar / … |
+| Language | Go + the shared messaging library | Go / .NET+sidecar / … |
 | DLQ | single-requeue → DLQ | <bindings> |
 
 ## Message contracts
