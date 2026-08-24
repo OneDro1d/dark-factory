@@ -23,6 +23,7 @@ one. Nothing here should name a client, a cluster, or a ticket.
 |---|---|
 | `skills/` | The method as executable [Agent Skills](https://docs.claude.com/en/docs/claude-code/skills) — one per stage, plus the control loop |
 | `hooks/` | Enforcement that does not depend on the model choosing to comply |
+| `starter-kit/` | The on-ramp: [`START-HERE.md`](starter-kit/instance/START-HERE.md) takes one machine from clone to a working session; `new-org-layer.sh` does a whole organisation |
 | `boot-kit/` | Machine setup: templates and the publish gate |
 | `reference/` | The thinking — data-transform model, Promise Theory, the orchestrator |
 | `docs/` | Setup guides, plus [`DARK-FACTORY-PRIMING.md`](docs/DARK-FACTORY-PRIMING.md) — the whole method inlined into one page for an agent with **no skill system** |
@@ -95,9 +96,18 @@ belongs in a hook.
 
 ## Using it
 
-Skills are portable across Claude Code, the Agent SDK, and any harness that reads
-`SKILL.md` frontmatter. Install by copying (or symlinking) `skills/` into your agent's skill
-directory, and wire `hooks/` into your settings.
+**Start at [`starter-kit/instance/START-HERE.md`](starter-kit/instance/START-HERE.md)** —
+clone to a first working session in about ten minutes. Steps 1–3 need no account and no
+network beyond the clone, which matters: a broken install and a misconfigured hub produce
+similar-looking silence, and doing the offline steps first separates them.
+
+Setting up a whole organisation rather than one machine? `starter-kit/new-org-layer.sh` is
+the sibling; `starter-kit/instance/README.md` explains which question each answers.
+
+If you only want the skills, they are portable across Claude Code, the Agent SDK, and any
+harness that reads `SKILL.md` frontmatter: copy or symlink `skills/` into your agent's skill
+directory and wire `hooks/` into your settings. You will not get the lockfile, the pin, or
+the preflight that way — which is fine if you know that is the trade.
 
 See [`docs/`](docs/) for setup, and [`boot-kit/`](boot-kit/) for machine templates.
 
