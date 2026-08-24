@@ -96,6 +96,33 @@ Note that plain BSD/GNU `grep -E` *does* honour `\b`, so a pattern tested with
 `grep` will look correct and then do nothing under `git grep`. **Test with the
 engine that will run it.**
 
+**The self-test cannot find a pattern that is missing.** Its canaries come out of the
+same file as the patterns, so a landmark class nobody ever wrote a pattern for has no
+canary either — it is invisible, and the self-test goes green with the class entirely
+unprotected. That is the third failure mode, and it is live:
+
+```bash
+cp boot-kit/scripts/gate-requirements.example.conf boot-kit/scripts/gate-requirements.conf
+# fill in a real specimen of each class, then:
+bash boot-kit/scripts/gate-reqtest.sh
+```
+
+`gate-reqtest.sh` starts from the **policy** side — the list of landmark classes your
+publishing rules name — and plants a real specimen of each. `gate-requirements.conf` is
+gitignored for the same reason `landmarks.conf` is: it holds the exact nouns that must
+not ship. Run it after any change to `landmarks.conf`, alongside the self-test, not
+instead of it. The two answer different questions:
+
+| | asks | can it discover an absent pattern? |
+|---|---|---|
+| `gate-selftest.sh` | is every pattern the config **has** live? | no — its inputs come from the config |
+| `gate-reqtest.sh` | is every class the policy **names** caught? | yes — its inputs come from outside it |
+
+Three verdicts, and `INDETERMINATE` is not a synonym for either other: with no local
+requirements file the tool exits **2** and reports that nothing was measured, rather
+than reporting a green. "Could not check" rendered as "nothing found" is the shape of
+every gate bug in this repo's history.
+
 ## Skills
 
 A skill is a directory under `skills/` containing `SKILL.md` with YAML

@@ -20,3 +20,8 @@ skills/df-app-walkthrough/package-lock.json
 # committing it would publish exactly what the gate exists to protect. Only the
 # example file with placeholder patterns is tracked.
 boot-kit/scripts/landmarks.conf
+
+# The requirement list for gate-reqtest.sh. It holds a REAL specimen of every landmark
+# class, so committing it would publish exactly what the gate exists to keep out — the
+# same reason landmarks.conf is ignored. Only the placeholder example is tracked.
+boot-kit/scripts/gate-requirements.conf
