@@ -41,17 +41,17 @@ trap 'rm -rf "$WORK"' EXIT
 # the test made publish-gate FAIL on the repo. A committed test that carries
 # landmark-SHAPED strings is itself a landmark; "pattern X matches canary X" is all the
 # harness needs, and nonsense satisfies it while matching nobody's real pattern, ever.
-# EVERY config written here declares P5_EXCLUDE and P6_EXCLUDE, and it is not decoration.
-# publish-gate.sh expands "${P5_EXCL[@]}" under `set -u`, and bash 3.2 — the /bin/bash on
-# every macOS — treats an EMPTY array expansion as an unbound variable. The subshell dies,
-# $P5_OUT comes back empty, and the gate prints `PASS  P5 no secret-shaped strings` over a
-# planted AWS key. So a config with no exemptions to declare silently disarms P5 and P6 on
-# macOS. Found while writing this suite; the real config and landmarks.example.conf both
-# happen to declare non-empty lists, which is why nobody has hit it — but the audience for
-# this kit is a stranger writing their own config, with nothing to exempt. Raised as
-# ticket 12881209203; it is publish-gate's bug, not this script's, and it is stepped
-# around here rather than hidden. The pathspec below excludes a file that does not exist,
-# so it changes nothing except the array's emptiness. Delete it when the fix lands.
+# NO config written here declares P5_EXCLUDE or P6_EXCLUDE, and that absence is load-bearing.
+# It used to be the opposite: every fixture declared a dummy pathspec excluding a file that
+# does not exist, purely to keep the array non-empty, because publish-gate.sh expanded
+# "${P5_EXCL[@]}" under `set -u` and bash 3.2 — the /bin/bash on every macOS — treats an
+# EMPTY array expansion as unbound. The subshell died, $P5_OUT came back empty, and the gate
+# printed `PASS  P5 no secret-shaped strings` over a planted AWS key. Fixed in cf66dd5
+# (ticket 12881209203) at all three call sites via ${P5_EXCL[@]+"${P5_EXCL[@]}"}.
+# The workaround is gone rather than merely unnecessary: with no exemptions declared, these
+# fixtures now traverse the empty-array path on every run, so a regression of that fix
+# breaks THIS suite too and not only test-publish-gate-empty-exclusions.sh. Do not
+# "tidy up" by re-adding an exemption to a fixture that has nothing to exempt.
 mk_repo() {
   local d="$WORK/repo"
   rm -rf "$d"; mkdir -p "$d/boot-kit/scripts/tests" "$d/docs"
@@ -87,8 +87,6 @@ P4_CANARY='zzqxecho in a sentence'
 P5_CANARY='zzqxfoxtrot in a sentence'
 P6_CANARY='zzqxgolf in a sentence'
 P7_CANARY='zzqxhotel in a sentence'
-P5_EXCLUDE=':!docs/.no-such-exemption.md'
-P6_EXCLUDE=':!docs/.no-such-exemption.md'
 CONF
 }
 
@@ -121,8 +119,6 @@ P4_CANARY='zzqxecho in a sentence'
 P5_CANARY='zzqxfoxtrot in a sentence'
 P6_CANARY='zzqxgolf in a sentence'
 P7_CANARY='zzqxhotel in a sentence'
-P5_EXCLUDE=':!docs/.no-such-exemption.md'
-P6_EXCLUDE=':!docs/.no-such-exemption.md'
 CONF
 OUT="$(run_st "$D")"
 printf '%s' "$OUT" | grep -qE '^ *P4 .*4 branches' && printf '%s' "$OUT" | grep -qE '^ *P4 .*1 pinned' \
@@ -160,8 +156,6 @@ P4_CANARY='zzqxecho in a sentence'
 P5_CANARY='zzqxfoxtrot in a sentence'
 P6_CANARY='zzqxgolf in a sentence'
 P7_CANARY='zzqxhotel in a sentence'
-P5_EXCLUDE=':!docs/.no-such-exemption.md'
-P6_EXCLUDE=':!docs/.no-such-exemption.md'
 CONF
 OUT="$(run_st "$D")"
 printf '%s' "$OUT" | grep -qE '^ *P1 .*2 branches' \
@@ -190,8 +184,6 @@ P4_CANARY='zzqxecho in a sentence'
 P5_CANARY='zzqxfoxtrot in a sentence'
 P6_CANARY='zzqxgolf in a sentence'
 P7_CANARY='zzqxhotel in a sentence'
-P5_EXCLUDE=':!docs/.no-such-exemption.md'
-P6_EXCLUDE=':!docs/.no-such-exemption.md'
 CONF
 OUT="$(run_st "$D")"
 printf '%s' "$OUT" | grep -qE '^ *P1 +1 branches' \
@@ -217,8 +209,6 @@ P4_CANARY='zzqxecho in a sentence'
 P5_CANARY='zzqxfoxtrot in a sentence'
 P6_CANARY='zzqxgolf in a sentence'
 P7_CANARY='zzqxhotel in a sentence'
-P5_EXCLUDE=':!docs/.no-such-exemption.md'
-P6_EXCLUDE=':!docs/.no-such-exemption.md'
 CONF
 OUT="$(run_st "$D")"
 printf '%s' "$OUT" | grep -q 'zzqxsecretbranch' \
@@ -265,8 +255,6 @@ P4_CANARY='zzqxecho in a sentence'
 P5_CANARY='zzqxfoxtrot in a sentence'
 P6_CANARY='zzqxgolf in a sentence'
 P7_CANARY='zzqxhotel in a sentence'
-P5_EXCLUDE=':!docs/.no-such-exemption.md'
-P6_EXCLUDE=':!docs/.no-such-exemption.md'
 CONF
 OUT="$(run_st "$D")"; RC=$?
 [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -qE 'ERROR +P1' \
