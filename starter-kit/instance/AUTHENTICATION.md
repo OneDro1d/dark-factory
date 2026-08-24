@@ -217,6 +217,15 @@ the credential.** So the order is: turn tools off under **Admin**, or put the wo
 with a narrower role — *then* mint. Doing it the other way round means hunting for a checkbox
 that does not exist and concluding the product is missing a feature.
 
+**Inheritance runs both ways, and only one of them is loud.** Narrowing your role takes
+access away immediately and tells you so the next time a call returns `403`. Widening it says
+nothing at all: every token you have **already minted** gains the new access at the same
+moment, including the narrow one you minted for a single job months ago and forgot. Nothing
+is re-issued, so there is no event to notice and no list to review.
+
+So the thing to audit is the role, not the tokens — and the moment to prune tokens you no
+longer use is when your role *widens*, which is exactly when nothing is failing to prompt you.
+
 Details, and the reasoning for that design: <https://docs.onedroid.ai/tokens>.
 
 If your hub is not the default one, ask your provider which of the two models it uses. They
@@ -316,6 +325,7 @@ the **name** of the variable and whether it is set, never its value.
 | `tools/list` returns entries but a specific tool call 401s | upstream scope, not hub auth |
 | it all worked yesterday | a token expired, or someone rotated it. Neither announces itself |
 | `ERR_SCOPE_UNAVAILABLE` | a token sent to a slugged URL. Use the slug-free token path — [§2](#the-path-is-the-part-people-get-wrong) |
+| an agent can suddenly do more than it could last week | nobody re-issued anything — your role in that hub widened, and every token you had already minted widened with it |
 | a token that used to work now returns `403` | your membership or role in that hub is gone. This is by design and there is nothing to re-issue |
 | connected fine, but zero tools appear | the hub has no upstreams enabled — auth is not the problem. On the default hub only an admin can enable them, so if you were *invited* into someone else's hub this is not yours to fix; ask them |
 

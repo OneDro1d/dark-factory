@@ -117,6 +117,29 @@ else bad "links the vendor docs rather than restating them"; fi
 if grep -qi 'tool toggles' "$DOC"; then ok "points narrowing at role and tool toggles"
 else bad "points narrowing at role and tool toggles"; fi
 
+# Role inheritance is SYMMETRIC, and the page used to teach only the direction that fails
+# loudly. A downgrade announces itself as a 403; a WIDENING is silent, and it applies to every
+# token already minted -- including the narrow one you minted months ago for one job and
+# forgot. Absence of that sentence is not a wrong claim, so P2 cannot see it and neither can
+# any scanner: it needs a positive assertion, which is what these two are.
+# Both halves of this claim wrap across lines, so match against the squashed body -- and
+# match the CLAIM, not two loose words. The first draft asked only for `widen` plus
+# `already minted`, and both were satisfied by the upstream-scoping bullet and the
+# troubleshooting row: deleting the entire paragraph still scored 26/26. An assertion that
+# cannot see its own subject is the defect this file exists to catch, one level up.
+BODY="$(tr '\n' ' ' < "$DOC")"
+if printf '%s' "$BODY" | grep -qiE 'widening[^.]{0,90}(silent|says nothing)' \
+&& printf '%s' "$BODY" | grep -qiE 'audit[^.]{0,60}role'
+then ok "states that widening the role is silent, and that the role is what to audit"
+else bad "states that widening the role is silent, and that the role is what to audit" \
+        "the page teaches only the losing direction (403); the silent gain is unstated"; fi
+
+# The consequence belongs in the table too: someone hits this by noticing an agent can now do
+# something it could not last week, which is not a failure and so never reaches an error path.
+if grep -qiE '^\| *an agent .*more than' "$DOC"
+then ok "troubleshooting names the silent-widening symptom"
+else bad "troubleshooting names the silent-widening symptom" "no row for access that grew"; fi
+
 # The memory upstream is the one connector the method itself leans on, and ~11 other files in
 # this repo name it in passing. This page is where those references resolve to a meaning.
 if grep -q 'Engram' "$DOC" && grep -qi 'versioned agent memory' "$DOC"; then ok "says what the memory upstream is"
