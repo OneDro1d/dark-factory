@@ -302,6 +302,27 @@ if [ "$SCAN_HISTORY" -eq 1 ]; then
       -- . "${EXCL[@]}" ${P5_EXCL[@]+"${P5_EXCL[@]}"} 2>/dev/null | head -10) || true
   }
 
+  # hist_matches <revs>; prints the distinct landmark TEXTS found, lowercased and sorted.
+  #
+  # Deliberately NOT `hist_grep | ...`. hist_grep caps its output at 10 hits because it
+  # feeds a human-readable list; deriving the already-published SET from that capped list
+  # would mean the 11th distinct landmark reads as never-published, and a repeat of it
+  # would be reported as fresh exposure. The cap is right for display and wrong for a set.
+  #
+  # `-h` suppresses the rev:path:line prefix. Without it the prefix goes through grep -o
+  # too, and any landmark pattern that happens to match hex would harvest commit SHAs as
+  # if they were landmarks — different SHAs on each side, so every pending hit would look
+  # new. The current patterns do not match a bare SHA; a stranger's config is not ours to
+  # assume, so the prefix is removed rather than trusted.
+  hist_matches() {
+    local revs="$1"
+    [ -n "$revs" ] || return 0
+    # shellcheck disable=SC2086
+    (cd "$REPO" && git grep -h -I -E -i "$HIST_PAT" $revs \
+      -- . "${EXCL[@]}" ${P5_EXCL[@]+"${P5_EXCL[@]}"} 2>/dev/null) \
+      | grep -o -E -i "$HIST_PAT" | tr 'A-Z' 'a-z' | sort -u
+  }
+
   if [ -z "$REMOTE_REFS" ]; then
     HIST="$(hist_grep "$(cd "$REPO" && git rev-list --all 2>/dev/null)")"
     if [ -n "$HIST" ]; then
@@ -322,6 +343,21 @@ if [ "$SCAN_HISTORY" -eq 1 ]; then
     PEND_HIT="$(hist_grep "$PEND_REVS")"
     LOCAL_HIT="$(hist_grep "$LOCAL_REVS")"
 
+    # The buckets above classify COMMITS. The PENDING verdict, though, makes a claim about
+    # a LANDMARK — "the next push would publish it" — and those are different questions. A
+    # string that is already fetchable, reintroduced in an unpushed commit, is a pending
+    # COMMIT carrying a published LANDMARK: the push discloses nothing that is not already
+    # out. Saying otherwise is not a harmless overstatement. The sibling PUBLISHED remedy
+    # is "rebuild from a fresh git init", so a false "would publish" manufactures pressure
+    # toward orphaning every published SHA to suppress a disclosure that already happened.
+    PUB_MATCHES="$(hist_matches "$PUB_REVS")"
+    PEND_MATCHES="$(hist_matches "$PEND_REVS")"
+    # Blank lines are stripped from BOTH sides: printf on an empty variable emits one
+    # empty line, which comm would otherwise report as a landmark present on one side.
+    PEND_NEW="$(comm -13 \
+      <(printf '%s\n' "$PUB_MATCHES"  | sed '/^$/d') \
+      <(printf '%s\n' "$PEND_MATCHES" | sed '/^$/d'))"
+
     if [ -n "$PUB_HIT" ]; then
       hit "P8 landmark is ALREADY PUBLISHED — reachable from a remote branch"
       printf '%s\n' "$PUB_HIT" | while IFS= read -r l; do note "${l:0:160}"; done
@@ -329,9 +365,25 @@ if [ "$SCAN_HISTORY" -eq 1 ]; then
       note "the objects stay fetchable by SHA. The repo must be rebuilt from a fresh git init."
     fi
     if [ -n "$PEND_HIT" ]; then
-      hit "P8 landmark is on HEAD and NOT yet published — the next push would publish it"
-      printf '%s\n' "$PEND_HIT" | while IFS= read -r l; do note "${l:0:160}"; done
-      note "still fixable: drop or rewrite the offending commit BEFORE pushing."
+      # Fail SAFE on either of two conditions, never only on the happy one:
+      #   PEND_NEW non-empty      something genuinely unpublished is here.
+      #   PEND_MATCHES empty      hits exist that the match extraction cannot account for
+      #                           — a landmark in a PATH, say, which `-h` does not see.
+      #                           Published-vs-new is then UNKNOWN, and an unknown must
+      #                           never be recorded as an ok. Same rule as the no-remote
+      #                           fallback above.
+      if [ -n "$PEND_NEW" ] || [ -z "$PEND_MATCHES" ]; then
+        hit "P8 landmark is on HEAD and NOT yet published — the next push would publish it"
+        printf '%s\n' "$PEND_HIT" | while IFS= read -r l; do note "${l:0:160}"; done
+        note "still fixable: drop or rewrite the offending commit BEFORE pushing."
+        [ -n "$PEND_MATCHES" ] || note "(could not tell new from repeat here, so treated as new)"
+      else
+        warn "P8 unpushed commits repeat an ALREADY-PUBLISHED landmark — the push adds no disclosure"
+        printf '%s\n' "$PEND_HIT" | while IFS= read -r l; do note "${l:0:160}"; done
+        note "every landmark here is already in the PUBLISHED finding above. Pushing"
+        note "discloses nothing new, so this is NOT a reason to rewrite history."
+        note "fix the working tree so it stops recurring; the exposure itself is already spent."
+      fi
     fi
     if [ -n "$LOCAL_HIT" ]; then
       warn "P8 landmark in LOCAL-ONLY history — this clone only, not published, not on HEAD"
