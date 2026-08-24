@@ -8,7 +8,7 @@ single "config" that mixed them would hide which one is broken.
 |---|---|---|
 | `hooks/df-instance-start.sh` | SessionStart hook: which instance, is it installed, what is running | declared in `loom.lock.json`, copied by the installer |
 | `settings.template.json` | the entry that registers that hook | **merge by hand** into your harness settings |
-| `mcp.template.json` | your hub, as a URL variable and an env-referenced token | **merge by hand** into your harness config |
+| `mcp.template.json` | a default public hub, and an env-referenced token | **merge by hand** into your harness config |
 | `output-style.md` | the working register: evidence-first, stop at the irreversible | **copy by hand** to your output-styles directory |
 
 Only the first is automatable. The other three land in files shared with everything else
@@ -71,15 +71,30 @@ because every source was confined to `vendor/` by construction.
 
 ## The hub
 
-`mcp.template.json` ships an unresolvable placeholder for the hub URL and an environment
-reference for the token, and neither is an oversight.
+`mcp.template.json` ships a **working default hub** and an environment reference for the
+token, and the split is deliberate.
 
-A default that resolves would point your sessions at a host you never chose. And writing
-the token as `${DF_HUB_TOKEN}` rather than a literal means **hub auth is inherited from the
-environment** — which is the part that bites: a headless or scheduled run reaches the hub
-only if that variable is exported in the process that spawned it. Otherwise the child boots
-cleanly, fails every write, and keeps going. Export it in your shell profile before
-launching anything unattended.
+Until 2026-08-24 the URL was an unresolvable placeholder too, on the reasoning that a
+default which resolves points your sessions at a host you never chose. That reasoning holds
+for a *private* default and not for a public one — and the cost of it was a kit a stranger
+could not finish. So the template now names the free public hub, and keeps the choice: see
+`$bringYourOwnHub` in the file for how to point it somewhere else, and note that the method
+still works with no hub at all.
+
+**The path is the part people get wrong.** A personal access token uses `/agent/mcp` with
+**no** hub slug — the token is bound to a hub when you create it, and the server resolves it
+from that. The `/hub/<slug>/mcp` form is for browser OAuth, where the slug is what selects
+the hub. Sending a token to the OAuth form fails with `ERR_SCOPE_UNAVAILABLE` unless the
+slug happens to match, and the vendor's docs call getting this backwards the most common
+wiring mistake: <https://docs.onedroid.ai/endpoints>.
+
+The token stays a reference. Writing it as `${DF_HUB_TOKEN}` rather than a literal means
+**hub auth is inherited from the environment** — which is the part that bites: a headless
+or scheduled run reaches the hub only if that variable is exported in the process that
+spawned it. Otherwise the child boots cleanly, fails every write, and keeps going. Export
+it in your shell profile before launching anything unattended. The vendor's guidance is the
+same: a password manager or secret store, never chat, git, or a shared doc —
+<https://docs.onedroid.ai/tokens>.
 
 Prove it works rather than assuming it: `python3 boot-kit/scripts/df-preflight.py --report`
 makes a live call against every configured hub. A present `Authorization` header proves
