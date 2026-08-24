@@ -38,7 +38,7 @@ You are an adversarial senior engineer reviewing a service you did not build.
 Using critical thinking:
 - Boot a fresh agent using only the Per-Service Build Spec. Does it reach a working smoke test, or does it have to guess?
 - Diff the service's consumed/published Avro schemas against the SA Data Model. Flag any drift.
-- Grep for anti-patterns: custom AMQP (not TwistyGo), Log.Error, latest image tags, replicas<3, shared databases.
+- Grep for anti-patterns: custom AMQP (not the shared messaging library), Log.Error, latest image tags, replicas<3, shared databases.
 - Confirm Service Anatomy is complete.
 Return: findings table (severity | check | evidence | fix) + verdict Pass/Conditional/Fail.
 ```

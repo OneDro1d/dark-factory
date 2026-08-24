@@ -69,7 +69,7 @@ The build is not done until it is documented in three places:
 
 1. **DF spec docs** in `docs/dark-factory/` (01–05) — committed with the code.
 2. **Tickets** (see below) — status moved + evidence (commit SHAs, tx hashes, test counts) recorded per stage.
-3. **Memory** — canonical engram (project record + reusable lessons in `patterns`/`platform-libs`) and the local memory index. Save a record at each meaningful checkpoint, not just at the end.
+3. **Memory** — a canonical record in [Engram](../starter-kit/instance/AUTHENTICATION.md#engram) (project record + reusable lessons in `patterns`/`platform-libs`) and the local memory index. Save a record at each meaningful checkpoint, not just at the end.
 
 Commit cadence: **one commit per TDD unit / per stage, pushed frequently** to a feature branch or the project repo. Each commit message states what was verified (build/vet/test/-race green, static build, etc.).
 
@@ -103,7 +103,7 @@ Rules: every points-tracked ticket gets an estimate; anything above 8 is decompo
 - [ ] Stage 7 QA (`df-qa`) — execute scenarios, capture unforgeable evidence (correlationId / tx hash), write `05-qa-*.md`, verdict.
 - [ ] Full gate: build + vet + tests (+ `-race` / static where applicable) green; deploy/live artifacts render.
 - [ ] HARD-STOP check before any prod/financial/outbound action — ask if crossed.
-- [ ] Save to memory (engram project record + reusable `patterns`/`platform-libs` lessons + local index); close the epic.
+- [ ] Save to memory ([Engram](../starter-kit/instance/AUTHENTICATION.md#engram) project record + reusable `patterns`/`platform-libs` lessons + local index — if no memory store is reachable, record locally and say so); close the epic.
 
 ## Worked example — a DEX/NAV arbitrage bot (2026-06)
 

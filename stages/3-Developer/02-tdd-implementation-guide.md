@@ -44,9 +44,9 @@ If a case isn't covered by an upstream rule or scenario, that's a gap — loop b
 Stay in your lane — no duplication:
 
 - **Developer (this stage):** **unit** tests (single transform) + **integration** tests (a couple of services across the AMQP bus). All green before handoff.
-- **QA (stage 5):** **E2E** (JMeter against the deployed cluster) + **holdout** (Argus). Do not rebuild E2E here.
+- **QA (stage 5):** **E2E** (JMeter against the deployed cluster) + **the held-back acceptance suite**. Do not rebuild E2E here.
 
-> **Blind synthesis (anti-Goodhart).** Your own tests drive your build loop — but the **acceptance evidence (the PO Test Scenarios and the QA/Argus holdout) is withheld from you.** You are verified against cases you never saw, which is what proves you implemented the *spec* and not just *your own test*. Don't ask for the holdout: building to it is the lookup-degeneration failure (`if known_input: return known_answer`). See [`reference/operating-agents-promise-theory.md`](../../reference/operating-agents-promise-theory.md).
+> **Blind synthesis (anti-Goodhart).** Your own tests drive your build loop — but the **acceptance evidence (the PO Test Scenarios and the QA held-back acceptance suite) is withheld from you.** You are verified against cases you never saw, which is what proves you implemented the *spec* and not just *your own test*. Don't ask for the holdout: building to it is the lookup-degeneration failure (`if known_input: return known_answer`). See [`reference/operating-agents-promise-theory.md`](../../reference/operating-agents-promise-theory.md).
 
 ## Exit gate
 
@@ -60,7 +60,7 @@ Stay in your lane — no duplication:
 
 ## The workflow, step by step
 
-1. **Fork the skeleton** (Pattern 7). The standard service template brings TwistyGo init, the metrics server, AMQP connect, and the DLQ for free. You write only the business logic — and its tests.
+1. **Fork the skeleton** (Pattern 7). The standard service template brings the shared messaging library's init, the metrics server, AMQP connect, and the DLQ for free. You write only the business logic — and its tests.
 2. **Build the case list.** For this service, pull: its transforms from the SA **Data Flow** (each tagged `pure`/`effect`), its `LOCAL` validation rules, the `GLOBAL` rules it participates in, and the PO **Test Scenarios** that route through it. That list is your test backlog.
 3. **RED.** Take one case. Write the smallest test that encodes it. Run it. Confirm it fails *because the behaviour is missing*, not because of a compile error or typo.
 4. **GREEN.** Write the minimal code to pass. Consume/publish **exactly** the Avro schemas in the SA Data Model — no private side channels (Directive 2), no invented contracts. Resist adding anything the test didn't ask for.
@@ -169,14 +169,14 @@ GREEN = check `seen` for `(id, seq)` before publishing; record it after. The **c
 
 - **Minimal.** Only what the failing test demands. Gold-plating is unrequested, untested code.
 - **Honour contracts.** Exactly the Avro schemas the SA defined. A contract you wish existed is an SA loop-back, not a local invention.
-- **`Log.Warn`, never `Log.Error`** — `Log.Error` panics under TwistyGo.
+- **`Log.Warn`, never `Log.Error`** — `Log.Error` panics in this stack's shared messaging library. Whatever yours is, learn its failure semantics before you write an error path.
 - **Decimal for money** — never floating-point, where the service touches value.
 - **Config over code** — no hard-coded knobs.
 
 ## Anti-patterns
 
 - **Assertion-free tests** — a test that runs code but asserts nothing protects nothing (the Adversary fails these).
-- **Testing the framework/bus** instead of your transform — assume TwistyGo works; test *your* logic.
+- **Testing the framework/bus** instead of your transform — assume the shared messaging library works; test *your* logic.
 - **Mock-everything** — if the test only exercises mocks, it tests your mocks. Test the transform.
 - **Code-before-test** — you lose the proof the test has teeth, and you'll shape the code to your own assumptions.
 - **Tests bound to internals** — assert on the *validation rule's outcome*, not on private implementation details, or every refactor breaks the tests (the same RCT/OST entanglement the model warns against).

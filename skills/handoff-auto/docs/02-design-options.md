@@ -19,7 +19,7 @@ in **how/when the handoff is produced**.
 - **C — ~90% external watcher runs the `/handoff` skill.** Closest to your literal ask, highest
   fidelity *at the moment of capture*. Most complex + racy + relies on % estimation.
 
-All three reuse Loom's existing `handoff` skill and Engram where they need model-written content.
+All three reuse Loom's existing `handoff` skill and [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram) where they need model-written content.
 
 ---
 

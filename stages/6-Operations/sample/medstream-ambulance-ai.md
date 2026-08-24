@@ -35,9 +35,9 @@ MedStream streams patient vitals and stroke-screen data from ambulances to the c
 | Knob | Action | How | Reversible? | Approval |
 |---|---|---|---|---|
 | Slow | rate-limit intake per ambulance | `settings.yaml intake.rate` reload | yes | none |
-| Stop | pause classifier consumer | `fulcrum-ctl pause vitals-classifier` | yes | on-call |
-| Redirect | route handoff to backup hospital endpoint | `fulcrum-ctl route handoff --to backup` | yes | **human** |
-| Inspect | replay summary DLQ | `fulcrum-ctl dlq-replay summary-builder` | yes | none |
+| Stop | pause classifier consumer | `medstream-ctl pause vitals-classifier` | yes | on-call |
+| Redirect | route handoff to backup hospital endpoint | `medstream-ctl route handoff --to backup` | yes | **human** |
+| Inspect | replay summary DLQ | `medstream-ctl dlq-replay summary-builder` | yes | none |
 
 ## Alert → response playbook
 
@@ -70,5 +70,5 @@ MedStream streams patient vitals and stroke-screen data from ambulances to the c
 
 ## Notes for the AI on-call agent
 
-- PHI in flight — every inspect action logs to Armarium audit sink.
+- PHI in flight — every inspect action logs to the immutable audit sink.
 - Region redirect and any patient-data action = human approval.

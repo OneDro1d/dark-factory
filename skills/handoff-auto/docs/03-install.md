@@ -39,6 +39,8 @@ all run). Use absolute paths.
 
 - **Coexists with the existing `engram-session-start.sh`** SessionStart hook — both fire; the
   matcher scopes this one to `compact`/`clear` so it only injects after a compaction or clear.
+  That hook is an [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram) integration
+  from the author's own setup; if you do not have one, there is nothing to coexist with.
 - **`HANDOFF_MAX_AGE`** (env, seconds; default `0` = unlimited) caps how old a handoff may be
   and still be restored. Set e.g. `86400` to ignore day-old handoffs.
 - **Token tax:** the UserPromptSubmit nudge adds ~4 lines of `additionalContext` per turn. To

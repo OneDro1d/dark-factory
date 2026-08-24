@@ -4,7 +4,7 @@ You are about to turn this template into **your** instance: a directory you own,
 that says exactly what is installed on this machine, and a session where the method is
 actually running rather than merely described.
 
-Read this page through once before typing. It is short, and two of the six steps fail in
+Read this page through once before typing. It is short, and several of its steps fail in
 ways that look like success if you do not know what to check.
 
 > **One machine, one person.** If you are setting up a whole organisation — a shared layer
@@ -20,7 +20,7 @@ ways that look like success if you do not know what to check.
 |---|---|
 | `git`, `jq`, `bash`, `python3` | `bootstrap.sh` refuses to run without `git` and `jq`; the engine is Python |
 | an agent harness that reads `SKILL.md` and supports hooks | the skills and the session hook are the method's delivery mechanism |
-| **optionally**, an MCP hub of your own | needed only from step 4. Steps 1–3 are fully offline-capable |
+| a hub — **or none** | needed only from step 4; [§4a](#4a--if-you-do-not-have-a-hub-yet) is the path if you have none. Steps 1–3 are fully offline-capable |
 
 **You do not need a hub to finish steps 1–3**, and it is worth doing them first: an install
 that is broken and a hub that is misconfigured produce similar-looking silence, and
@@ -113,7 +113,7 @@ as a complete setup:
 | do this | from |
 |---|---|
 | merge the hook registration into your harness settings | `boot-kit/settings.template.json` |
-| point the hub config at **your** hub, token by environment variable | `boot-kit/mcp.template.json` |
+| point the hub config at a hub — it already points at one; the token is yours to export | `boot-kit/mcp.template.json` |
 | copy the output style into your harness's output-styles directory and select it | `boot-kit/output-style.md` |
 
 Each of these lands in a file shared with everything else you run. A script that rewrites
@@ -124,6 +124,64 @@ behaviour that used to happen and now does not. So they stay manual, and
 **The token is read from the environment, not stored.** Export it in your shell profile
 before launching anything unattended: a headless run whose parent process lacks the variable
 boots cleanly, fails every hub write, and keeps going.
+
+## 4a · If you do not have a hub yet
+
+Skip this if you already have one, or if you are running without one. Otherwise it is about
+five minutes, once, and then step 4's middle row is done.
+
+`boot-kit/mcp.template.json` ships pointing at **OneDroid Synapse**, a public MCP hub that
+anyone can sign up for. That is a **default, not a requirement** — the two other paths are at
+the end of this section, and neither is second-class.
+
+The vendor's own walkthrough is <https://docs.onedroid.ai/quickstart>, and it is the page to
+follow. What is below is the *order*, plus the things that go wrong along the way — each of
+which presents as something other than its cause.
+
+1. **Sign up** at <https://synapse.onedroid.ai>. Google, Microsoft, or email.
+
+   > ⚠️ **Use the same method every time.** Sign-in is Clerk, so Google and Microsoft on the
+   > *identical* email address are two separate accounts. The symptom is not an error; it is
+   > signing in successfully and finding no hub, or the wrong one.
+
+2. **Choose where the data lives** — managed, or your own Postgres.
+
+   > ⚠️ If you bring your own: leave the literal `[YOUR-PASSWORD]` placeholder in the
+   > connection string **exactly as it appears**, because the password is spliced in from a
+   > separate field and is deliberately never stored in the URI. Substituting the real one
+   > presents as *"the credentials are right and the connection test fails"*, which sends
+   > you looking at the database.
+
+3. **Create the hub.** The slug you get back is not the slug you typed — a short unique
+   suffix is appended. It does not matter here: the slug selects a hub for *browser* clients,
+   and this kit is the token avenue, which carries the hub in the token instead. That is why
+   the template's URL has no slug in it and must not gain one.
+
+4. **Mint a token** — check the hub picker is on the hub you mean first, since a token is
+   bound to one hub at creation. The plaintext is shown **once**.
+
+5. **Wire it.** Export the token as `DF_HUB_TOKEN` in your shell profile, then copy the
+   `mcpServers` block out of `boot-kit/mcp.template.json` into your harness config. The
+   template already carries the URL, and carries the token as `${DF_HUB_TOKEN}` rather than
+   as a value — [`AUTHENTICATION.md`](AUTHENTICATION.md) is why, and it is worth two minutes
+   before you paste anything.
+
+Then go to step 5 and prove it, rather than assuming it.
+
+> ⚠️ **A fresh hub has zero connections, and that is expected.** If it *stays* at zero, the
+> upstreams have not been enabled — which only an admin can do. Sign up on your own and you
+> are the admin of your own hub, so this is yours to fix. Get *invited* into someone else's
+> and it is not: you will hold a perfectly valid token, see no tools, and have every reason
+> to blame the token. Ask whoever owns the hub.
+
+**Bring your own hub instead.** Replace the `url` and rename the server key. Ask your
+provider for the exact path rather than assuming it looks like the default's — the split
+between token and browser paths above is one product's design, not a standard.
+[`AUTHENTICATION.md`](AUTHENTICATION.md) covers what stays true either way.
+
+**Or run no hub at all.** Delete `boot-kit/mcp.template.json`. You lose shared memory across
+sessions and machines, and connectors to systems you already use. Nothing else in the method
+depends on it, and steps 5 through 7 all still work.
 
 ## 5 · Prove it, rather than assuming it
 
@@ -146,6 +204,13 @@ Three verdicts, and the third is not a polite synonym for the second:
 Only a positive `drift` justifies changing anything. Collapsing `unknown` into `drift` is
 how a network blip gets written into a lockfile as "no checkout on this machine". Proposals
 are never applied for you: confirm one, then `--apply` records it under `probed`.
+
+**What this check cannot tell you apart.** A hub that answers `401` is reported as `drift`,
+and the note says *token expired or revoked* — but a wrong token and a header that never
+arrived produce the same `401` here. Those are the two failures that look identical from
+inside an agent, and the vendor's probe distinguishes them by returning a different code in
+the body: <https://docs.onedroid.ai/troubleshooting>. Run that before changing anything in
+your config, because the two causes have nothing in common.
 
 ## 6 · Open a session
 
@@ -206,6 +271,10 @@ has an empty "what could not be shown" section.
 | every hub call fails, nothing else is wrong | the token variable is not exported in **this** process |
 | `df-mission: no such mission` for the example | you are not inside the instance directory, or an inherited `$NOTEPAD` is pointing at a different notepad — it wins over the upward walk |
 | the example finishes `DONE` with nothing it could not verify | read it again; that section being empty is the defect the ticket warns about |
+| signed in, but there is no hub or it is the wrong one | you signed in with a different provider than you signed up with — two accounts, one email. [§4a](#4a--if-you-do-not-have-a-hub-yet) |
+| the connection test fails and the credentials look right | the real password was substituted for the `[YOUR-PASSWORD]` placeholder, which is meant to stay literal |
+| connected, token valid, and zero tools appear | the hub has no upstreams enabled. Only an admin can enable them, so if you were invited into someone else's hub this is not yours to fix |
+| `ERR_SCOPE_UNAVAILABLE` | a token sent to a slug-carrying URL. The token avenue has no slug — see [`AUTHENTICATION.md`](AUTHENTICATION.md) |
 
 ## What to read next
 
@@ -218,6 +287,12 @@ has an empty "what could not be shown" section.
   what each kind of connector needs. Read it **before** step 5 if you are configuring a hub:
   the token is an environment reference, and a headless run whose parent never exported it
   boots cleanly and then fails every hub write in silence.
+
+For the default hub, the vendor's own pages — authoritative, and deliberately not copied into
+this kit, because two copies of a setup path drift and then neither can be trusted:
+
+- <https://docs.onedroid.ai/quickstart> — sign-up through to a first verified call
+- <https://docs.onedroid.ai/troubleshooting> — the failure table, including the two `401`s
 
 The one thing to carry out of this page: **a green run is not evidence.** Every check here
 tells you what it could not see, and the parts that stay manual stay visible on purpose.

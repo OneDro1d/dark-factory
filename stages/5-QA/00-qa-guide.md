@@ -35,7 +35,7 @@ QA deploys the built system to test/acceptance, runs the PO's real-life scenario
 
 ## Optional outputs
 
-- Holdout / regression suite (Argus dark-factory holdout)
+- Held-back acceptance suite / regression suite (the cases withheld from the builder)
 - Load / performance results
 
 ## Exit gate
@@ -64,7 +64,7 @@ See [`reference/data-transform-model.md`](../../reference/data-transform-model.m
 
 1. **Check the eyes first.** Open the Observability Surface Infra handed off: confirm every required dashboard renders live data and a `$correlationId` query resolves across services. If the eyes are dark, halt and route to Infra (4) before testing — you cannot capture evidence through a blind instrument.
 2. **Map, don't invent.** Every test case starts from a PO real-life scenario. One scenario → at least one test case.
-3. **Run the pyramid in order:** unit (from Developer) → integration → E2E (JMeter against the deployed cluster) → holdout (Argus). Stop and report at the first quality-gate breach.
+3. **Run the pyramid in order:** unit (from Developer) → integration → E2E (JMeter against the deployed cluster) → the held-back acceptance suite. Stop and report at the first quality-gate breach.
 4. **Capture evidence by correlationId.** A scenario "passed" only if its run is traceable in observability — Directive 1 makes this possible; QA exploits it.
 5. **Record results in the template**, including failures (publish bad alongside good).
 6. **Verdict:** Pass / Conditional / Fail. Conditional requires explicit, owned, time-boxed open items.

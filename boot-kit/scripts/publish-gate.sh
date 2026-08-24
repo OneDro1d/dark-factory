@@ -91,6 +91,22 @@ printf 'landmarks: %s\n\n' "$LANDMARKS_SRC"
 # EXPLICIT PATH LIST, never a wildcard: a `tests/` wildcard would let a real credential
 # dropped into any tests directory sail through. Named files can be eyeballed on review;
 # a pattern cannot.
+# ⚠️ EXPANDED AS ${P5_EXCL[@]+"${P5_EXCL[@]}"} AT EVERY CALL SITE, NOT AS "${P5_EXCL[@]}".
+# That is not a typo and it must not be "tidied up". bash 3.2 — the /bin/bash on every
+# macOS — treats "${arr[@]}" on an EMPTY array as an unbound variable under `set -u`:
+#
+#     $ bash -c 'set -uo pipefail; A=(); echo "${A[@]}"'
+#     bash: A[@]: unbound variable
+#
+# Every call site sits inside $(...), so the abort killed only the substitution: the scan
+# came back EMPTY, and empty output is the CLEAN branch. The gate printed
+# `PASS  P5 no secret-shaped strings` over a planted key. P6 and the P8 --history scan had
+# the identical defect, and the history one is the worst of the three.
+#
+# It went unnoticed because these two lists are the one part of the config a reader is
+# MEANT to leave out, and every config WE have declares them. A stranger writing their own
+# config with nothing to exempt got a gate whose secret and personal-identifier checks were
+# both inert while reporting PASS. Pinned by tests/test-publish-gate-empty-exclusions.sh.
 P5_EXCL=()
 while IFS= read -r _line; do
   [ -n "$_line" ] && P5_EXCL+=("$_line")
@@ -195,7 +211,7 @@ echo ""
 # as the thing it is telling you to redact. Same precision-vs-recall call as NEMSIS/HIPAA.
 echo "[P5] Secret-shaped strings"
 P5_PAT="$P5_PATTERN"
-P5_OUT="$(cd "$REPO" && git grep -n -I -E -i --untracked "$P5_PAT" -- . "${EXCL[@]}" "${P5_EXCL[@]}" 2>/dev/null | head -12)"
+P5_OUT="$(cd "$REPO" && git grep -n -I -E -i --untracked "$P5_PAT" -- . "${EXCL[@]}" ${P5_EXCL[@]+"${P5_EXCL[@]}"} 2>/dev/null | head -12)"
 if [ -n "$P5_OUT" ]; then
   hit "P5 secrets"
   printf '%s\n' "$P5_OUT" | while IFS= read -r l; do note "${l:0:160}"; done
@@ -206,7 +222,7 @@ fi
 echo ""
 echo "[P6] Personal / machine-local identifiers"
 P6_PAT="$P6_PATTERN"
-P6_OUT="$(cd "$REPO" && git grep -n -I -E -i --untracked "$P6_PAT" -- . "${EXCL[@]}" "${P6_EXCL[@]}" 2>/dev/null | head -12)"
+P6_OUT="$(cd "$REPO" && git grep -n -I -E -i --untracked "$P6_PAT" -- . "${EXCL[@]}" ${P6_EXCL[@]+"${P6_EXCL[@]}"} 2>/dev/null | head -12)"
 if [ -n "$P6_OUT" ]; then
   hit "P6 personal"
   printf '%s\n' "$P6_OUT" | while IFS= read -r l; do note "${l:0:160}"; done
@@ -283,7 +299,7 @@ if [ "$SCAN_HISTORY" -eq 1 ]; then
     # caught here only because the local-only class was KNOWN to have a hit.
     # shellcheck disable=SC2086
     (cd "$REPO" && git grep -n -I -E -i "$HIST_PAT" $revs \
-      -- . "${EXCL[@]}" "${P5_EXCL[@]}" 2>/dev/null | head -10) || true
+      -- . "${EXCL[@]}" ${P5_EXCL[@]+"${P5_EXCL[@]}"} 2>/dev/null | head -10) || true
   }
 
   if [ -z "$REMOTE_REFS" ]; then

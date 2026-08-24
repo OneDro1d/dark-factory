@@ -29,7 +29,7 @@ consumes: service map, deployment spec, observability spec, runtime trust profil
 
 | Knob | Action | How | Reversible? | Approval |
 |---|---|---|---|---|
-| **Slow** | rate-limit ingestion | `<config / fulcrum-ctl cmd>` | yes | none |
+| **Slow** | rate-limit ingestion | `<config value / control CLI cmd>` | yes | none |
 | **Stop** | pause consumer / drain queue | `<cmd>` | yes | on-call |
 | **Redirect** | failover route / alt consumer | `<cmd>` | yes | **human** |
 | **Inspect** | tail logs / replay DLQ | `<cmd>` | yes | none |

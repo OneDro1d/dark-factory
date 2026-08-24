@@ -11,7 +11,7 @@
 >
 > **What survives:** the notepad model (§ scope, NOTES.md, `sessions/*.jsonl` journal,
 > `index.json`), the SessionStart/Stop hooks, the commit gate, and git as the sync mechanism.
-> **What replaces the episodic tier:** durable memory goes to Engram by deliberate
+> **What replaces the episodic tier:** durable memory goes to [Engram](../../starter-kit/instance/AUTHENTICATION.md#engram) by deliberate
 > `engram_write`; session continuity lives in `NOTES.md` + `handoffs/`.
 >
 > This document is kept as the design *record*. Sections describing the index tier are
@@ -159,4 +159,4 @@ So `op_mirror` renders the journal into a **Markdown digest** under a staging di
 11. U6 adapter passes in **stub mode** (no live palace) and in **live mode** (real `mempalace`).
 
 ## 17. Out of scope (v1)
-Cross-group auto-sharing; automatic `/clear`; a GUI; governing manual human code-commits (agent commits only); signed/provenance journals (v2 via df-substrate); conflict-free multi-machine concurrent editing of the *same* scope (v1 = append-only + last-writer-wins on `NOTES.md`).
+Cross-group auto-sharing; automatic `/clear`; a GUI; governing manual human code-commits (agent commits only); signed/provenance journals (v2, via a signed-provenance substrate); conflict-free multi-machine concurrent editing of the *same* scope (v1 = append-only + last-writer-wins on `NOTES.md`).

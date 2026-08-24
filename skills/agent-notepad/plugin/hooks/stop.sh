@@ -15,6 +15,8 @@
 #
 # The former step 5 (mirror into a local memory index) was DELETED 2026-08-03 — see
 # the note further down. Durable memory is Engram via deliberate engram_write.
+# Engram is a memory store, and it is explained once for this whole repo — see
+# starter-kit/instance/AUTHENTICATION.md#engram. Nothing here requires it.
 set -u
 
 _DIR="$(cd "$(dirname "$0")" && pwd)"

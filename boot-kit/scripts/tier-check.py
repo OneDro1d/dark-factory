@@ -23,7 +23,7 @@ VENDOR IS NOT THIS REPO'S CONTENT. `vendor/` is a generated cache of a LOWER tie
 lower tier referencing its own skills is legal by definition. Walking it attributed Tier 1's
 internal `Skill()` calls to the Tier 2 repo that had merely cached it — so the verdict
 flipped on whether anyone had run `install.sh` yet. A gate whose answer depends on cache
-hydration is worse than no gate: `dark-factory-onedroid/UPSTREAM.lock` recorded
+hydration is worse than no gate: a Tier 2 repo's `UPSTREAM.lock` recorded
 `tier-check: PASS` from a machine with an empty `vendor/`, and the same repo FAILED with 10
 "violations" once it was populated. The excluded list is printed on every run, because a
 scan that skipped half the tree looks identical to one that did not unless it says so.

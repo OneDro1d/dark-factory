@@ -145,9 +145,15 @@ fi
 
 printf '\n== templates ==\n'
 
-# 9-11. The three templates must parse / exist, and the MCP one must keep the hub a
-#       variable. A template that ships a resolvable default sends someone else's session
-#       to a host they never chose.
+# 9-11. The three templates must parse / exist, and the MCP one must point somewhere the
+#       reader actually chose. Until 2026-08-24 that was enforced as "the URL must be an
+#       unfilled placeholder", on the reasoning that a resolvable default sends someone
+#       else's session to a host they never chose. That reasoning holds for a PRIVATE
+#       default and not for a public one: a kit that names the free public hub on the tin
+#       is a choice the reader makes by cloning it, and the placeholder-only rule bought
+#       its safety by making the kit impossible to finish. So the invariant moved rather
+#       than being dropped -- the URL must be the documented public default OR still
+#       unfilled, never a third host, and it must use the token endpoint form.
 for f in settings.template.json mcp.template.json; do
   if [ -f "$KIT/$f" ] && jq -e . "$KIT/$f" >/dev/null 2>&1; then
     ok "$f is valid JSON"
@@ -159,10 +165,42 @@ if [ -f "$KIT/output-style.md" ]; then ok "output-style.md exists"; else bad "ou
 
 if [ -f "$KIT/mcp.template.json" ]; then
   URLS="$(jq -r '[.. | objects | .url? // empty] | join(" ")' "$KIT/mcp.template.json" 2>/dev/null)"
+  # Every configured URL is either the documented public default or an unfilled
+  # placeholder. Anything else is a host that arrived without the reader choosing it.
+  URL_BAD=""
+  for u in $URLS; do
+    case "$u" in
+      https://synapse.onedroid.ai/agent/mcp) ;;
+      *__*__*)                               ;;
+      *) URL_BAD="$URL_BAD $u" ;;
+    esac
+  done
+  if [ -z "$URL_BAD" ]; then ok "every hub URL is the public default or an unfilled placeholder"
+  else bad "every hub URL is the public default or an unfilled placeholder" "unexpected:$URL_BAD"; fi
+
+  # The correctness item. A token is bound to its hub at creation, so it uses the slugless
+  # /agent/mcp form; /hub/<slug>/mcp is the OAuth shape and returns ERR_SCOPE_UNAVAILABLE
+  # when the slug does not match. Teaching the OAuth shape to a token client is the wiring
+  # mistake the public docs call the most common one.
   case "$URLS" in
-    *__*__*) ok "the MCP template's hub URL is an unfilled placeholder" ;;
-    *)       bad "the MCP template's hub URL is an unfilled placeholder" "got: $URLS" ;;
+    */hub/*) bad "no configured URL uses the OAuth /hub/<slug>/ form" "got: $URLS" ;;
+    *)       ok "no configured URL uses the OAuth /hub/<slug>/ form" ;;
   esac
+
+  # Whatever the default is, the template must still SAY how to point it elsewhere.
+  # A default that is only a default in the author's head is a hard-code to the reader.
+  if grep -q 'bring your own hub' "$KIT/mcp.template.json"; then
+    ok "the MCP template documents the bring-your-own-hub path"
+  else
+    bad "the MCP template documents the bring-your-own-hub path" "no bring-your-own-hub note"
+  fi
+
+  # The prose must not resurrect the OAuth-shaped guess it used to teach.
+  if grep -q 'usually ends in /mcp' "$KIT/mcp.template.json"; then
+    bad "the MCP template does not teach the 'usually ends in /mcp' guess" "still present"
+  else
+    ok "the MCP template does not teach the 'usually ends in /mcp' guess"
+  fi
   AUTH="$(jq -r '[.. | objects | .headers? // empty | .Authorization? // empty] | join(" ")' "$KIT/mcp.template.json" 2>/dev/null)"
   case "$AUTH" in
     *'${'*) ok "the MCP template's token is an env reference, not a literal" ;;
