@@ -416,7 +416,7 @@ never saw, which proves you built the *spec*, not your own test. Don't build to 
 `if known_input: return known_answer` is the lookup-degeneration failure.
 
 **GREEN discipline.** Minimal code only; honour the exact contracts (no invented schemas);
-**config over code**; language gotchas matter (in TwistyGo, `Log.Error` panics — use `Log.Warn`;
+**config over code**; language gotchas matter (in this stack's shared messaging library, `Log.Error` panics — use `Log.Warn`;
 use **decimal** types for money, never floats).
 
 **Worked example — a LOCAL validation rule (Go + Python).** Rule: a vitals reading with no

@@ -70,5 +70,5 @@ MedStream streams patient vitals and stroke-screen data from ambulances to the c
 
 ## Notes for the AI on-call agent
 
-- PHI in flight — every inspect action logs to Armarium audit sink.
+- PHI in flight — every inspect action logs to the immutable audit sink.
 - Region redirect and any patient-data action = human approval.

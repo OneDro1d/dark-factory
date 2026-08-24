@@ -64,7 +64,7 @@ Safe autonomy needs **both** factors green; drop either and a human or adversari
 
 | Tier | What it is | Examples | Verifier |
 |---|---|---|---|
-| **T1 — mechanical, unforgeable** | The environment produces it; the agent can't fake it | compile/type-check exit code · `go test -race` / `pytest` exit *(with asserting tests)* · lint/vet · schema (Avro/XSD) validation · hash/signature · **reconciliation vs an external `authority`** · idempotency replay · health probes (`kubectl get pods`) · **dashboard rendering live data** · immutable audit ledger (Armarium / N-DIM) | a **mechanism** — the human/agent just reads its output |
+| **T1 — mechanical, unforgeable** | The environment produces it; the agent can't fake it | compile/type-check exit code · `go test -race` / `pytest` exit *(with asserting tests)* · lint/vet · schema (Avro/XSD) validation · hash/signature · **reconciliation vs an external `authority`** · idempotency replay · health probes (`kubectl get pods`) · **dashboard rendering live data** · immutable audit ledger | a **mechanism** — the human/agent just reads its output |
 | **T2 — mechanical measure, judged standard** | The number is mechanical; the threshold/mapping was a judgment | coverage (rule→test) · p95 < X · "scenario ran" via correlationId trace · invariant-holds *(but which invariant?)* | mechanism **+ a pre-registered standard** |
 | **T3 — irreducible judgment** | Subjective; the evidence is the promiser's own framing → forgeable | right target? · requirements complete? · architecture sound? · code maintainable? · incident handled well? · novel security reasoning · stakeholder-comms quality | a **human**, or an **adversarial panel** (diverse, independent) |
 
@@ -92,7 +92,7 @@ Even with perfect T1 evidence, an **irreversible effect** keeps a human gate —
 Promise Theory says trust accrues to kept promises, but never says *to whom*. For an agent the answer cannot be a name: an agent has no body to put in a room and no hand to sign a page, so a name is forgeable. Two distinct identity problems, **never crossed**:
 
 - **Routing (a capability problem)** — *which* agent can do this task. Solved by role + tool surface, not cryptography.
-- **Attribution (a cryptographic problem)** — *who actually did* the work. The only unforgeable proof an agent can give of authorship is a **cryptographic signature** (a Merkle root per session, anchored in Armarium / N-DIM).
+- **Attribution (a cryptographic problem)** — *who actually did* the work. The only unforgeable proof an agent can give of authorship is a **cryptographic signature** (a Merkle root per session, anchored in an immutable ledger).
 
 > **Don't solve routing with wallets, or attribution with prompts.** Trust ("accumulated kept promises") accumulates against a **signing key**, not a persona name — earned autonomy is a track record bound to an unforgeable identity. A self-asserted name is not an identity.
 

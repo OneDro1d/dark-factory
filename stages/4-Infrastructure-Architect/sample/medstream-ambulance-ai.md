@@ -74,7 +74,7 @@ Prometheus + Loki + OTel → CloudWatch (prod) / in-cluster (dev); Alertmanager 
 
 ## Compliance posture
 
-HIPAA: EBS + S3 encryption (AES-256/KMS), 6y audit retention, PHI segregation per service, Armarium audit for any ML recommendation that influences clinical handoff.
+HIPAA: EBS + S3 encryption (AES-256/KMS), 6y audit retention, PHI segregation per service, immutable-ledger audit for any ML recommendation that influences clinical handoff.
 
 ## Notes
 

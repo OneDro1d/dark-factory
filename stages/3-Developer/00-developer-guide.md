@@ -59,7 +59,7 @@ See [`reference/data-transform-model.md`](../../reference/data-transform-model.m
 
 ## Workflow
 
-1. **Fork, don't redesign** (Pattern 7). Clone the standard service skeleton; infrastructure (TwistyGo init, metrics server, AMQP connect, DLQ) comes free. Write only the business logic.
+1. **Fork, don't redesign** (Pattern 7). Clone the standard service skeleton; infrastructure (the shared messaging library's init, metrics server, AMQP connect, DLQ) comes free. Write only the business logic.
 2. **Honour the contracts.** Consume/publish exactly the Avro schemas in the SA Data Model. No private side channels (Directive 2).
 3. **Build each transform test-first — the recommended default.** RED → GREEN → REFACTOR, one case at a time; the test list is the PO's validation rules + Test Scenarios for this service (full method + Go/Python examples in [`02-tdd-implementation-guide.md`](02-tdd-implementation-guide.md)). Apply the 8 patterns by default in the GREEN step; any deviation needs an ADR pointer (back to SA).
 4. **Complete the Build Spec** as you go: anatomy deltas, quick commands, test status. Keep it true — it is validated by booting a fresh AI session against it.
@@ -72,8 +72,8 @@ To **QA**: the built services (deployed by the Infra lane), their tests, and the
 
 ## Failure modes
 
-- Custom AMQP code instead of TwistyGo (anti-pattern).
-- `Log.Error` (panics in TwistyGo) instead of `Log.Warn`.
+- Custom AMQP code instead of the shared messaging library (anti-pattern).
+- `Log.Error` (panics in this stack's shared messaging library) instead of `Log.Warn`.
 - Build Spec that restates the architecture instead of priming a working agent (the Fulcrum CLAUDE.md is the bar: quick commands, real file paths, smoke test).
 - Inventing a message contract the SA did not define — should be an SA loop-back, not a local decision.
 - `latest` tags / 2 replicas (anti-patterns).
