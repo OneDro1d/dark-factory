@@ -11,7 +11,7 @@
 >
 > **What survives:** the notepad model (§ scope, NOTES.md, `sessions/*.jsonl` journal,
 > `index.json`), the SessionStart/Stop hooks, the commit gate, and git as the sync mechanism.
-> **What replaces the episodic tier:** durable memory goes to Engram by deliberate
+> **What replaces the episodic tier:** durable memory goes to [Engram](../../starter-kit/instance/AUTHENTICATION.md#engram) by deliberate
 > `engram_write`; session continuity lives in `NOTES.md` + `handoffs/`.
 >
 > This document is kept as the design *record*. Sections describing the index tier are

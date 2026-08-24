@@ -14,7 +14,7 @@
 - **Restoration is solved**: a `SessionStart(compact|clear)` hook injects the saved handoff
   as `additionalContext` / `systemMessage`. This is the universal read-back path.
 - A mature open-source ecosystem already exists; we should **reuse, not reinvent** — and
-  Loom already owns a rich `handoff` skill (model-written, Engram + temp, redaction,
+  Loom already owns a rich `handoff` skill (model-written, [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram) + temp, redaction,
   artifact-referencing, suggested-skills).
 
 ## The compaction mechanism (ground truth)

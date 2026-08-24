@@ -17,7 +17,7 @@ action**: a bounded, secret-free, semantically-useful handoff is always availabl
 > keeps its goal, last decisions, next action, and key references across the boundary —
 > with zero manual `/handoff`.
 
-**Non-goals:** preventing/blocking compaction; replacing Engram long-term memory; a precise
+**Non-goals:** preventing/blocking compaction; replacing [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram) long-term memory; a precise
 "exactly 90%" trigger (not achievable natively — see `00-research-findings.md`); multi-repo
 orchestration (out of scope for v1).
 

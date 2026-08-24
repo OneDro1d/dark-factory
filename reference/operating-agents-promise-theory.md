@@ -119,7 +119,7 @@ Two separable problems, mirroring routing-vs-attribution — never crossed:
 
 ## The fleet coordination surface
 
-Promise Theory is pairwise (agent → agent). A *fleet* also needs one **canonical, queryable shared surface** for coordination, and it must keep **discussion separate from state**: ephemeral chatter (a channel) is not durable state (the assessable record). State lives where promises and their evidence are recorded — tickets, the audit ledger, Engram; discussion *references* state, never replaces it. An agent that changes state silently, or treats a chat message as a state change, breaks the assessment model.
+Promise Theory is pairwise (agent → agent). A *fleet* also needs one **canonical, queryable shared surface** for coordination, and it must keep **discussion separate from state**: ephemeral chatter (a channel) is not durable state (the assessable record). State lives where promises and their evidence are recorded — tickets, the audit ledger, [Engram](../starter-kit/instance/AUTHENTICATION.md#engram); discussion *references* state, never replaces it. An agent that changes state silently, or treats a chat message as a state change, breaks the assessment model.
 
 ## The human role — legislator, judge, trust-anchor
 
