@@ -44,6 +44,18 @@ EXCL=(
   ':!boot-kit/scripts/landmarks.conf'
   ':!boot-kit/scripts/gate-selftest.sh'
   ':!CONTENT-BOUNDARY.md'
+  # The substrate template's denylist is the same KIND of file as the two above: its
+  # content IS a pattern list, so every entry reads as a landmark to a scanner. Only the
+  # example is excluded — the real one is gitignored and never reaches a scan.
+  #
+  # It earns its place here by a failure worth remembering. The example denylist and
+  # landmarks.example.conf independently chose the SAME placeholder vocabulary (`acme`,
+  # `redcedar`) — the natural choice for a fake client name. So the example landmark
+  # scanner matched the example denylist, and CI failed on two placeholder files
+  # recognising each other. It passed locally the whole time, because the real
+  # landmarks.conf holds real patterns and neither fake name is among them: a
+  # gitignored config had made CI and the developer run materially different checks.
+  ':!skills/df-context-store/substrate-template/substrate-denylist.example.conf'
 )
 
 # P5-only exemptions: files whose JOB is to contain secret-shaped strings.
