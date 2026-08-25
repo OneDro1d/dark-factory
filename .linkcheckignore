@@ -2,7 +2,34 @@
 # Format:  <file-glob> -> <target-glob> # reason        (the reason is MANDATORY)
 # Inspect: python3 boot-kit/scripts/link-check.py --list-ignored .
 #
-# THIS FILE IS A DEBT REGISTER, NOT A MUTE BUTTON. Everything below is a real
-# broken link. It is listed so the gate can catch NEW breakage without being
-# permanently red, not because these are acceptable.
+# THIS FILE IS A DEBT REGISTER, NOT A MUTE BUTTON. It can hold exactly two kinds of
+# entry, and the reason must make clear which one it is:
 #
+#   DEBT       a real broken link, listed so the gate can catch NEW breakage without
+#              being permanently red — not because it is acceptable.
+#   DOWNSTREAM a PROSE-REF naming a path in the READER's repo, which this repo will
+#              never contain: the substrate a template installs, or an artefact a stage
+#              tells you to create. No syntactic rule can tell those from a broken
+#              reference, so the judgement is recorded here rather than guessed at.
+#
+# Anything that could be fixed by correcting a path belongs in neither category — fix it,
+# and make it a real markdown link so it stays checked.
+#
+
+# --- DOWNSTREAM: the substrate a template installs into the consumer's repo ----------
+skills/df-context-store/** -> .claude/** # DOWNSTREAM: the consumer's .claude/ tree, installed by this template; never present here
+skills/df-context-store/** -> context/*.md # DOWNSTREAM: same tree, addressed from the substrate root the template creates
+skills/agent-notepad/** -> .claude/** # DOWNSTREAM: the notepad's .claude/ tree in the consumer repo
+skills/scope-init/SKILL.md -> .claude/** # DOWNSTREAM: the notepad's .claude/ tree in the consumer repo
+
+# --- DOWNSTREAM: artefacts a stage tells the reader to CREATE ------------------------
+docs/DARK-FACTORY-PRIMING.md -> docs/dark-factory/*.md # DOWNSTREAM: build output written into the consumer repo by the stages
+reference/dark-factory-build-orchestrator.md -> docs/dark-factory/*.md # DOWNSTREAM: same build output
+skills/dark-factory-build/SKILL.md -> docs/dark-factory/*.md # DOWNSTREAM: same build output
+skills/cold-start-generator/SKILL.md -> docs/COLD-START.md # DOWNSTREAM: the file this skill instructs you to create
+skills/repo-docs/CHECKLIST.md -> docs/diagrams/README.md # DOWNSTREAM: a checklist item the consumer repo satisfies
+skills/requirements-discovery/SKILL.md -> docs/service-map.md # DOWNSTREAM: the consumer's map, hedged in-line with "or equivalent"
+skills/requirements-discovery/SKILL.md -> docs/requirements/*.md # DOWNSTREAM: [feature-name] is a placeholder, not a filename
+
+# --- DOWNSTREAM: a skill named by the shape of its path, not by a location -----------
+docs/DARK-FACTORY-PRIMING.md -> dark-factory-build/SKILL.md # DOWNSTREAM: names the skill by its SKILL.md shape, paired in-line with the glob df-*/SKILL.md
