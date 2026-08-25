@@ -69,8 +69,8 @@ if the target is not a notepad — a Handoff only belongs in a notepad.
 - **Open threads / blockers.**
 - **Artifacts** — reference by `repo:file:line`, PR/commit SHA, or URL. Do **not** paste
   their contents.
-- **Suggested next skills** — e.g. `df-tdd-developer`, `df-qa`, `loom-recall`,
-  `context-management`.
+- **Suggested next skills** — e.g. `df-tdd-developer`, `df-qa`, `context-management`,
+  plus whichever memory-recall skill the instance binds (Tier-2; do not assume a name).
 
 ## Guarantees & boundaries
 

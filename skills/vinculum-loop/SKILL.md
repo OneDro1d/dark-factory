@@ -34,9 +34,12 @@ Two pieces work together. Keep them distinct:
 3. **Record decisions:** the loop's durable decision record is the stage docs + tickets it writes. (Optional: an internal signed-ledger substrate can additionally sign + hash-chain each entry — not included here, not required.)
 4. **Autonomy:** act in dev/non-prod by default; **HARD-STOP** at the boundaries in step 1 —
    production deploys, merges to a protected branch, financial or on-chain spend, outbound mail
-   or public posts, and customer-visible configuration. Escalate rather than guess. An
-   organisation MAY bind a stricter operating stance at this point; where it does, that stance
-   is Tier-2 content and is invoked by name, never linked by path.
+   or public posts, and customer-visible configuration. Escalate rather than guess. The
+   generic stance is [`work-autonomously`](../work-autonomously/SKILL.md), which ships here
+   — an organisation MAY bind a **stricter** one on top of it. The *stance* is method and
+   lives at Tier 1; what an organisation adds is the **binding**: which boundaries its
+   estate treats as real-world, and which of its own skills implement them. Reference a
+   binding by name only, never by path — it resolves on that lane and nowhere else.
 
 ## Maturity — be honest about what is wired
 
@@ -49,6 +52,6 @@ Two pieces work together. Keep them distinct:
 
 ## Related skills
 
-[`dark-factory-build`](../dark-factory-build/SKILL.md) (the engine) · [`df-product-owner`](../df-product-owner/SKILL.md) / [`df-solution-architect`](../df-solution-architect/SKILL.md) / [`df-tdd-developer`](../df-tdd-developer/SKILL.md) / [`df-qa`](../df-qa/SKILL.md) / [`df-adversary-gate`](../df-adversary-gate/SKILL.md) / [`df-dispatch-subagents`](../df-dispatch-subagents/SKILL.md) · [`critical-thinking`](../critical-thinking/SKILL.md). An organisation may additionally bind its own operating-stance skill (Tier-2).
+[`dark-factory-build`](../dark-factory-build/SKILL.md) (the engine) · [`df-product-owner`](../df-product-owner/SKILL.md) / [`df-solution-architect`](../df-solution-architect/SKILL.md) / [`df-tdd-developer`](../df-tdd-developer/SKILL.md) / [`df-qa`](../df-qa/SKILL.md) / [`df-adversary-gate`](../df-adversary-gate/SKILL.md) / [`df-dispatch-subagents`](../df-dispatch-subagents/SKILL.md) · [`critical-thinking`](../critical-thinking/SKILL.md) / [`work-autonomously`](../work-autonomously/SKILL.md) (the operating stance). An organisation may bind a stricter stance, and its own memory-recall skill, on top of these (Tier-2).
 
 See also the repo's `HOW-TO-AUTONOMOUS-BUILD.md` for the narrative walkthrough.
