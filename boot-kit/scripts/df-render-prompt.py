@@ -42,8 +42,12 @@ NOT registered in that mode (verified 2026-08-22; the first smoke test hit exact
 
     ~/.claude/skills/{profile}-dark-factory/SKILL.md
 
-Same fallback for `vinculum-loop`, `handoff` and `df-dispatch-subagents`. Reading the file
-is a first-class route, not a workaround — the bindings are the content, not the tool call.
+Same fallback for `vinculum-loop`, `handoff`, `df-dispatch-subagents`, `critical-thinking`
+and, where the instance ships one, its operating-stance skill (`work-autonomously` on the
+OneDroid/PWW lane). Reading the file is a first-class route, not a workaround — the
+bindings are the content, not the tool call. `critical-thinking` is on this list because
+§4 requires you to TAKE reversible decisions rather than escalate them: the skill is how
+you earn that, and a skill you cannot load is doctrine you cannot follow.
 
 The binding supplies the tracker, the MCP hub, the repo paths, the deploy gate and the
 estate hard-stops. Do not guess any of those. **Never hardcode a repo path**: resolve it
@@ -82,6 +86,14 @@ out, and verify their evidence yourself — a sub-agent's "done" is a claim, not
 step-wise check-ins. Do not mark DONE to be agreeable, and do not mark BLOCKED for a
 decision you are authorised to make: reversible and in dev is yours (B), hard stops and
 irreversible are the operator's (A).
+
+Resolve ambiguity, do not escalate it. Run the question-resolution order first — memory
+(`engram_search`) → the codebase → the internet → the project's docs — then put the answer
+through `critical-thinking` before acting on it. A **B** you punted to the operator costs
+them attention you were authorised to spend, and headless it costs a whole iteration. Two
+things stay an **A** regardless: anything in the hard-stops below, and money-critical or
+core-path work (settlement, sizing, prod-state writes) reached at session depth — those do
+not become yours just because nobody is watching.
 
 ## 5. Hard stops — escalate, never act
 {stops}
