@@ -44,6 +44,18 @@ EXCL=(
   ':!boot-kit/scripts/landmarks.conf'
   ':!boot-kit/scripts/gate-selftest.sh'
   ':!CONTENT-BOUNDARY.md'
+  # The substrate template's denylist is the same KIND of file as the two above: its
+  # content IS a pattern list, so every entry reads as a landmark to a scanner. Only the
+  # example is excluded — the real one is gitignored and never reaches a scan.
+  #
+  # It earns its place here by a failure worth remembering. The example denylist and
+  # landmarks.example.conf independently chose the SAME placeholder vocabulary (`acme`,
+  # `redcedar`) — the natural choice for a fake client name. So the example landmark
+  # scanner matched the example denylist, and CI failed on two placeholder files
+  # recognising each other. It passed locally the whole time, because the real
+  # landmarks.conf holds real patterns and neither fake name is among them: a
+  # gitignored config had made CI and the developer run materially different checks.
+  ':!skills/df-context-store/substrate-template/substrate-denylist.example.conf'
 )
 
 # P5-only exemptions: files whose JOB is to contain secret-shaped strings.
@@ -359,10 +371,66 @@ if [ "$SCAN_HISTORY" -eq 1 ]; then
       <(printf '%s\n' "$PEND_MATCHES" | sed '/^$/d'))"
 
     if [ -n "$PUB_HIT" ]; then
-      hit "P8 landmark is ALREADY PUBLISHED — reachable from a remote branch"
-      printf '%s\n' "$PUB_HIT" | while IFS= read -r l; do note "${l:0:160}"; done
-      note "a working-tree deletion will NOT fix this, and neither will a force-push:"
-      note "the objects stay fetchable by SHA. The repo must be rebuilt from a fresh git init."
+      # WAIVERS. The published remedy is "rebuild from a fresh git init" — correct for a
+      # real client leak, and wildly disproportionate for a landmark that turns out, on
+      # review, to disclose nothing. A gate that can only prescribe the nuclear option for
+      # every finding is one an operator learns to pass --no-verify to, and then the next
+      # REAL finding is waved through with it. So a finding can be accepted explicitly.
+      #
+      # The waiver is keyed on the matched LANDMARK TOKEN, never on a file, a path or a
+      # commit. That is the whole safety property: a NEW landmark in the SAME file is a
+      # different token and still fails hard, and if a waived line is edited such that it
+      # matches differently, the waiver stops applying and the finding returns for review.
+      # A path-scoped waiver would have blinded the file forever.
+      #
+      # P8_WAIVED lines are "<token><whitespace><reason>". A waiver with no reason is
+      # rejected: an unexplained waiver is indistinguishable from a mistake six months on.
+      WAIVED_TOKENS=""; WAIVER_REASONS=""
+      while IFS= read -r wline; do
+        case "$wline" in ''|\#*) continue ;; esac
+        wtok="${wline%%[[:space:]]*}"
+        wreason="$(printf '%s' "${wline#"$wtok"}" | sed 's/^[[:space:]]*//')"
+        [ -n "$wtok" ] || continue
+        if [ -z "$wreason" ]; then
+          hit "P8 waiver for '$wtok' has no reason — refusing to honour it"
+          continue
+        fi
+        WAIVED_TOKENS="$WAIVED_TOKENS$wtok
+"
+        WAIVER_REASONS="$WAIVER_REASONS$wtok :: $wreason
+"
+      done <<EOF_W
+${P8_WAIVED:-}
+EOF_W
+
+      PUB_UNWAIVED="$(comm -23 \
+        <(printf '%s\n' "$PUB_MATCHES"    | sed '/^$/d' | sort -u) \
+        <(printf '%s\n' "$WAIVED_TOKENS"  | sed '/^$/d' | sort -u))"
+
+      # A waiver matching nothing is protecting nothing, and would silently cover a later
+      # arrival of that token. Same rule the Engram-reference suite applies to exclusions.
+      STALE_W="$(comm -13 \
+        <(printf '%s\n' "$PUB_MATCHES"   | sed '/^$/d' | sort -u) \
+        <(printf '%s\n' "$WAIVED_TOKENS" | sed '/^$/d' | sort -u))"
+      if [ -n "$STALE_W" ]; then
+        printf '%s\n' "$STALE_W" | while IFS= read -r l; do
+          [ -n "$l" ] && warn "P8 waiver '$l' matches nothing — remove it or it will mask a later hit"
+        done
+      fi
+
+      if [ -n "$PUB_UNWAIVED" ]; then
+        hit "P8 landmark is ALREADY PUBLISHED — reachable from a remote branch"
+        printf '%s\n' "$PUB_HIT" | while IFS= read -r l; do note "${l:0:160}"; done
+        note "unwaived landmark token(s):"
+        printf '%s\n' "$PUB_UNWAIVED" | while IFS= read -r l; do [ -n "$l" ] && note "  $l"; done
+        note "a working-tree deletion will NOT fix this, and neither will a force-push:"
+        note "the objects stay fetchable by SHA. The repo must be rebuilt from a fresh git init."
+      else
+        # Loud, never silent. A waived finding must still cost a line of attention every
+        # run, or the operator stops knowing it is there.
+        pass "P8 already-published landmarks are ALL explicitly waived (see below)"
+        printf '%s\n' "$WAIVER_REASONS" | while IFS= read -r l; do [ -n "$l" ] && note "WAIVED: $l"; done
+      fi
     fi
     if [ -n "$PEND_HIT" ]; then
       # Fail SAFE on either of two conditions, never only on the happy one:

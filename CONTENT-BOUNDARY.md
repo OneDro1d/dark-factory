@@ -21,6 +21,46 @@ moment it is pushed.
 
 Consumers: one private Tier-2 repo per organisation you serve (`dark-factory-<org>`).
 
+## The direction rule — generic method moves up
+
+The table above sorts content by **what it contains**. On its own that is not enough, because
+most real files are mixed: generic method wearing a few landmarks. Sorting such a file by its
+landmarks files the whole method privately — and then every org repo grows its own copy, and
+the copies drift.
+
+So there is a second question, and it is asked first:
+
+> **Is this method, or is this specifics?** Method belongs here, stated generically.
+> Specifics — names, ids, paths, endpoints, tracker and cluster configuration — belong in the
+> org repo. A file that is both is **split**, not filed.
+
+When the method later changes it changes once, here, and each org repo picks the change up at
+its next pin bump. That is `docs/architecture.md`'s "instances compose; they do not copy",
+applied one tier up: many consumers **pull** the method instead of each carrying a copy.
+
+Three things this rule does **not** license.
+
+1. **It does not outrank the landmark rule.** Where the two disagree the landmark rule wins
+   and the content stays private. "It would be useful publicly" is not a boundary argument.
+   Publishing is irreversible; keeping something private is not.
+2. **It does not authorise extraction by deletion.** Moving method up is still a move, and
+   moves are made by selection — rule 1 below. Clone the org file, delete the names, and you
+   have published the names.
+3. **It does not treat "looks generic" as "is generic".** A method exercised on exactly one
+   lane carries a *hypothesis* of generality, not a demonstration. The test is whether a
+   second lane can consume it unchanged. Where it cannot, what moves up is the part that can,
+   and what stays behind is a binding.
+
+⚠️ **This is not the rule `boot-kit/scripts/tier-check.py` enforces**, and the two are easy to
+confuse. That one governs *dependency* direction — a repo may not reference a skill it does
+not ship. This one governs *placement* — where a thing should live at all. They are
+complements, and neither implies the other: on 2026-08-25 this repo referenced an
+operating-stance skill it does not ship, four times across two files, while `tier-check`
+printed `PASS`. The references were bare backticked names in prose, and it detects only
+`Skill(<name>)` and the legacy path form — rewriting one of those four into `Skill(...)` made
+the same gate fail on the same line. So a placement mistake is not guaranteed to surface as a
+dependency failure, and a passing `tier-check` is not evidence that placement is right.
+
 ## Two rules that are not obvious
 
 ### 1. Build by SELECTION, never by subtraction

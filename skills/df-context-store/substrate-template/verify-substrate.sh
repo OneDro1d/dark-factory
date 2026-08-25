@@ -44,8 +44,40 @@ if [ -s "$DC/settings.json" ] && grep -q 'SessionStart' "$DC/settings.json" && g
 [ -s "$HERE/CLAUDE-stanza.md" ] && ok "exists: CLAUDE-stanza.md" || bad "missing: CLAUDE-stanza.md"
 
 echo "== VR2: no source-project leakage (denylist + home paths + id/spelling families) =="
-LEAK="$(grep -rEinl --exclude-dir=__pycache__ --exclude='*.pyc' 'tr-(ddo|parser|validator|record|s3|ingest|schema|portal|sidecar)|dd[-_]loader|scope_dd_id|schematron|neptune|aurora|catalyst_tr|Ntd[a-z]Record|Itd[a-z]Record|/home/[a-z]|/Users/[A-Za-z]' "$DC" 2>/dev/null || true)"
-if [ -z "$LEAK" ]; then ok "no leaked tokens/home-paths in dotclaude/"; else bad "leakage found in:"; printf '%s\n' "$LEAK"; fi
+# THE DENYLIST IS SUPPLIED, NOT HARDCODED (2026-08-25).
+#
+# Until now this line carried the source project REAL identifiers - its service-name
+# family, its column names, its record-type spellings and its estate name - inline, in a
+# file published in a public repo. A leak detector that spells out the nouns it is hunting
+# publishes them itself, which is the same defect landmarks.example.conf already solved by
+# keeping placeholders in the committed file and the real list in a gitignored sibling.
+# publish-gate found it the day P1 learned to match the estate name bare.
+#
+# It is deliberately NOT defaulted to placeholder nouns. A denylist of invented words
+# matches nothing and this check would then pass on every substrate forever - an inert
+# check reporting green is the most repeated failure in this repo history, and it is worse
+# than no check at all. Unconfigured is therefore a FAILURE with an instruction, never ok.
+#
+# Supply it either way:
+#   SUBSTRATE_DENYLIST=... bash verify-substrate.sh
+#   or `cp substrate-denylist.example.conf substrate-denylist.conf` and edit it (the .conf
+#   name is gitignored; the .example is committed and holds the shape, never real nouns).
+DENY_FILE="$HERE/substrate-denylist.conf"
+DENY="${SUBSTRATE_DENYLIST:-}"
+[ -n "$DENY" ] || { [ -f "$DENY_FILE" ] && DENY="$(grep -v '^[[:space:]]*#' "$DENY_FILE" | grep -v '^[[:space:]]*$' | head -1)"; }
+
+# Home paths are UNIVERSAL leak shapes, not source-project nouns, so they stay inline and
+# keep working with no configuration at all.
+HOMEPATHS='/home/[a-z]|/Users/[A-Za-z]'
+
+if [ -z "$DENY" ]; then
+  bad "VR2 cannot run: no source-project denylist configured — cp substrate-denylist.example.conf substrate-denylist.conf and edit it (or set SUBSTRATE_DENYLIST)"
+  LEAK="$(grep -rEinl --exclude-dir=__pycache__ --exclude='*.pyc' "$HOMEPATHS" "$DC" 2>/dev/null || true)"
+  [ -z "$LEAK" ] || { bad "home-path leakage found in:"; printf '%s\n' "$LEAK"; }
+else
+  LEAK="$(grep -rEinl --exclude-dir=__pycache__ --exclude='*.pyc' "$DENY|$HOMEPATHS" "$DC" 2>/dev/null || true)"
+  if [ -z "$LEAK" ]; then ok "no leaked tokens/home-paths in dotclaude/"; else bad "leakage found in:"; printf '%s\n' "$LEAK"; fi
+fi
 
 echo "== VR3: contract-check tool is REAL + green + actually enforces =="
 if python3 "$DC/skills/contract-check/check_contract_test.py" >/tmp/_cc.out 2>&1; then

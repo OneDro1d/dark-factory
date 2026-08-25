@@ -4,6 +4,20 @@ Core principles for designing, building, and operating microservices systems.
 
 ---
 
+## Provenance and numbering
+
+This file is the published axiom set: **37 axioms, numbered 1–37**.
+
+They originate in a longer internal numbering in which they occupied positions **18–54**.
+Positions 1–17 are held in an internal knowledge-base document and are not published in
+this repository; the set is renumbered from 1 here rather than shipped with a leading gap.
+
+**Older material cites the original numbers.** To resolve such a citation, subtract 17 —
+*original N* is *axiom N − 17* here, so a reference to "axioms 50–54" means **33–37** below.
+An original number below 18 has no counterpart in this file.
+
+---
+
 ## Query & Consistency
 
 | # | Axiom | Rationale |

@@ -8,7 +8,7 @@ This document is written specifically for AI assistants (Claude Code, GitHub Cop
 
 1. **`CLAUDE.md`** — Project overview, tech stack, dev commands, conventions, and known AI gotchas. Start here.
 2. **`docs/ARCHITECTURE.md`** — System design, component interactions, and key design decisions.
-3. **`.github/CONTRIBUTING.md`** — Branch strategy, review model, and Definition of Done.
+3. **[CONTRIBUTING.md](../CONTRIBUTING.md)** — Branch strategy, review model, and Definition of Done.
 4. **Recent git log** — `git log --oneline -20` shows what has been changing recently.
 
 Do not begin making changes until you have read at least items 1 and 3.
