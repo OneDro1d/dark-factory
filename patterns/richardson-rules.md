@@ -1,38 +1,44 @@
-# PWW / Trilix — Rules of the Road (for Humans + Bots)
+# Rules of the Road (for Humans + Bots)
 
 Generated: 2026-01-05
 
 
-This repo distills Chris Richardson’s *Microservices Patterns* into an agent-friendly rule set, with **minimal** PWW/Trilix additions.
-Richardson remains the baseline; PWW additions are guardrails and enhancements.
+This file distills Chris Richardson’s *Microservices Patterns* into an agent-friendly rule set, with **minimal** house additions.
+Richardson remains the baseline; the house additions are guardrails and enhancements.
 
 
 ## Canonical Axioms
 
-See `_meta/PWW_AXIOMS.md` (source of truth) and `_meta/AXIOM_INDEX.md` (generated index).
+The canonical set is [AXIOMS.md](../skills/microservices-architect/AXIOMS.md) — 37 axioms,
+numbered **1–37**, grouped by section. Its section headings are the index; there is no
+separately generated one.
+
+⚠️ **Numbering.** Older material cites these axioms in a longer internal numbering where
+this set sat at **18–54**. To resolve such a citation, **subtract 17**; a citation below 18
+has no counterpart here. The curated list below uses the canonical 1–37.
 
 ## High-Impact Axioms (curated)
 
-- **22. Public APIs are protocol-adaptive at the edge, wire-native inside.**
-- **28. Nothing unwatched turns itself on.**
-- **32. If customers report it first, we have already failed.**
-- **34. No blame during incident response.**
-- **36. Observability over performance.**
-- **37. If you cannot see it, you cannot trust it.**
-- **38. Siloing / bulkheading is mandatory.**
-- **39. Trust must be explicit, scoped, and observable.**
-- **41. Trust is contextual, not absolute.**
-- **42. Loss of trust is an incident signal.**
-- **44. Trust decisions belong near the resource.**
-- **45. Trust is defined by promises.**
-- **46. Trust decays and revokes for many drivers.**
-- **47. Trust is a first-class participant.**
-- **48. Jurisdiction/context is part of identity and must be evaluated per object/workflow.**
-- **49. Critical workflows require immutable audit trails.**
-- **50. Deterministic provenance is a trust primitive.**
-- **52. All execution occurs under an explicit Runtime Trust Profile (RTP).**
-- **53. RTPs are time-bound, observable, and revocable.**
-- **54. Policy and security changes are applied by updating RTPs, not patching code.**
+- **5. Public APIs are protocol-adaptive at the edge, wire-native inside.**
+- **11. Nothing unwatched turns itself on.**
+- **15. If customers report it first, we have already failed.**
+- **17. No blame during incident response.**
+- **19. Observability over performance.**
+- **20. If you cannot see it, you cannot trust it.**
+- **21. Siloing / bulkheading is mandatory.**
+- **22. Trust must be explicit, scoped, and observable.**
+- **24. Trust is contextual, not absolute.**
+- **25. Loss of trust is an incident signal.**
+- **27. Trust decisions belong near the resource.**
+- **28. Trust is defined by promises.**
+- **29. Trust decays and revokes for many drivers.**
+- **30. Trust is a first-class participant.**
+- **31. Jurisdiction/context is part of identity and must be evaluated per object/workflow.**
+- **32. Critical workflows require immutable audit trails.**
+- **33. Deterministic provenance is a trust primitive.**
+- **35. All execution occurs under an explicit Runtime Trust Profile (RTP).**
+- **36. RTPs are time-bound, observable, and revocable.**
+- **37. Policy and security changes are applied by updating RTPs, not patching code.**
 
 ## Where rules come from (map)
 
@@ -45,15 +51,14 @@ See `_meta/PWW_AXIOMS.md` (source of truth) and `_meta/AXIOM_INDEX.md` (generate
 
 ## Runtime Trust Profile (RTP)
 
-See:
-- `chapters/richardson/ch12/patterns/runtime-trust-profile.md`
-- `_meta/RTP_MINIMAL_SCHEMA_SKETCH.md` (informative, not binding)
+Axioms **35–37** and the RTP component sketch (informative, not binding) live in one place:
+[AXIOMS.md § Runtime Trust Profile](../skills/microservices-architect/AXIOMS.md#runtime-trust-profile-rtp).
 
 
 
 ## Prime Directives (Non‑negotiables)
 
-Ranked (Ryan): 2026-01-05
+Ranked: 2026-01-05
 
 
 These are the rules the team and coding agents must follow by default. Exceptions must be explicit and justified.

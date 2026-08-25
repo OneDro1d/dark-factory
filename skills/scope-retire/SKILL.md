@@ -8,7 +8,7 @@ description: 'Archive a completed or abandoned agent-notepad while keeping its j
 Retiring a notepad means "stop treating this as an active objective" — **not** "delete it".
 The journal (`sessions/*.jsonl`), the handoffs, the memory-index (`wing=<prefix>`) entries,
 and the git remote all stay. Retirement is a reversible status change plus a clean final
-snapshot. See `../../DESIGN.md` (§6 file contracts, §16 acceptance).
+snapshot. See [DESIGN.md](../agent-notepad/DESIGN.md) (§6 file contracts, §16 acceptance).
 
 **Never destructive.** This skill does not `rm` journals, does not empty the memory index,
 does not delete the GitHub repo, and does not force-push over history. If the operator wants
