@@ -66,12 +66,14 @@ The map is the index; the tickets hold the detail; this skill's stages become th
 
 ## Composition with other skills (ordering matters)
 
-1. `loom-recall` — search memory before each non-trivial decision (runs first).
+1. **memory recall** — search memory before each non-trivial decision (runs first). Where the
+   instance binds a recall skill, invoke it **by name**; it is a Tier-2 binding and does not
+   ship here.
 2. `critical-thinking` — verify assumptions before an irreversible action (especially before spending funds / touching shared state).
 3. `df-data-transform-lens` — the frame everything else is expressed in.
 4. the `df-*` stage skills — per the pipeline table.
 5. `df-dispatch-subagents` + `df-adversary-gate` — for parallel work and verification (below).
-6. `work-autonomously` — gates the action: act in dev/non-prod, HARD-STOP at real-world boundaries (below).
+6. [`work-autonomously`](../work-autonomously/SKILL.md) — gates the action: act in dev/non-prod, HARD-STOP at real-world boundaries (below).
 7. `creating-skills` — only if the build produces a new skill.
 
 ## Promise-Theory sub-agent dispatch (parallelism + verification)
@@ -85,7 +87,7 @@ Use `df-dispatch-subagents` **every time** you spawn an agent. The seam is a tru
 
 ## Autonomy + hard stops
 
-Per `work-autonomously`: **default is action in dev/test/local/non-prod; resolve ambiguity via the toolchain (memory → codebase → internet → docs) before asking.**
+Per [`work-autonomously`](../work-autonomously/SKILL.md): **default is action in dev/test/local/non-prod; resolve ambiguity via the toolchain (memory → codebase → internet → docs) before asking.**
 
 HARD-STOP and ask for explicit go-ahead before any irreversible real-world action: prod-DB writes, prod deploys, merging PRs / pushing to a protected branch, outbound email / public posts, customer-visible config, **and any financial transaction or on-chain spend.** A live/burner test with real funds requires explicit, scoped authorization (e.g. "spend from this burner, small amounts") — and even then, run `critical-thinking` preflight checks before the first irreversible call (verify balances, decimals, that you're not clobbering existing state).
 

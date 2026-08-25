@@ -55,11 +55,22 @@ Three things this rule does **not** license.
 confuse. That one governs *dependency* direction — a repo may not reference a skill it does
 not ship. This one governs *placement* — where a thing should live at all. They are
 complements, and neither implies the other: on 2026-08-25 this repo referenced an
-operating-stance skill it does not ship, four times across two files, while `tier-check`
+operating-stance skill it did not ship, four times across two files, while `tier-check`
 printed `PASS`. The references were bare backticked names in prose, and it detects only
 `Skill(<name>)` and the legacy path form — rewriting one of those four into `Skill(...)` made
 the same gate fail on the same line. So a placement mistake is not guaranteed to surface as a
 dependency failure, and a passing `tier-check` is not evidence that placement is right.
+
+Both halves of that example were resolved the same day, and the second half is the one worth
+remembering. The operating stance moved **up**: it is generic method, so it now ships here as
+[`work-autonomously`](skills/work-autonomously/SKILL.md) and the four references resolve. But
+fixing it exposed a **fifth** reference nobody had looked at, on the line directly *above* it
+in the same two lists — step 1 of the engine's own pipeline, naming a memory-recall skill that
+only one org repo ships. (It is not named here, for the same reason it had to come out of the
+lists.) It had been just as invisible, for just as long, and for the same reason: attention
+had been spent on the reference someone happened to notice. **When you find a misplaced
+reference, audit what sits beside it** — enumerate every skill name the repo cites and
+subtract the ones it ships, rather than fixing only the one you were told about.
 
 ## Two rules that are not obvious
 

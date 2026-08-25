@@ -51,11 +51,12 @@ NOT registered in that mode (verified 2026-08-22; the first smoke test hit exact
     ~/.claude/skills/{profile}-dark-factory/SKILL.md
 
 Same fallback for `vinculum-loop`, `handoff`, `df-dispatch-subagents`, `critical-thinking`
-and, where the instance ships one, its operating-stance skill (`work-autonomously` on the
-OneDroid/PWW lane). Reading the file is a first-class route, not a workaround — the
-bindings are the content, not the tool call. `critical-thinking` is on this list because
-§4 requires you to TAKE reversible decisions rather than escalate them: the skill is how
-you earn that, and a skill you cannot load is doctrine you cannot follow.
+and `work-autonomously` — and for any stricter operating stance or memory-recall skill your
+instance binds on top of them, whose names only that instance knows. Reading the file is a
+first-class route, not a workaround — the bindings are the content, not the tool call.
+`critical-thinking` is on this list because §4 requires you to TAKE reversible decisions
+rather than escalate them: the skill is how you earn that, and a skill you cannot load is
+doctrine you cannot follow.
 
 The binding supplies the tracker, the MCP hub, the repo paths, the deploy gate and the
 estate hard-stops. Do not guess any of those. **Never hardcode a repo path**: resolve it
