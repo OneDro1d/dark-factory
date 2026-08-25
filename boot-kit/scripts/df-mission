@@ -178,7 +178,7 @@ cmd_stop() {
 
 cmd_start() {
   local id="${1:?mission id}"; shift
-  local profile="$(resolve_default_profile_value)" interval=0 max_iter=25 max_usd="" channel=""
+  local profile="$(resolve_default_profile_value)" interval=0 max_iter=25 max_usd="" channel="" resume=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --profile)  profile="$2"; shift 2 ;;
@@ -186,6 +186,7 @@ cmd_start() {
       --max-iter) max_iter="$2"; shift 2 ;;
       --max-usd)  max_usd="$2"; shift 2 ;;
       --channel)  channel="$2"; shift 2 ;;
+      --resume)   resume=1; shift ;;
       *) die "unknown arg $1" ;;
     esac
   done
@@ -197,6 +198,45 @@ cmd_start() {
   echo "$profile" > "$d/profile"
   [ -n "$channel" ] && printf '%s\n' "$channel" > "$d/notify-channel"
   [ -s "$d/state" ] || echo CONTINUE > "$d/state"
+
+  # TERMINAL-STATE GUARD. Without this, `start` on a finished mission is a FALSE START: it
+  # printed "started mission ... state CONTINUE", forked a supervisor, and the supervisor
+  # exited after ZERO iterations. df-supervisor.sh seeds CONTINUE only when the state file
+  # is EMPTY, so a BLOCKED file survives and the loop breaks on its first read. Everything
+  # about the output said running. Observed 2026-08-25 on M-T1GEN-20260825, caught only
+  # because a log monitor happened to be armed; otherwise it reads as a healthy mission for
+  # as long as nobody looks.
+  #
+  # Refusing is the whole point. Silently clearing a terminal state would be worse than the
+  # bug: BLOCKED is the one signal that says a human has to decide something, and a tool
+  # that erases it on the next start makes the decision disappear instead of surfacing it.
+  local cur; cur="$(cat "$d/state" 2>/dev/null || echo CONTINUE)"
+  case "$cur" in
+    DONE|BLOCKED|STOP)
+      if [ "$resume" -ne 1 ]; then
+        echo "REFUSING TO START: mission $id is in terminal state $cur." >&2
+        echo >&2
+        case "$cur" in
+          BLOCKED) echo "  BLOCKED means the last iteration needed a human and stopped. Read the newest" >&2
+                   echo "  file in handoffs/ and the tracker for the specific ask before restarting —" >&2
+                   echo "  restarting without resolving it just spends another iteration to re-block." >&2 ;;
+          DONE)    echo "  DONE means the objective was met. Starting again would re-work a closed" >&2
+                   echo "  mission. If there is new scope, frame it as a new mission id." >&2 ;;
+          STOP)    echo "  STOP was set deliberately by \`df-mission stop\`." >&2 ;;
+        esac
+        echo >&2
+        echo "  If the blocker really is resolved:  df-mission start $id --resume [other flags]" >&2
+        echo "  --resume clears the state to CONTINUE and records that it did so." >&2
+        exit 75   # EX_TEMPFAIL: a state a human can clear, not a usage error
+      fi
+      # Resuming is an operator act, so it leaves a trace. A state that changed with no
+      # record of who changed it is indistinguishable from one that was never set.
+      printf '%s  resumed from %s by operator (--resume)\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$cur" >> "$d/supervisor.log"
+      echo CONTINUE > "$d/state"
+      echo "resuming $id from $cur (recorded in supervisor.log)" >&2
+      ;;
+  esac
 
   if [ ! -s "$d/notify-channel" ]; then
     echo "WARNING: no --channel set. DONE/BLOCKED will be recorded locally only," >&2

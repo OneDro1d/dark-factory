@@ -408,11 +408,22 @@ EOF_W
         <(printf '%s\n' "$WAIVED_TOKENS"  | sed '/^$/d' | sort -u))"
 
       # A waiver matching nothing is protecting nothing, and would silently cover a later
-      # arrival of that token. Same rule the Engram-reference suite applies to exclusions.
+      # arrival of that token. Same rule the reference-pointer suite applies to its own exclusions.
       STALE_W="$(comm -13 \
         <(printf '%s\n' "$PUB_MATCHES"   | sed '/^$/d' | sort -u) \
         <(printf '%s\n' "$WAIVED_TOKENS" | sed '/^$/d' | sort -u))"
-      if [ -n "$STALE_W" ]; then
+      # Only report stale waivers when the waiver list is what is DECIDING the verdict.
+      # The warning exists to stop a waiver silently covering a token's later arrival — a
+      # risk that only matters when waivers are the reason this run passes. If unwaived
+      # findings are already failing the gate, the list is noise on top of a failure.
+      #
+      # Scoped after test-p8-reachability.sh caught it: that suite runs this gate against
+      # scratch canary repos using the operator's REAL config, so every real waiver
+      # legitimately matches nothing there and emitted a warning per waiver. The verdict
+      # was still correct (FINDINGS, canary caught) but the extra lines broke the suite's
+      # exact-match assertion. Narrowing the trigger fixes the noise without weakening
+      # either check — the warning still fires in the one case it was written for.
+      if [ -z "$PUB_UNWAIVED" ] && [ -n "$STALE_W" ]; then
         printf '%s\n' "$STALE_W" | while IFS= read -r l; do
           [ -n "$l" ] && warn "P8 waiver '$l' matches nothing — remove it or it will mask a later hit"
         done
