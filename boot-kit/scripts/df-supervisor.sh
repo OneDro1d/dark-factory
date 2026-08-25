@@ -210,6 +210,14 @@ log "supervisor exiting after $i iterations — final state: $final"
 } >> "$MISSION_DIR/notifications.log"
 
 if [ -x "$SCRIPTS/df-notify.sh" ]; then
-  "$SCRIPTS/df-notify.sh" "$MISSION_DIR" "$final" "$i" >>"$LOG" 2>&1 || \
+  if ! "$SCRIPTS/df-notify.sh" "$MISSION_DIR" "$final" "$i" >>"$LOG" 2>&1; then
     log "notify failed — the local record in notifications.log still stands"
+    # Put the failure where the operator actually looks. `df-mission status` reads
+    # notifications.log; the supervisor log is 12 tailed lines nobody greps. Without this
+    # the record says the mission ended and stays silent about nobody having been told,
+    # which is the same shape as the false-done this whole loop exists to prevent.
+    printf '%s  mission=%s  NOTIFY-FAILED  state=%s  channel=%s  (nobody was told — see %s)\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$NAME" "$final" "${CHANNEL:-unset}" "$LOG" \
+      >>"$MISSION_DIR/notifications.log" 2>/dev/null || true
+  fi
 fi

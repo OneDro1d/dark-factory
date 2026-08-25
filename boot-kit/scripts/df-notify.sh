@@ -52,8 +52,21 @@ decide or unblock. A blocked notification without a named ask wastes the interru
 just spent.
 EOF
 
+# BUDGET. 0.50 could not fit the job this prompt asks for, and the failure was silent.
+# The notify child boots an MCP hub to reach a chat tool at all -- on a full hub that is
+# hundreds of tool definitions, ~30k tokens before it has read anything, which on a
+# top-tier model is most of 0.50 on its own. Then it still has to read a handoff and make
+# the call. Observed 2026-08-25: mission M-T1GEN, "Exceeded USD budget (0.5)", so a
+# 9-iteration run that terminated correctly told nobody.
+#
+# This is a runaway backstop, not a cost control -- same doctrine as the worker budget.
+# A notification that does not arrive costs an operator far more than the tokens it saves,
+# because "no news" then reads as "still running". Override per-deployment with
+# DF_NOTIFY_MAX_USD when a hub is unusually large.
+NOTIFY_MAX_USD="${DF_NOTIFY_MAX_USD:-10.00}"
+
 exec claude -p "$PROMPT" \
   --permission-mode bypassPermissions \
   --setting-sources project \
-  --max-budget-usd 0.50 \
+  --max-budget-usd "$NOTIFY_MAX_USD" \
   --output-format text
