@@ -48,7 +48,7 @@ directory in this kit; the generator renames it to `.claude/` on emit.
 | VR | Rule |
 |----|------|
 | VR1 | the required file set is present (agents, context store incl. DATA-FLOW + AGENT-CONTRACTS, hooks, contract-check, commit-sync) |
-| VR2 | the template is **generic** — no source-project leakage (no `tr-*`, `dd-loader`, real `F-00x`/`D-00x`, etc.) |
+| VR2 | the template is **generic** — no source-project leakage. The denylist of source-project nouns is **supplied locally**, never listed here: see `substrate-denylist.example.conf`. Unconfigured, VR2 reports FAIL rather than passing, because a denylist that matches nothing would pass on every substrate forever |
 | VR3 | the `contract-check` tool's own test suite runs **green** (the checker travels intact and runnable) |
 | VR4 | `CLAUDE-stanza.md` contains the read-first protocol and points at the context store |
 | VR5 | `AGENT-CONTRACTS.md` defines the hand-off contracts + pure/effect + the verification rule |
@@ -57,6 +57,18 @@ directory in this kit; the generator renames it to `.claude/` on emit.
 | VR8 | the gate **self-arms** (`ensure-gate.sh` sets `core.hooksPath` with no manual step) AND actually **enforces** — blocks an undocumented structural change, passes a documented one (adversarial git-sandbox test) |
 
 ```bash
+# VR2 needs the source project's own identifiers, and those are exactly the strings that
+# must not sit in a public repo — so they are configured locally, once:
+cp skills/df-context-store/substrate-template/substrate-denylist.example.conf \
+   skills/df-context-store/substrate-template/substrate-denylist.conf
+# ...edit the placeholders, then:
 bash skills/df-context-store/substrate-template/verify-substrate.sh
 ```
+
+Without that file VR2 fails with an instruction instead of passing quietly. That is
+deliberate: this README used to name the source project's real service prefixes and column
+names in the VR2 row above, and `verify-substrate.sh` carried the same list inline — a leak
+detector that spells out the nouns it hunts publishes them itself. The shape lives in the
+committed `.example`; the nouns live in the gitignored `.conf`, exactly as `landmarks.conf`
+and `landmarks.example.conf` split the publish gate's own patterns.
 

@@ -178,6 +178,44 @@ printf '%s' "$OUT" | grep -qi 'EXEMPT.*FIRES\|FIRES.*EXEMPT' \
   && ok "R11 an EXEMPT class that DOES fire is surfaced, not swallowed" \
   || bad "R11 an EXEMPT class that DOES fire is surfaced, not swallowed" "rc=$RC out=$(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
 
+# ── R12  a row with NO specimen must not be swallowed by a COVERED verdict ─────
+# The row prints SPECIMEN-MISSING and then vanishes from the arithmetic: it was excluded
+# from ROWS, so it could not move the denominator, the miss count or the exit code. The
+# real config carried `client name |P1|` with an empty specimen for a day, and the
+# instrument whose entire purpose is to surface an unpatterned class printed
+# `RESULT: COVERED — 9/11 caught` and exited 0 over it. A class nobody probed is an
+# UNKNOWN, and an unknown rendered as a pass is the false-assurance shape this whole
+# suite exists to stop. (Same doctrine as df-preflight: `unknown` is not a fact about
+# the world, and collapsing it into a verdict is how a blind spot gets written down as
+# a clean result.)
+write_reqs 'covered class|P1|zzqxbravo
+unprobed class|P1|' "$D"
+OUT="$(run_req "$D")"; RC=$?
+[ "$RC" -ne 0 ] && ! printf '%s' "$OUT" | grep -q '=== RESULT: COVERED' \
+  && ok "R12 an unprobed class blocks a COVERED verdict and a zero exit" \
+  || bad "R12 an unprobed class blocks a COVERED verdict and a zero exit" "rc=$RC verdict=$(printf '%s' "$OUT" | grep '=== RESULT' | tr -d '\n')"
+
+# ── R13  the unprobed count appears on the VERDICT line, not only in the table ──
+# A per-row note nobody scrolls to is the same defect one indent deeper — the identical
+# lesson gate-selftest learned when `all 7 classes fire` sat above a table showing a sixth
+# of the branches pinned. A reader who reads one line must see that coverage is unknown.
+printf '%s' "$OUT" | grep -E '=== RESULT' | grep -qE 'unprobed|not probed|UNPROBED|INCOMPLETE' \
+  && ok "R13 the verdict line itself names the unprobed class(es)" \
+  || bad "R13 the verdict line itself names the unprobed class(es)" "verdict=$(printf '%s' "$OUT" | grep '=== RESULT' | tr -d '\n')"
+
+# ── R14  an unprobed class is not counted as caught ────────────────────────────
+# The opposite over-correction is just as wrong: adding the row to ROWS without excluding
+# it from COVERED would report it as covered, which is the original bug with extra steps.
+# Assert the NUMBERS, not a string shape. The first draft of this rule grepped for the
+# literal '2/2 caught' and would have passed straight through the over-correction it
+# exists to catch, because that path prints '2/2 probed classes caught' — different words,
+# same defect. One caught class and one unprobed class must report exactly 1 caught out
+# of exactly 1 probed; any other pair means the unprobed row leaked into the denominator.
+R14_NUMS="$(printf '%s' "$OUT" | grep -E '=== RESULT' | grep -oE '[0-9]+/[0-9]+' | head -1)"
+[ "$R14_NUMS" = "1/1" ] \
+  && ok "R14 an unprobed class is not counted among the caught (reported $R14_NUMS)" \
+  || bad "R14 an unprobed class is not counted among the caught" "reported '$R14_NUMS', expected '1/1' — the unprobed row leaked into the denominator"
+
 echo ""
 printf '=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -26,7 +26,8 @@
 #
 # Usage: bash boot-kit/scripts/gate-reqtest.sh [--show]
 #          --show  print specimens unmasked (local operator use only)
-# Exit:  0 = every class caught   1 = at least one MISSED   2 = indeterminate / plumbing
+# Exit:  0 = every class caught   1 = at least one MISSED
+#        2 = indeterminate: plumbing failure, OR a class the policy names was UNPROBED
 set -uo pipefail
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -117,7 +118,7 @@ printf 'control:      gate FIREs on its own P1 canary (%s) — a CLEAN row below
 
 # ── the probes ────────────────────────────────────────────────────────────────
 printf '%-32s %-8s %s\n' "landmark class (from policy)" "expects" "verdict"
-MISSES=0; ROWS=0; EXEMPTS=0; SURPRISES=0
+MISSES=0; ROWS=0; EXEMPTS=0; SURPRISES=0; UNPROBED=0
 while IFS= read -r line; do
   case "$line" in ''|\#*) continue ;; esac
   name="${line%%|*}";  rest="${line#*|}"
@@ -128,7 +129,16 @@ while IFS= read -r line; do
     *\|*) spec="${rest2%%|*}"; reason="${rest2#*|}" ;;
     *)    spec="$rest2";        reason="" ;;
   esac
-  [ -n "$spec" ] || { printf '%-32s %-8s SPECIMEN-MISSING (not probed)\n' "$name" "$expect"; continue; }
+  # A row with no specimen is an UNKNOWN, and an unknown is not a pass. Until 2026-08-25
+  # this `continue` fired BEFORE ROWS was incremented, so the row printed and then left no
+  # trace in the arithmetic — it could not move the denominator, the miss count or the exit
+  # code. The real config carried `client name |P1|` empty, and this instrument, whose one
+  # job is to surface a landmark class nobody wrote a pattern for, printed
+  # `RESULT: COVERED — 9/11 caught` and exited 0 while the client's own name sailed through
+  # the gate. Counted separately from ROWS on purpose: folding it into the denominator
+  # would report it as covered, and folding it into MISSES would claim a finding nobody
+  # measured. Three verdicts, not two — the same rule df-preflight applies to `unknown`.
+  [ -n "$spec" ] || { UNPROBED=$((UNPROBED+1)); printf '%-32s %-8s UNPROBED    no specimen — coverage UNKNOWN\n' "$name" "$expect"; continue; }
   ROWS=$((ROWS+1))
   IFS='|' read -r rc fired <<< "$(plant_and_run "$spec")"
 
@@ -174,7 +184,21 @@ if [ "$SURPRISES" -gt 0 ]; then
   echo "publish risk — it is a claim in the requirement list that the config contradicts."
   echo "Reconcile: widen the reason, narrow the pattern, or drop the exemption."
   [ "$MISSES" -eq 0 ] || printf 'Also: %d of %d classes are NOT caught.\n' "$MISSES" "$ROWS"
+  [ "$UNPROBED" -eq 0 ] || printf 'Also: %d class(es) are UNPROBED — no specimen, coverage unknown.\n' "$UNPROBED"
   exit 1
+fi
+# The unprobed count belongs ON the verdict line. A row in a table above a green bottom
+# line is the defect one indent deeper, and this repo has already learned that lesson once
+# in gate-selftest, where `all 7 classes fire` sat over a table showing a sixth of the
+# branches pinned. A reader who reads one line must see that coverage is UNKNOWN.
+if [ "$MISSES" -eq 0 ] && [ "$UNPROBED" -gt 0 ]; then
+  printf '=== RESULT: INCOMPLETE — %d/%d probed classes caught, but %d class(es) UNPROBED (no specimen) ===\n' \
+    "$COVERED" "$ROWS" "$UNPROBED"
+  echo "A landmark class the policy names and this harness never probed is an UNKNOWN, not"
+  echo "a pass. Supply a real specimen for it in the requirement list, or mark it EXEMPT"
+  echo "with a reason if it is deliberately not patterned. Coverage cannot be reported"
+  echo "until every class the policy names has been measured one way or the other."
+  exit 2
 fi
 if [ "$MISSES" -eq 0 ]; then
   if [ "$EXEMPTS" -gt 0 ]; then
@@ -185,6 +209,9 @@ if [ "$MISSES" -eq 0 ]; then
   exit 0
 fi
 printf '=== RESULT: %d of %d landmark classes are NOT caught — the gate is incomplete ===\n' "$MISSES" "$ROWS"
+# A definite gap outranks an unknown, so MISSES keeps exit 1 — but the unknown must still
+# be reported, or fixing the misses would turn this line green over classes never measured.
+[ "$UNPROBED" -eq 0 ] || printf '(%d further class(es) are UNPROBED — no specimen, coverage unknown.)\n' "$UNPROBED"
 [ "$EXEMPTS" -eq 0 ] || printf '(%d further class(es) are exempt by policy and not counted as gaps.)\n' "$EXEMPTS"
 echo "Add a branch to the matching P*_PATTERN in the landmark config, plus a matching"
 echo "P*_CANARY so gate-selftest proves the new branch fires, then re-run both."

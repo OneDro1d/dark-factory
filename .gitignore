@@ -25,3 +25,7 @@ boot-kit/scripts/landmarks.conf
 # class, so committing it would publish exactly what the gate exists to keep out — the
 # same reason landmarks.conf is ignored. Only the placeholder example is tracked.
 boot-kit/scripts/gate-requirements.conf
+
+# The substrate leak denylist holds the SOURCE PROJECT real identifiers - same rule as
+# landmarks.conf: the real list stays local, the committed script explains the shape.
+skills/df-context-store/substrate-template/substrate-denylist.conf
