@@ -119,5 +119,28 @@ else
   ok "no CLAUDE.md is invented when the template is gone"
 fi
 
+
+# ── the front door ────────────────────────────────────────────────────────────
+# A stranger lands on README.md, not here. An on-ramp the front page does not name is an
+# on-ramp nobody finds, and this is invisible from inside the repo: everyone who already
+# knows the path can reach it. Found by a clean-room clone (ticket 12878505510), which is
+# the only vantage point from which it is visible at all.
+REPO_ROOT="$(cd "$KIT/../.." && pwd)"
+README="$REPO_ROOT/README.md"
+if [ -f "$README" ]; then
+  if grep -q 'START-HERE' "$README"; then
+    ok "README names START-HERE, so the entry point is reachable from the front door"
+  else
+    bad "README does not name START-HERE" "a stranger lands on README and finds no on-ramp"
+  fi
+  if grep -q 'starter-kit' "$README"; then
+    ok "README names starter-kit/, so the directory is discoverable"
+  else
+    bad "README does not name starter-kit/" "the contents table omits the on-ramp entirely"
+  fi
+else
+  bad "README.md not found at $README" "cannot check the front door"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -147,6 +147,37 @@ OUT="$(run_req "$D")"; RC=$?
   && ok "R7 a gate that cannot fire is ERROR (exit 2), not 'everything missed'" \
   || bad "R7 a gate that cannot fire is ERROR (exit 2), not 'everything missed'" "rc=$RC out=$(printf '%s' "$OUT" | tail -3 | tr '\n' ' ')"
 
+# R7 breaks the scratch gate on purpose to prove the ERROR path, and leaves it broken.
+# Without this rebuild the rules below fail with a plumbing ERROR and never reach the
+# code they exist to test — a red for the wrong reason is worth no more than a green for
+# the wrong reason.
+D="$(mk_repo)"
+
+# ── R9  a class marked EXEMPT that does NOT fire is an exemption, not a miss ───
+# A deliberate non-pattern must not be reported as a gap. A tool that calls a decision a
+# defect gets its bottom line ignored, and then the real gaps go with it.
+write_reqs 'policy exempt class|EXEMPT|zzqxnotpatterned|would match our own LICENCE' "$D"
+OUT="$(run_req "$D")"; RC=$?
+[ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'EXEMPT-BY-POLICY' \
+  && ok "R9 an EXEMPT class that does not fire reports EXEMPT-BY-POLICY and exits 0" \
+  || bad "R9 an EXEMPT class that does not fire reports EXEMPT-BY-POLICY and exits 0" "rc=$RC out=$(printf '%s' "$OUT" | tail -3 | tr '\n' ' ')"
+
+# ── R10  the REASON is printed, so the exemption can be argued with ────────────
+# An exemption with no stated reason is indistinguishable from an oversight someone wrote
+# down. The reason is the whole difference between a decision and a gap.
+printf '%s' "$OUT" | grep -q 'would match our own LICENCE' \
+  && ok "R10 the exemption prints its reason" \
+  || bad "R10 the exemption prints its reason" "$(printf '%s' "$OUT" | grep -i exempt | tr '\n' ' ')"
+
+# ── R11  an EXEMPT specimen that DOES fire is reported, not swallowed ──────────
+# The direction that matters. An exemption that absorbs a real firing is a silencer, and
+# this repo has shipped enough checks that reported clean over a live finding.
+write_reqs 'policy exempt but covered|EXEMPT|zzqxbravo|believed unpatterned' "$D"
+OUT="$(run_req "$D")"; RC=$?
+printf '%s' "$OUT" | grep -qi 'EXEMPT.*FIRES\|FIRES.*EXEMPT' \
+  && ok "R11 an EXEMPT class that DOES fire is surfaced, not swallowed" \
+  || bad "R11 an EXEMPT class that DOES fire is surfaced, not swallowed" "rc=$RC out=$(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+
 echo ""
 printf '=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
