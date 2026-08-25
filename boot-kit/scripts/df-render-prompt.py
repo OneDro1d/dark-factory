@@ -22,6 +22,14 @@ MISSION_DIR = os.environ.get("MISSION_DIR") or sys.exit("df-render-prompt: MISSI
 PROFILE = os.environ.get("PROFILE", "default")
 NOTES = (os.environ.get("NOTES") or "").strip()
 
+# The prompt below names `engram_search`. Engram is the memory store the kit documents at
+# starter-kit/instance/AUTHENTICATION.md#engram — the pointer lives here, in a comment, and
+# deliberately NOT inside TEMPLATE. Anything inside is rendered into every headless
+# iteration's prompt, so putting it there would pay tokens on every run to tell an agent
+# something the person reading this file is the one who needs. A bare lowercase `engram` is
+# the worst form of the reference: a stranger cannot tell a product they are missing from a
+# generic word for the memory store, which is why every file naming it carries this link
+# (12878485084, enforced by boot-kit/scripts/tests/test-engram-references.sh).
 TEMPLATE = """You are one iteration of an autonomous mission. You were started by a
 supervisor loop, you have a FRESH context window, and you will be replaced by another
 iteration when you exit. Do one bounded unit of work well; do not try to finish the
