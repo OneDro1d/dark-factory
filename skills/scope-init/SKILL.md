@@ -10,7 +10,7 @@ A **notepad** is one standalone git repo per objective, named `<group>-<objectiv
 hyphen (`proj-basket-tokens` → group `proj`). Code lives in *separate* repos referenced
 by `repos.manifest.json` and driven via absolute paths, never by `cd`-ing. This skill
 creates that notepad or refreshes an existing one. See the design in
-`../../DESIGN.md` (§5 topology, §6 file contracts, §7 hooks, §8 cross-repo bridge).
+[DESIGN.md](../agent-notepad/DESIGN.md) (§5 topology, §6 file contracts, §7 hooks, §8 cross-repo bridge).
 
 **Consent is load-bearing.** Two actions in this procedure touch the outside world and
 MUST NOT run without an explicit yes from the operator, each time:

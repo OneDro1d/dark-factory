@@ -12,9 +12,30 @@ Usage:
 
 Exit 0 = no unignored broken links. Exit 1 = broken links found.
 
-Scope: relative markdown links only. http(s)/mailto/anchor-only targets are not
-checked (that needs the network); fenced code blocks are skipped, because docs
-that teach markdown are full of illustrative links that were never meant to resolve.
+Scope, two classes:
+
+  IN-REPO / ESCAPES   relative markdown links — `[text](target)`.
+  PROSE-REF           a reference written as a backticked path — `_meta/AXIOMS.md` —
+                      which is how four dangling references shipped on public main
+                      while this checker printed PASS. It was blind to the FORM, not
+                      ignorant of the FACT: rewriting one of them as a markdown link,
+                      same target, turned the same run FAIL.
+
+http(s)/mailto/anchor-only targets are not checked (that needs the network); fenced
+code blocks are skipped for BOTH classes, because docs that teach markdown are full of
+illustrative links that were never meant to resolve.
+
+PROSE-REF is deliberately narrow, because the opposite failure is just as real. Every
+backticked `*.md` token is 396 tokens here and 213 of them do not resolve — almost all
+correctly, since `NOTES.md` names a KIND of file the reader will create, not a link. A
+gate that fires 200 times is one people learn to override. So a PROSE-REF must carry a
+DIRECTORY component, and it resolves against the file's own directory AND every ancestor
+up to the root — a doc inside a template addresses its siblings from the template root,
+not from itself. That narrows 213 to 15.
+
+Neither class can tell a MENTION from a USE, and no syntactic rule can: `docs/x.md` may
+be a file this repo should contain or a path the reader is told to CREATE downstream.
+That judgement is a human one, so it is recorded — with a reason — in `.linkcheckignore`.
 
 Suppressing a known-broken link — `.linkcheckignore` at a root:
 
@@ -32,9 +53,47 @@ import re
 import sys
 
 LINK = re.compile(r'\]\(([^)\s]+?)(?:\s+"[^"]*")?\)')
+CODE = re.compile(r'`([^`\n]+?)`')
 FENCE = re.compile(r'^\s*(```|~~~)')
 SKIP_PREFIX = ('http://', 'https://', 'mailto:', '#', 'data:', 'ftp://')
 IGNORE_FILE = '.linkcheckignore'
+# A backticked token is only a candidate reference if it looks like a PATH, not prose.
+PROSE_REJECT = set(' \t|<>*"\'`')
+
+
+def prose_candidate(token):
+    """True if a backticked token is narrow enough to be treated as a reference.
+
+    Requires a directory component on purpose: a bare `NOTES.md` names a kind of file,
+    not a location, and treating those as links produces ~200 findings of which almost
+    none are defects.
+    """
+    if not token.endswith('.md') or '/' not in token:
+        return False
+    if any(c in token for c in PROSE_REJECT):
+        return False
+    return not token.startswith(SKIP_PREFIX) and not token.startswith(('/', '~'))
+
+
+def resolves(md, root, clean):
+    """True if `clean` names an existing file INSIDE root, from the doc's dir or any ancestor.
+
+    A candidate that resolves to something outside the repo is deliberately NOT a
+    resolution: that is the `../../DESIGN.md` shape which finds a sibling checkout on the
+    machine that wrote it and nothing anywhere else.
+    """
+    base = md.parent
+    while True:
+        cand = (base / clean).resolve()
+        if cand.exists():
+            try:
+                cand.relative_to(root)
+                return True
+            except ValueError:
+                pass          # resolves, but outside the repo — not a resolution
+        if base == root:
+            return False
+        base = base.parent
 
 
 def load_ignores(root):
@@ -99,6 +158,15 @@ def scan(root):
                 except ValueError:
                     kind = 'ESCAPES'
                 yield relfile, lineno, target, kind, matches(rules, relfile, target)
+            # Second pass: references written as backticked prose rather than as links.
+            for m in CODE.finditer(line):
+                target = m.group(1).strip()
+                if not prose_candidate(target):
+                    continue
+                clean = target.split('#')[0]
+                if resolves(md, root, clean):
+                    continue
+                yield relfile, lineno, target, 'PROSE-REF', matches(rules, relfile, target)
 
 
 def main(argv):
@@ -115,14 +183,15 @@ def main(argv):
             (ignored if reason else broken).append(row)
 
     if list_ignored:
-        print('suppressed by %s: %d' % (IGNORE_FILE, len(ignored)))
+        print('suppressed by %s: %d  (each reason says DEBT or DOWNSTREAM)'
+              % (IGNORE_FILE, len(ignored)))
         for root, relfile, lineno, target, kind, reason in ignored:
             print('  %s:%d  %s  [%s]  # %s' % (relfile, lineno, target, kind, reason))
         return 0
 
     # Never report a clean bill without also reporting what was suppressed to get it.
     if ignored:
-        print('note: %d known-broken link(s) suppressed by %s '
+        print('note: %d reference(s) suppressed by %s — debt or downstream '
               '(run --list-ignored to see them and why)' % (len(ignored), IGNORE_FILE))
 
     if not broken:
@@ -130,8 +199,9 @@ def main(argv):
         return 0
 
     escapes = [b for b in broken if b[4] == 'ESCAPES']
-    print('FAIL  link-check: %d broken relative link(s), %d leaving the repo'
-          % (len(broken), len(escapes)))
+    prose = [b for b in broken if b[4] == 'PROSE-REF']
+    print('FAIL  link-check: %d broken reference(s), %d leaving the repo, %d written as prose'
+          % (len(broken), len(escapes), len(prose)))
     last = None
     for root, relfile, lineno, target, kind, _ in broken:
         if relfile != last:
@@ -140,6 +210,11 @@ def main(argv):
         print('    :%-5d %-8s %s' % (lineno, kind, target))
     print('\nA link that leaves the repo is the dangerous kind: it can resolve on the')
     print('machine that wrote it and nowhere else. Prefer invoking a skill by name.')
+    if prose:
+        print('A PROSE-REF is a path written as `like/this.md` instead of as a link. If it')
+        print('points at a file this repo should contain, fix the path and make it a real')
+        print('link so it stays checked. If it points at something the READER creates')
+        print('downstream, suppress it in %s with that as the reason.' % IGNORE_FILE)
     return 1
 
 

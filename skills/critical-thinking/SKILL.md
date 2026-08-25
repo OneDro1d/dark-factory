@@ -1,6 +1,6 @@
 ---
 name: critical-thinking
-description: Proactively challenge implementation plans, architecture decisions, and design assumptions. Use when reviewing plans, designs, or technical decisions. Verifies claims via web search, cross-references documentation, identifies risks and gaps, and surfaces hidden assumptions. Activates automatically when evaluating technical proposals.
+description: Proactively challenge implementation plans, architecture decisions, and design assumptions. Use when reviewing plans, designs, or technical decisions. Verifies claims via web search, cross-references documentation, identifies risks and gaps, and surfaces hidden assumptions. Activates automatically when evaluating technical proposals. Also the escalation gate — the moment your instinct is to ask the operator, run this skill on the most capable model available and decide whether the question is really theirs.
 ---
 
 # Critical Thinking
@@ -58,6 +58,61 @@ This skill activates when encountering:
 - Assessing technology choices
 - Analyzing performance claims
 - Reviewing security approaches
+
+## The escalation gate runs on the most capable model
+
+Everything else is right-sized. This is the one place where model choice is not a cost
+decision.
+
+**The trigger is precise: the moment your instinct is to ask the operator.** Stop there and
+run that instinct through this skill, on the most capable model available to you —
+
+> *What would the best decision be here, and do I actually need the human to answer this?*
+
+Deciding whether to spend the operator's attention **is** the high-value judgment. Attention
+is the one non-replenishable input in an autonomous run: tokens can be bought, and a wrong
+reversible call can be re-made, but an operator interrupted for a question you could have
+answered yourself does not get that interruption back. So the spend is justified *there*,
+and it is justified nowhere else by this rule — outside the trigger, the model tiering in
+your lane's binding stands. Bounded work against a written spec is decided by a test, not by
+a bigger model.
+
+### Verify which model is most capable; never trust a name written in a file
+
+Do not hardcode the answer here, and do not trust one you find hardcoded elsewhere. Model
+line-ups change on a far shorter timescale than a doctrine file does, so a name committed
+today is a decaying fact that reads like a constant. Resolve it at the time, from the
+running environment.
+
+This repo has already been bitten by that exact shape: `hooks/context-budget.py` records how
+a bare lookup table of model ids silently mis-sized a session whose id was absent from it,
+then reported the arithmetically impossible result as a measurement. A model name written
+into prose is that same table with one entry.
+
+Capability and cost are separate axes. The most capable tier is normally also the most
+expensive, which is precisely why this is a **trigger** and not a default.
+
+### The pass may resolve ambiguity. It may never dissolve a hard stop.
+
+These are different objects, and collapsing them is the failure this guard exists to catch.
+
+- **Ambiguity is missing information you can go and get.** A more capable pass over the same
+  evidence may legitimately turn an **A** into a **B** — it found the answer instead of
+  asking for it. That is the gate working as intended.
+- **A hard stop is categorical.** It survives any amount of thinking. *"I reasoned carefully
+  and concluded I may proceed"* is not a resolved ambiguity; it is a stop that was argued
+  away. A more capable model argues *more* persuasively for a wrong conclusion, not less — so
+  a smooth chain of reasoning toward crossing a stop is evidence against itself, not for it.
+
+Work that is money-critical, on a core path, or being decided at the far end of a long
+session stays an **A** however the pass comes out.
+
+When the pass does convert an **A** into a **B**, log it where the decision is auditable:
+what was ambiguous, what resolved it, and what you decided. An unlogged conversion is
+indistinguishable from never having escalated at all.
+
+> **A** = hard blocker → escalate · **B** = reversible → decide and log. Defined in
+> `Skill(vinculum-loop)`.
 
 ## Critical Questions by Domain
 
