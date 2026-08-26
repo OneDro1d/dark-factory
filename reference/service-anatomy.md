@@ -123,6 +123,8 @@ Config topology:
 
 - [`8-implementation-patterns.md`](8-implementation-patterns.md) — the build defaults these
   components sit inside.
+- [`message-driven-service-patterns.md`](message-driven-service-patterns.md) — the state
+  rule that makes the config-at-startup and graceful-shutdown sections here sufficient.
 - [`observability-standard.md`](observability-standard.md) — emission is here, the **surface**
   built on top of it is there.
 - [`data-transform-model.md`](data-transform-model.md) — a service is a unit: its edges are
