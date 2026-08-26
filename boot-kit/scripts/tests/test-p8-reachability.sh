@@ -35,6 +35,9 @@ CANARY_TEXT="${P1_CANARY:-}"
 [ -n "$CANARY_TEXT" ] || { echo "P1_CANARY unset in $LANDMARKS — cannot prove P8 fires"; exit 2; }
 
 FAIL=0
+# A tally, distinct from the FAIL flag: the contract needs how many classes were
+# actually probed, and the "4/4" in the summary below is a literal, not a measurement.
+CHECKS=0
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/p8test.XXXXXX")"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -97,6 +100,7 @@ check() {  # check <kind> <expected-p8-verdict-regex> <expected-overall>
   p8="$(printf '%s\n' "$out" | grep -E '^(PASS|FAIL|WARN) +P8 ' | head -3 | tr '\n' ';')"
   result="$(printf '%s\n' "$out" | grep -E '^=== RESULT:' || true)"
   if printf '%s' "$p8" | grep -qE "$want" && printf '%s' "$result" | grep -q "$want_result"; then
+    CHECKS=$((CHECKS + 1))
     printf 'ok    %-11s %s\n' "$kind" "$p8"
   else
     printf 'FAIL  %-11s got: %s | %s\n' "$kind" "$p8" "$result"
@@ -122,4 +126,9 @@ if [ "$FAIL" -eq 0 ]; then
 else
   echo "=== P8 REACHABILITY TEST FAILED — do NOT trust P8's verdict ==="
 fi
+
+# The assertion-count contract read by run-tests.sh. Exit status alone cannot tell
+# "asserted every one of these" from "asserted nothing" — both exit 0 — so the count
+# is DECLARED here rather than parsed out of the summary line above it.
+echo "ASSERTIONS: $CHECKS"
 exit "$FAIL"

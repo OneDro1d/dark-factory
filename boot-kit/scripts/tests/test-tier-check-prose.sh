@@ -176,4 +176,9 @@ if [ "$FAIL" = 0 ]; then
 else
   echo "RESULT: FAIL — $PASSED/$CASES cases behave"
 fi
+
+# The assertion-count contract read by run-tests.sh. Exit status alone cannot tell
+# "asserted every one of these" from "asserted nothing" — both exit 0 — so the count
+# is DECLARED here rather than parsed out of the summary line above it.
+echo "ASSERTIONS: $((PASSED + FAIL))"
 exit "$FAIL"
