@@ -48,7 +48,7 @@ Deciding whether to spend the operator's attention IS the high-value judgment, b
 attention is the only non-replenishable input. The tokens are worth it at that gate and
 nowhere else — outside this trigger, right-size the model normally.
 
-A question whose answer is obtainable — Engram, the codebase, the internet, the docs — was
+A question whose answer is obtainable — memory, the codebase, the internet, the docs — was
 never the operator's. Resolve it, decide, and log what you decided.
 
 **These are not questions. They are stalls wearing a question mark:**
