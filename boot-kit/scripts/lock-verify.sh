@@ -46,6 +46,34 @@ command -v jq >/dev/null || { echo "FATAL: jq required"; exit 1; }
 
 ROOT="$(cd "$(dirname "$LOCK")" && pwd)"
 VENDOR="$ROOT/$(jq -r '.vendorDir // "vendor"' "$LOCK")"
+
+# `local:` is relative to the REPO, never to the lockfile — and those are the same
+# directory only for a ROOT lockfile, which is why this went unseen. Name an instance
+# lockfile, which is the whole point of --lock, and they diverge.
+#
+# All four installers in the estate agree, checked rather than assumed:
+#   loom-storage/install.sh:198           local:*) "$(pwd)/..."   pwd = the repo root
+#   loom_storage-ESO/install.sh:148       local:*) "$(pwd)/..."   pwd = the repo root
+#   tier2-org/install.sh:142              local:*) "$ROOT/..."    ROOT = the repo root
+#   dark-factory-onedroid/install.sh:142  local:*) "$ROOT/..."    ROOT = the repo root
+#
+# Resolving it here against the lockfile's directory made L5 print DRIFT over a correct
+# install on both AWS/ESO Coder workspaces, 2026-08-26 — the safe-looking half of the same
+# pair as the `--lock=` defect, which printed PASS about the wrong machine. A false DRIFT
+# hides nothing, but it empties the one verdict that is supposed to mean "this instance
+# is right" on every instance that uses the convention --lock exists to serve.
+#
+# The marker is `install.sh`, because that IS the file whose resolution rule this mirrors:
+# every Tier-3 installer cds to its own directory, so `$(pwd)` is the directory holding it.
+# Derived structurally, not asked of git — a lockfile does not require a checkout.
+# VENDOR is deliberately NOT moved: each instance directory carries a committed `vendor`
+# symlink back to the repo-root cache, so the vendor base is per-instance by design.
+REPO="$ROOT"
+_d="$ROOT"
+while [ "$_d" != "/" ] && [ -n "$_d" ]; do
+  [ -f "$_d/install.sh" ] && { REPO="$_d"; break; }
+  _d="$(dirname "$_d")"
+done
 LIVE="${LOOM_LIVE:-$HOME/.claude}"
 DRIFT=0
 pass() { printf 'PASS  %s\n' "$1"; }
@@ -161,9 +189,14 @@ fi
 # day one instance silently starts running another's older skills.
 #
 # So resolve the link and compare it with what THIS lockfile declares as the source.
-# Resolution mirrors the installer's, deliberately -- `local:` inside the instance,
-# anything else under vendorDir -- because two tools disagreeing about what a source string
-# means is how this class of defect arrives in the first place.
+# Resolution mirrors the installer's, deliberately -- `local:` against the REPO (see REPO
+# above), anything else under vendorDir -- because two tools disagreeing about what a
+# source string means is how this class of defect arrives in the first place.
+#
+# CORRECTED 2026-08-26. This comment used to say `local:` resolved "inside the instance",
+# and the code below did that. No installer does. The comment asserted an agreement that
+# did not hold, which is the more expensive half: it told the next reader the question had
+# been settled.
 phys() {                       # physical path of $1, symlinks resolved, or empty
   [ -e "$1" ] || return 1
   if [ -d "$1" ]; then (cd "$1" 2>/dev/null && pwd -P); else
@@ -185,7 +218,7 @@ while read -r s; do
   # No source is L7's finding, not L5's. Reporting it twice trains you to read neither.
   [ -n "$src" ] || continue
   case "$src" in
-    local:*)    want="$ROOT/${src#local:}" ;;
+    local:*)    want="$REPO/${src#local:}" ;;
     upstream:*) want="$VENDOR/${src#upstream:}" ;;
     *)          want="$VENDOR/$src" ;;
   esac
