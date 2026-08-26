@@ -73,8 +73,9 @@ Deciding whether to spend the operator's attention **is** the high-value judgmen
 is the one non-replenishable input in an autonomous run: tokens can be bought, and a wrong
 reversible call can be re-made, but an operator interrupted for a question you could have
 answered yourself does not get that interruption back. So the spend is justified *there*,
-and it is justified nowhere else by this rule — outside the trigger, the model tiering in
-your lane's binding stands. Bounded work against a written spec is decided by a test, not by
+and it is justified nowhere else by this rule — outside the trigger, the ordinary tiering
+stands: the default ladder in `Skill(df-dispatch-subagents)`, or your lane's binding where
+it names one. Bounded work against a written spec is decided by a test, not by
 a bigger model.
 
 ### Verify which model is most capable; never trust a name written in a file
