@@ -135,6 +135,33 @@ The adversary pass reviews the architecture against this list and produces a Pri
 Audit table — one row per directive, each row citing where it is honoured or why it is
 deviated. See `Skill(df-adversary-gate)`.
 
+## The name, and the test for a real audit
+
+"Prime Directives" names **this** list — the ten above. The name travels further than the
+list does, and an organisation layer that writes its own ten under the same heading produces
+a document that resolves for every reader and means something different to each of them.
+Nothing dangles, so nothing warns you. Two rules keep that from happening.
+
+**A layer's own ten are not Prime Directives.** An organisation layer that codifies its own
+build constraints — its transport, its deployment target, where its secrets live — should
+name them for what they are (*build rules*, *platform constraints*) and link up to this file
+for the directives. Qualifying the name with the layer is not enough:
+`"<Layer> Prime Directives"` reads as **this list, applied there**, which is precisely
+what it is not.
+
+**A Prime Directive Audit is an audit of THIS list.** Before trusting a table headed
+*Prime Directive Audit* — or *applied vs skipped*, or *compliance* — check its rows against
+the ten above **by content, not by count**. Ten rows is the shape of a real audit and also
+the shape of any other list that happens to have ten entries. A table whose rows name
+implementation patterns (a gateway, a saga, an idempotent handler) rather than governing
+principles is a **patterns audit** wearing this file's name — and the directive audit it
+appears to be has never been performed.
+
+Both failures are silent by construction: the reader sees a completed audit and stops
+looking. A citation from outside this file must say **which** ten it means:
+`Prime Directives 5, 9, 10` resolves, a bare `#5` resolves against whichever ten the reader
+has to hand, and a number past ten resolves against nothing at all.
+
 ## See also
 
 - [`service-anatomy.md`](service-anatomy.md) — the per-service components Directives 1, 8 and
