@@ -37,7 +37,7 @@ jobs:
 
       - name: Test suites — EVERY suite in the repo, discovered by existence
         # This step used to name ONE suite (`tests/test-p8-reachability.sh`). The repo
-        # ships 23 across four directories, so 22 of them ran only when a human typed the
+        # ships two dozen across four directories, so all but that one ran only when a human typed the
         # path — correctness maintained by memory, decaying silently, green-looking
         # because absence has no signal. `run-tests.sh` globs instead, so a suite is
         # enrolled by being COMMITTED rather than by someone remembering to edit this
@@ -48,7 +48,7 @@ jobs:
         # `test-gate-selftest.sh` (20s) and `test-source-resolution.sh` (10s). Well
         # inside the range where a required check does not get bypassed for being slow.
         #
-        # P8 reachability is one of the 23 and still runs: it plants a committed canary
+        # P8 reachability is one of them and still runs: it plants a committed canary
         # per class in a scratch repo under TMPDIR, never in this checkout, because a
         # test that proved P8 by committing a landmark here would create the exact
         # condition P8 exists to detect.

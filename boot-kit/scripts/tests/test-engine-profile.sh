@@ -130,4 +130,9 @@ esac
 
 echo
 echo "$PASS passed, $FAIL failed"
+
+# The assertion-count contract read by run-tests.sh. Exit status alone cannot tell
+# "asserted every one of these" from "asserted nothing" — both exit 0 — so the count
+# is DECLARED here rather than parsed out of the summary line above it.
+echo "ASSERTIONS: $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]

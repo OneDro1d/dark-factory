@@ -251,4 +251,9 @@ if [ -n "$(anchors "$TMP/anchor.md")" ]; then ok "the anchor check fires on a da
 else bad "the anchor check fires on a dangling anchor" "passed a link to a heading that does not exist"; fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+
+# The assertion-count contract read by run-tests.sh. Exit status alone cannot tell
+# "asserted every one of these" from "asserted nothing" — both exit 0 — so the count
+# is DECLARED here rather than parsed out of the summary line above it.
+echo "ASSERTIONS: $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -271,4 +271,9 @@ DIRTY="$(git -C "$D" status --porcelain --untracked-files=all | grep -v 'landmar
 
 echo ""
 printf '=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
+
+# The assertion-count contract read by run-tests.sh. Exit status alone cannot tell
+# "asserted every one of these" from "asserted nothing" — both exit 0 — so the count
+# is DECLARED here rather than parsed out of the summary line above it.
+echo "ASSERTIONS: $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1

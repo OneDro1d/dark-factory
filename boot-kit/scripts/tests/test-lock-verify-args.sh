@@ -136,4 +136,9 @@ absent "A8b --lock= with no value does not verify anything" "[L1]" "$OUT"
 
 echo ""
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
+
+# The assertion-count contract read by run-tests.sh. Exit status alone cannot tell
+# "asserted every one of these" from "asserted nothing" — both exit 0 — so the count
+# is DECLARED here rather than parsed out of the summary line above it.
+echo "ASSERTIONS: $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1

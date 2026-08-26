@@ -228,4 +228,9 @@ if grep -q 'Read AUTHENTICATION.md' "$KIT/install.sh"; then ok "install.sh still
 else bad "install.sh still points the reader at it"; fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+
+# The assertion-count contract read by run-tests.sh. Exit status alone cannot tell
+# "asserted every one of these" from "asserted nothing" — both exit 0 — so the count
+# is DECLARED here rather than parsed out of the summary line above it.
+echo "ASSERTIONS: $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1
