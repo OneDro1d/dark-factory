@@ -3,13 +3,22 @@
 #
 # THE DEFECT, measured 2026-08-26 on two live AWS/ESO Coder workspaces. `install.sh
 # --lock=instances/<name>/loom.lock.json` completed correctly: it linked
-# ~/.claude/skills/loom-recall at <repo>/skills/loom-recall, which is where the file is
-# and where every installer in the estate resolves `local:skills/loom-recall` to. The
-# verifier that install.sh then runs reported:
+# each `local:`-sourced skill at <repo>/skills/<name>, which is where those files are and
+# where every installer in the estate resolves `local:skills/<name>` to — `readlink` on the
+# machine confirms it. The verifier that install.sh then runs reported:
 #
 #   DRIFT L5 installed but pointing OUTSIDE this instance:
-#     loom-recall -> declared source does not exist:
-#       <repo>/instances/coder-eso-aws--loom/skills/loom-recall
+#     <skill> -> declared source does not exist:
+#       <repo>/instances/coder-eso-aws--loom/skills/<skill>
+#     another instance sharing this LOOM_LIVE installed over these links.
+#
+# The remedy it printed was wrong too: nothing had installed over anything.
+#
+# ⚠️ The two skills are named in the ticket, not here. They are that lane's own `local:`
+# content, and Tier 1 does not carry a lane's skill names — a rule this repo enforces over
+# its own tracked tree (test-stance-skill-tiering.sh R3), and which caught THIS FILE the
+# moment it was committed. The defect is about resolution, so the fixture below uses a
+# neutral `alpha` and loses nothing by it.
 #
 # lock-verify sets ROOT to the LOCKFILE'S OWN DIRECTORY (line 47) and resolves `local:`
 # against it. For the root lockfile that IS the repo root and the two agree, which is why
