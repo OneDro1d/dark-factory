@@ -159,6 +159,20 @@ Every design MUST satisfy these non-negotiables:
 - [ ] Network partition handling
 - [ ] Resource exhaustion handling
 
+### Test Infrastructure
+
+*What must exist for the tiers above to be runnable at all — integration, E2E and operational
+only. Unit tests are held to the opposite bar (no network, no shared state, works on any
+machine); see [`../test-quality-gatekeeper/CHECKLIST.md`](../test-quality-gatekeeper/CHECKLIST.md).
+Applying either bar to the other tier is how a suite ends up both slow and unreliable.*
+
+- [ ] Every tier runs in the pipeline, not only on a developer machine
+- [ ] The dependencies the integration tier needs — datastore, broker, external stubs — are
+      stood up by the harness, never assumed already present
+- [ ] Test configuration is supplied by the same mechanism as runtime configuration
+- [ ] Fixture setup and teardown are automated and leave no state behind
+- [ ] Coverage is reported per run, as a number the consuming gate can read
+
 ---
 
 ## Implementation Plan Checklist
