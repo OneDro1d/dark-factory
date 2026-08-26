@@ -34,7 +34,9 @@ response.body(receipt)
 **Apply at SA:** for each external-facing endpoint, decide whether the caller genuinely needs
 a synchronous answer. If not, return 202 + correlation id and process asynchronously. Note
 what 202 promises: *accepted*, not *succeeded* — the correlation id is how the caller finds
-out which.
+out which. If the answer is yes, the reply still goes over the bus — see
+[`message-driven-service-patterns.md`](message-driven-service-patterns.md) Pattern B, which
+is the sanctioned way to do it and names what to count.
 
 ## Pattern 3: Message Bus Only Between Services
 
@@ -50,6 +52,8 @@ outQ.publish(encode(schema, payload))
 **Apply at SA:** every inter-service call is a message unless an ADR justifies otherwise.
 HTTP at the edge only. Record the sync-vs-async map explicitly, so the exceptions are
 countable.
+For how that one shared place is allowed to change once consumers depend on it, see
+[`message-driven-service-patterns.md`](message-driven-service-patterns.md) Pattern A.
 
 ## Pattern 4: Config Over Code
 
@@ -127,6 +131,8 @@ func init() {
 **Apply at SA:** do not redesign bootstrap per service. The Service Catalogue assumes this
 pattern; per-service deviation needs an ADR. The payoff is not typing saved — it is that
 every service fails in the same recognisable way.
+Cloning only scales while instances are interchangeable — the precondition is
+[`message-driven-service-patterns.md`](message-driven-service-patterns.md) Pattern C.
 
 ## Pattern 8: At-Least-Once with Dead-Lettering
 
@@ -157,6 +163,9 @@ The SA should not produce architectures matching these:
 ## See also
 
 - [`service-anatomy.md`](service-anatomy.md) — what every service must include.
+- [`message-driven-service-patterns.md`](message-driven-service-patterns.md) — three
+  patterns that complete these eight: contract evolution, correlated request/response, and
+  where a service's state lives.
 - [`10-prime-directives.md`](10-prime-directives.md) — the principles these patterns implement.
 - [`data-transform-model.md`](data-transform-model.md) — the idioms here implement `pure` and
   `effect` transforms and reconciliation.
