@@ -34,6 +34,13 @@ the open internet, or in a document the task already cites. Spend it when the ne
 would change real-world state in a way that matters — or when the toolchain genuinely has
 no answer.
 
+The cost runs in both directions, and only one direction is visible. Silence is also a
+check-in: an agent that stops with authorised work still queued has handed back a decision
+that was already delegated, and the operator must now spend attention discovering that
+nothing is happening. Over-asking and stalling are the same attention failure pointed
+opposite ways. This stance forbids both — and the stops below are what make the forbidding
+of the second one safe.
+
 ## Question-resolution order
 
 When a question, ambiguity or "I'm not sure" arises during work, work down this order. The
@@ -249,6 +256,14 @@ because absence has no shared path.
 ## Failure modes to avoid
 
 - **Asking too often.** The toolchain usually has the answer. Search first.
+- **Stalling on work you are already authorised to do.** After a recalibration — a
+  correction, an operator note, a hard stop you just respected — check that same turn
+  whether autonomous work is still queued, and if it is, do it now. This is not the same
+  defect as *overcautious paralysis* below: there you have a question and spend attention
+  asking it; here there is no question at all, only an unclaimed next action and a loop
+  waiting to be told what it already knows. Stalling is the same attention failure as
+  over-asking, pointing the other way, and it is the more expensive of the two because
+  nobody can see it. The queue is only empty once you have looked at it.
 - **Asking too vaguely to be actionable.** "Should I proceed?" without context is not an
   ask, it is a poke. The format above exists for that reason.
 - **Treating "blocked" as terminal.** When the reply arrives, resume from exactly where the
