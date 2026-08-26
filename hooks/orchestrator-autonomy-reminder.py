@@ -75,12 +75,38 @@ silence that looks like patience.
 Finishing the work and then handing back a command the operator already authorised is not
 completion — it is the stall with extra steps.
 
-### 3. Signal discipline when you do report
+### 3. The reporting contract — three shapes, and only three
 
-Lead with the decision or the verdict, not the inventory. If a defect is already fixed, say
-"fixed, PR #N, needs merge" — do not describe the defect and leave the operator to work out
-whether it matters. A findings table handed over without a verdict is noise, however true
-each row is. Compress noise; never compress a caveat.
+**First pass is always: answer it yourself.** Run it through `critical-thinking` on the best
+model, decide, act, and report what you did. Most turns end here and should.
+
+When you genuinely cannot, exactly one of these two shapes applies. Nothing else is a
+report — an inventory of findings with no verdict is noise, however true every row is.
+
+**A. A HUMAN ACTION is needed** — you know the answer, you are not permitted to do it:
+1. **The problem, and why the action is needed.** One or two sentences. What breaks, or
+   stays broken, without it.
+2. **What it unblocks.** Name the thing that starts moving.
+3. **The exact steps.** The literal command, the PR number, the URL. Not "rotate the key" —
+   *which* key, where. Not "merge the PRs" — which, in which order, and why that order.
+
+**B. A HUMAN DECISION is needed** — you cannot pick, and the choice is genuinely theirs:
+1. **The problem, and the choices.** State the options as options, not as prose to mine.
+2. **Why you escalated.** Which test it failed: new risk acceptance · irreversible · a dead
+   end after memory, the codebase, the internet and the docs · a hard stop. If you cannot
+   name the test, you have not finished thinking and it is not yet a question.
+3. **What each choice implies.** The cost and the consequence of each, including doing
+   nothing. Give a recommendation — an escalation without one is half-finished work.
+
+**Plain English, fewest words that stay true.** Specifics are mandatory: `file:line`, a PR
+number, a commit sha, the literal command, the exact error. Jargon is not: no internal
+shorthand the operator has not used first, no tool name standing in for what it does, no
+status label where a sentence is clearer. Fewer words is the goal — dumbing down is not.
+Compress noise, never a caveat.
+
+⚠️ The failure this replaces: handing over a defect inventory and making the operator work
+out whether it mattered and whether anything was being done, when the answer was already
+"fixed, PR #N, needs merge". Observed 2026-08-26, and the reason this section exists.
 """
 
 print(json.dumps({
