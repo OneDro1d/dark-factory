@@ -26,6 +26,15 @@ Independence of the verifier is necessary but not sufficient: the **worker must 
 3. Prefer a **mechanism** over a judgment. If the verifier is itself an agent, its verdict is also a best-effort promise — use **independence + diversity** (an adversarial panel), never one agent vouching for another.
 4. Verdict: Pass / Conditional / Fail, with the evidence cited.
 
+## Gate the verdict itself, not only the work
+
+The last gate audits the **verification package**: every row of a results table must trace to raw evidence the gate quotes back. Two failure shapes recur often enough to name, and both are produced by a competent verifier having a good day — they are not sloppiness:
+
+- **Label inflation** — a row labelled PASS whose own note discloses a shortfall. **Rule: if the note contains a "but", the label is CONDITIONAL.** The label is what every downstream consumer reads; the note is what almost nobody does.
+- **Unevidenced mitigation claims** — a Conditions or Risks section leaning on a reassurance ("the client is idempotent", "that path is unreachable") with no evidence pointer. **Rule: every mitigation claim carries a pointer** — a file, a `path:line` code citation, or a test name — and where the honest answer is "code-evidenced, not observed live", it says exactly that.
+
+Apply the gate's notes (relabel, add the citations), commit the gate report **into** the evidence package, and only then declare the work closed. A gate report that is not in the package is a gate that can be quietly dropped.
+
 ## Per-stage gates
 Use the matching stage skill's exit gate: `df-product-owner` (cold-SA / wrong-target), `df-solution-architect` (cold-Dev/Infra, coverage), `df-tdd-developer` (asserting tests green, `-race`), `df-qa` (evidence by correlationId, holdout), `df-infrastructure` (renders live data, no implicit trust), `df-observability` (verified rendering live data).
 

@@ -29,6 +29,7 @@ Before running scenarios, confirm the **Observability Surface** renders live dat
 2. Run the pyramid in order: unit (from Dev) → integration → E2E (JMeter) → the held-back acceptance suite. Stop at the first quality-gate breach.
 3. Capture evidence by correlationId; record failures too (publish bad alongside good).
 4. **Verdict:** Pass / Conditional / Fail. A "pass" with no observability evidence is not earned. Route a Fail to the owning lane (code → Developer, deploy → Infra, requirement → PO).
+5. **In-lane or out-of-lane — decide before the Fail blocks the verdict.** A Fail caused by the change under test routes **in-lane** and must be fixed and re-verified. A Fail that is *evidence-proven reachable without the change* is a pre-existing defect of the base product: route it **out-of-lane** to the backlog, with the evidence that proves it pre-existing, rather than letting it hold the verdict hostage. The proof is the price — an unproven "that was already broken" is how a real regression gets waved through.
 
 ## Don't
 - Don't accept "done / tests pass" as the verdict — demand independent, unforgeable evidence.
