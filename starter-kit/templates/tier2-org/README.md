@@ -106,3 +106,38 @@ bash install.sh
 
 Pin the commit, never the branch — a branch can move under you between installs, and it
 moves most while under review, exactly when people are onboarding onto it.
+
+## CI — and how to add a check
+
+This layer ships a gate. `.github/workflows/gate.yml` runs on every pull request and every
+push to `main`, and it runs exactly one thing:
+
+```sh
+bash scripts/run-tests.sh          # every suite in the repo
+bash scripts/run-tests.sh --list   # print what would run, run nothing
+```
+
+**To add a check, commit a `scripts/tests/test-*.sh` that exits non-zero on failure.**
+There is no list to edit and no workflow to update; if you find yourself editing
+`gate.yml` to enrol a suite, something has gone wrong. The runner discovers suites by
+EXISTENCE, because a hand-written list is the thing that rots — Tier 1's own workflow once
+named one suite while the repo shipped 22, and the ticket that filed the finding
+enumerated them by hand and was already wrong.
+
+Three things the runner refuses, each of which would restore that defect while looking
+like a fix:
+
+- a hand-written suite list;
+- an exit status taken from the last child rather than the tally (an early failure
+  followed by a pass would exit 0);
+- a glob that matches nothing — **zero suites discovered is a hard failure**, not a pass.
+  That is why `scripts/tests/test-repo-shape.sh` ships with the layer: it means the rule
+  is true from the first commit instead of needing a "not yet" exception, which is the
+  kind of exception that never gets removed.
+
+`test-repo-shape.sh` asserts this layer's structural invariants — the lockfile parses and
+carries its required keys, the Tier 1 pin is a resolved SHA rather than a branch name, the
+files a mint depends on are present, and the tier-3 template still carries its
+placeholders rather than someone's resolved lockfile. Almost all of it is green the day it
+arrives: these are structural guards, and their value is measured the first time one goes
+red.
