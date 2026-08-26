@@ -149,4 +149,9 @@ fi
 
 echo
 echo "=== test-repo-shape: $PASS passed, $FAIL failed ==="
+
+# The assertion-count contract read by run-tests.sh (see its header). Exit status alone
+# cannot tell "asserted every case below" from "asserted nothing" — both exit 0 — so the
+# count is DECLARED here rather than parsed out of the summary line above it.
+echo "ASSERTIONS: $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]

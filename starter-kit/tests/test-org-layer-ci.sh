@@ -52,7 +52,12 @@ if bash "$GEN" dark-factory-citest citest/dark-factory-citest "$MINTDIR" "CI Tes
   pass "C2a new-org-layer.sh minted a layer"
 else
   fail "C2a new-org-layer.sh failed — see $GENOUT"
-  echo; echo "=== test-org-layer-ci: $PASS passed, $FAIL failed ==="; exit 1
+  echo; echo "=== test-org-layer-ci: $PASS passed, $FAIL failed ==="
+  # Declared here too, because this early exit is a FAILURE. A suite that exits without
+  # an ASSERTIONS line is reported UNMEASURED instead, and UNMEASURED and FAIL have
+  # different repairs -- naming the wrong one costs more than naming none.
+  echo "ASSERTIONS: $((PASS + FAIL))"
+  exit 1
 fi
 LAYER="$MINTDIR/dark-factory-citest"
 
@@ -126,4 +131,9 @@ else fail "C7b the failing suite was not named"; fi
 
 echo
 echo "=== test-org-layer-ci: $PASS passed, $FAIL failed ==="
+
+# The assertion-count contract read by run-tests.sh (see its header). Exit status alone
+# cannot tell "asserted every case above" from "asserted nothing" -- both exit 0 -- so the
+# count is DECLARED here rather than parsed out of the summary line above it.
+echo "ASSERTIONS: $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]
