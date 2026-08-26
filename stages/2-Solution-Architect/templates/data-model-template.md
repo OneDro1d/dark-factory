@@ -41,6 +41,26 @@ What flows between services. The Developer lane implements these exactly; no pri
 |---|---|---|---|---|
 | `<db>` | `<service>` | Postgres / … | yes/no | at-rest + in-transit |
 
+## Access paths
+
+Persistence says where a fact lives; this says how it is **found**. Derive the index from the
+query, never the query from the index — an index no query shape matches costs every write and
+buys nothing.
+
+| Query pattern (who asks, for what) | Entity | Predicate / sort | Index that serves it | Selectivity |
+|---|---|---|---|---|
+| <e.g. "the UI lists one owner's open items, newest first"> | `<Entity>` | `owner = ? AND state = 'open' ORDER BY created DESC` | composite `(owner, created DESC)` | <rows returned / rows scanned> |
+
+- Every foreign key used in a join or a filter is indexed. Declaring the constraint does not
+  create one.
+- A **partial** index only where the predicate is both constant and selective — a small live
+  subset of a large historical table. On a predicate most rows satisfy it is a full index
+  with extra rules.
+- **No duplicate or redundant index.** One whose columns are a leading prefix of another's is
+  already served by that one, and is paid for twice on every write.
+- Any index listed here that no query pattern above names is **not** justified. Say why, or
+  drop it.
+
 <!-- ───────────── AI-AGENT CONTEXT BELOW ───────────── -->
 
 ## Idempotency & dedup keys

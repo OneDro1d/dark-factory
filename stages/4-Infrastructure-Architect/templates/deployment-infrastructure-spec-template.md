@@ -38,6 +38,23 @@ Record only what differs from the platform default (the standard Dev → Test �
 |---|---|---|---|
 | `<service>` | EBS / local-path | <size> | <cadence + target> |
 
+## Container image posture
+
+| Service | Build | Runtime user | Health instruction in the image | Base pinned by | Rebuilt by |
+|---|---|---|---|---|---|
+| `<service>` | multi-stage | non-root uid | ✓ / ✗ | digest | <owner + cadence> |
+
+- **Multi-stage**, so the toolchain, the source and any build credential stay in a stage that
+  is discarded. A secret used in a stage that ships is in the image, whatever the final layer
+  looks like.
+- **Non-root by default.** Name the service that needs otherwise and why — "it binds a low
+  port" is a port mapping, not a reason.
+- **A health instruction in the image**, so anything that runs the container, not only the
+  orchestrator overlay, can tell *running* from *serving*.
+- **Pin the base by digest and name who rebuilds it.** A floating tag makes the image
+  irreproducible; a pinned one nobody owns makes it permanently unpatched. Both fail, in
+  opposite directions.
+
 ## Observability sinks (Directive 1)
 
 | Layer | Tooling | Source |

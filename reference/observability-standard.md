@@ -66,6 +66,37 @@ Dashboards answer "what is the system doing". The query surface answers "what ha
 - Both reachable **programmatically by the QA and developer agents in dev/test**, not only by
   a human logging into a production console.
 
+## The actuation surface — the agents' hands
+
+The queryable surface answers *what happened*. It cannot answer *what happens if*, because
+observing a state requires the system to be **in** that state — and an agent that can only
+read is limited to the states the system reaches on its own. The states worth verifying are
+usually the rare ones.
+
+So the design names, alongside each observation route, the **actuation route** that provokes
+the state it observes: a supported way to trigger the evaluation, publish the event, seed the
+record or flip the knob, on demand, from outside the service, in dev/test.
+
+> **This is not the *Act* leg above.** *Act* is the system acting on its own behalf when
+> something is wrong — alert fires, reaches a sink. The actuation surface is an agent or
+> operator acting **on** the system to make something observable. Different direction,
+> different owner; shipping one does not excuse the other.
+
+Required of the surface, not of any particular tool:
+
+- **Every alert condition has a way to be provoked.** A rule that cannot be made to fire on
+  purpose has never been tested, only deployed.
+- **Reachable programmatically in dev/test**, and absent — or authenticated and audited —
+  everywhere else. The route that makes a state cheap to verify makes it cheap to forge.
+- **Enumerated in the spec, not discovered in the code.** If reproducing a scenario needs a
+  step nobody wrote down, QA's evidence is not reproducible, whatever it showed once.
+- **Effects declared** — what the route writes, what it publishes, and how to undo it. A
+  trigger with unstated side effects contaminates the *next* test rather than the current
+  one, which is where flakiness comes from.
+
+Anti-pattern: **eyes without hands** — a complete dashboard set covering states the agent has
+no supported way to reach, so verification quietly degrades into waiting for one to occur.
+
 ## The acceptance bar — "verified rendering live data"
 
 A dashboard whose JSON posts cleanly but shows "No data" is **not delivered**. The bar,
