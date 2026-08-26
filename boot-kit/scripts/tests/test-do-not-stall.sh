@@ -211,6 +211,15 @@ echo "=================================================================="
 printf 'forward : %d assertions passed, %d failed\n' "$FWD_PASS" "$FWD_FAIL"
 printf 'reverse : %d planted violations caught, %d NOT caught\n' "$REV_OK" "$REV_BAD"
 echo "=================================================================="
+
+# The assertion-count contract read by run-tests.sh. Exit status alone cannot tell
+# "asserted all of these" from "asserted nothing" — both exit 0 — so the count is
+# DECLARED. It is the forward assertions PLUS the reverse pass's planted violations,
+# because both halves are checks this suite actually executed. Deliberately NOT emitted
+# on the FORWARD_ONLY path above: that path is a re-exec of a planted COPY whose output
+# is consumed by this script, and a stray count line there would be read as this
+# suite's own total.
+echo "ASSERTIONS: $((FWD_PASS + FWD_FAIL + REV_OK + REV_BAD))"
 if [ "$FWD_FAIL" -eq 0 ] && [ "$REV_BAD" -eq 0 ]; then
   echo "PASS"
   exit 0

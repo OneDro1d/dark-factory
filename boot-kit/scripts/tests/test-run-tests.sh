@@ -33,13 +33,22 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/test-run-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 # Write a fake suite at $1 that touches a marker named after itself and exits $2.
+# $3 is what it DECLARES on stdout: a number emits `ASSERTIONS: <n>`; the literal word
+# `silent` emits no count line at all. Default 1 — a fake suite that declared nothing
+# would be UNMEASURED under the contract, and every A-assertion below would then be
+# exercising the unmeasured path rather than the path it names.
 mksuite() {
   mkdir -p "$(dirname "$1")"
+  decl="${3:-1}"
   cat > "$1" <<SUITE
 #!/usr/bin/env bash
 touch "\$MARKDIR/\$(basename "\$0")"
-exit $2
 SUITE
+  case "$decl" in
+    silent) : ;;
+    *)      printf 'echo "ASSERTIONS: %s"\n' "$decl" >> "$1" ;;
+  esac
+  printf 'exit %s\n' "$2" >> "$1"
   chmod +x "$1"
 }
 
@@ -159,6 +168,104 @@ check "A17 --list runs no suite"        "$(ls "$WORK/m11" | wc -l | tr -d ' ')" 
 check "A18 --list exits 0"              "$RC" "0"
 case "$OUT" in *test-brand-new.sh*) ok "A17b --list names the suites" ;;
                *) bad "A17b --list names the suites" "output: $OUT" ;; esac
+
+# ------------------------------------------------- the assertion-count contract (B*)
+# The defect these guard: `bash "$suite" >/dev/null 2>&1; rc=$?` cannot tell "asserted 44
+# things" from "asserted nothing". Both exit 0 and both rendered as `PASS 0s`. Exit
+# status is a proxy for having-been-checked, and a proxy is exactly what decays silently
+# — a suite whose glob stops matching, whose fixture directory moves, or whose assertions
+# get commented out during a debug session keeps reporting PASS forever.
+#
+# The contract is DECLARED, not parsed. The suites on main print their totals in SIX
+# different formats (`N passed, 0 failed`, `=== N passed …`, `forward : N assertions …`,
+# `RESULT: PASS — 9/9 cases behave (9 asserted)`, `passed: 14   failed: 0`, `4/4 classes
+# behave`), so a runner that greps for a count is a hand-written list of formats — the
+# same rot this runner's glob exists to avoid, one level down. Each suite emits
+# `ASSERTIONS: <n>` and the runner reads that or refuses to call it a pass.
+B="$WORK/counts"
+mksuite "$B/test-counts.sh"  0 5
+
+run_runner m12 --root "$B"
+# B1 is a CONTROL, and it passes against the OLD runner too: a suite that exits 0 has
+# always exited 0. It is here so that a B-block gone entirely red is distinguishable from
+# one that broke the happy path.
+check "B1  a suite that declares a positive count still exits 0"  "$RC" "0"
+# Matched against the PASS LINE, not against $OUT. A `case "$OUT" in *"5 assertions"*`
+# here is satisfied by the SUMMARY line — it stayed green through an ablation that
+# stripped the count from the per-suite line entirely, which is the thing it names.
+check "B2  the per-suite PASS line carries the declared count" \
+      "$(printf '%s\n' "$OUT" | grep -c '^PASS.*5 assertions')" "1"
+
+# B3/B4 — the defect itself. A suite that exits 0 having asserted nothing is the exact
+# input the ticket demonstrated, and the old runner printed `PASS 0s` for it.
+S="$WORK/silent"
+mksuite "$S/test-says-nothing.sh" 0 silent
+run_runner m13 --root "$S"
+check "B3  a suite that declares NO count is not a pass"          "$RC" "1"
+check "B3b …and it did run — this is not 'the suite was skipped'" "$(ran m13 test-says-nothing.sh)" "yes"
+case "$OUT" in *UNMEASURED*) ok "B4  …and the runner says UNMEASURED" ;;
+               *) bad "B4  …and the runner says UNMEASURED" "output: $OUT" ;; esac
+
+# B5/B6 — declaring zero is honest and still not a pass. Kept distinct from B3 because
+# the two have different repairs: UNMEASURED means the suite has not adopted the
+# contract, VACUOUS means its assertions stopped executing.
+Z="$WORK/zero"
+mksuite "$Z/test-asserts-zero.sh" 0 0
+run_runner m14 --root "$Z"
+check "B5  a suite that declares ZERO assertions is not a pass"   "$RC" "1"
+case "$OUT" in *VACUOUS*) ok "B6  …and the runner says VACUOUS, distinct from UNMEASURED" ;;
+               *) bad "B6  …and the runner says VACUOUS, distinct from UNMEASURED" "output: $OUT" ;; esac
+
+# B7 — the total is the number a reader actually uses to notice a drop.
+T2="$WORK/total"
+mksuite "$T2/test-a.sh" 0 4
+mksuite "$T2/test-b.sh" 0 7
+run_runner m15 --root "$T2"
+check "B7a two declaring suites exit 0" "$RC" "0"
+case "$OUT" in *"11 assertions"*) ok "B7b the summary reports the TOTAL declared assertions (11)" ;;
+               *) bad "B7b the summary reports the TOTAL declared assertions (11)" "output: $OUT" ;; esac
+
+# B8 — a CONTROL in the other direction. A non-zero exit is still a failure however many
+# assertions the suite declares; the count must not be able to rescue a red suite.
+X="$WORK/countfail"
+mksuite "$X/test-red.sh" 1 9
+run_runner m16 --root "$X"
+check "B8  a declared count does NOT rescue a suite that exited non-zero" "$RC" "1"
+
+# B9 — a suite that drives sub-suites prints several count lines. The LAST one is its own
+# total; taking the first would report a sub-suite's count as the whole suite's.
+M="$WORK/multi"
+mkdir -p "$M"
+cat > "$M/test-multi.sh" <<'MULTI'
+#!/usr/bin/env bash
+touch "$MARKDIR/$(basename "$0")"
+echo "ASSERTIONS: 2"
+echo "ASSERTIONS: 6"
+exit 0
+MULTI
+chmod +x "$M/test-multi.sh"
+run_runner m17 --root "$M"
+check "B9a several count lines is not an error" "$RC" "0"
+case "$OUT" in *"6 assertions"*) ok "B9b the LAST declared count wins" ;;
+               *) bad "B9b the LAST declared count wins" "output: $OUT" ;; esac
+
+# B10 — the conversion itself, guarded statically so it cannot rot back. Running the real
+# runner over the real repo from here would re-enter it (A19), so this greps instead:
+# every discovered suite in this repo must carry an emitter. It checks the FILE, not a
+# run, and is honest about that — a suite could carry the string in a comment. It exists
+# to catch a NEW suite committed without the line, which is how the conversion decays.
+missing=0
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  grep -qE 'ASSERTIONS:' "$f" || { missing=$((missing+1)); echo "     no emitter: ${f#$ROOT/}"; }
+done <<REPO
+$(find "$ROOT" \( -name .git -o -name vendor -o -name node_modules \) -prune \
+   -o -type f -name 'test-*.sh' -print | LC_ALL=C sort)
+REPO
+check "B10 every test-*.sh in this repo declares an assertion count" "$missing" "0"
+
+# This suite must obey its own contract.
+echo "ASSERTIONS: $((PASSED + FAILED))"
 
 echo
 echo "=== $PASSED passed, $FAILED failed ==="

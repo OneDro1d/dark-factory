@@ -242,4 +242,9 @@ eq "J2 the block is not empty in tier 3" "0" "$([ -n "$R3" ] && echo 0 || echo 1
 
 echo ""
 echo "$PASS passed, $FAIL failed"
+
+# The assertion-count contract read by run-tests.sh. Exit status alone cannot tell
+# "asserted every one of these" from "asserted nothing" — both exit 0 — so the count
+# is DECLARED here rather than parsed out of the summary line above it.
+echo "ASSERTIONS: $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]

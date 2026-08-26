@@ -221,4 +221,9 @@ if [ -f "$KIT/settings.template.json" ]; then
 fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+
+# The assertion-count contract read by run-tests.sh. Exit status alone cannot tell
+# "asserted every one of these" from "asserted nothing" — both exit 0 — so the count
+# is DECLARED here rather than parsed out of the summary line above it.
+echo "ASSERTIONS: $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]

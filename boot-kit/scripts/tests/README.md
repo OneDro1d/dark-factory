@@ -3,8 +3,9 @@
 Every `test-*.sh` file in this repository is run by
 [`../run-tests.sh`](../run-tests.sh), and the gate workflow runs that.
 
-**A suite is enrolled by existing.** There is no list to add yourself to — commit the
-file and CI runs it. Four directories currently hold suites:
+**A suite is enrolled by existing, and must declare what it measured.** There is no list
+to add yourself to — commit the file and CI runs it. Four directories currently hold
+suites:
 
 - `boot-kit/scripts/tests/` — this one, the engine
 - `starter-kit/tests/` — the org layer
@@ -28,8 +29,20 @@ in an unmerged branch. A glob cannot make that mistake.
 ## Writing a suite
 
 - Resolve your own root from `BASH_SOURCE`; the runner does not set a working directory.
-- Exit non-zero on failure. That is the whole contract — the runner derives its verdict
-  from the tally of child exit codes, never from the last one.
+- Exit non-zero on failure. The runner derives its verdict from the tally of child exit
+  codes, never from the last one.
+- **Print `ASSERTIONS: <n>` — how many assertions you actually executed.** A suite that
+  exits 0 without it is reported `UNMEASURED` and counted as a failure; one that declares
+  `0` is reported `VACUOUS` and likewise fails. This is the second half of the contract
+  and it is not optional. Emit it once, on the path the runner sees; if your suite drives
+  sub-suites the LAST line wins.
+
+  The reason it is declared rather than parsed: the suites here print their totals in six
+  different formats. A runner that greps for a count would be a hand-written list of
+  formats, which rots exactly like the hand-written list of suites the glob replaced —
+  and until this existed, a suite that asserted nothing and a suite that asserted 44
+  things both rendered as `PASS 0s`. Exit status is a proxy for having-been-checked, and
+  a proxy decays without a signal.
 - Leave the checkout clean. Build scratch trees under `TMPDIR` and remove them.
 - If you drive `run-tests.sh` itself, pass `--root`. Without it, discovery falls back to
   the repo root, which contains your suite, and the run re-enters itself. The runner
