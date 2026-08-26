@@ -1,0 +1,15 @@
+# .tiercheckignore — hyphenated backticked tokens that tier-check's PROSE-REF class
+# reaches, and which are NOT component references. Same format and same hard rule as
+# .linkcheckignore: `file_glob -> token_glob # reason`, and a rule with no `# reason`
+# is a hard error. Suppressed counts print on every run, including a clean one, so this
+# debt cannot go quiet.
+#
+# Read the PROSE-REF section of boot-kit/scripts/tier-check.py before adding a line.
+# The class was measured, not guessed — on the tree that carried the defect it narrowed
+# 873 backticked tokens to 10, and 4 of those 10 were the defect. Suppressing a finding
+# because it is inconvenient re-opens exactly the gap this class closes. Every rule here
+# says why the token is not a component; none says "not a defect".
+
+skills/agent-notepad/*.md -> proj-* # example notepad directory names in agent-notepad's own docs (`proj-arbbot`, `proj-bugs`), not components
+*.md -> platform-libs # a memory CATEGORY, paired with `patterns` in the same clause — where a lesson is filed, not a thing that is invoked
+skills/df-context-store/substrate-template/CLAUDE-stanza.md -> pre-commit # the git hook of that name, installed by the substrate; not a skill or agent
