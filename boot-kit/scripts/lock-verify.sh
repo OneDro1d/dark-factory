@@ -13,11 +13,33 @@
 #   L6  every pin is reachable from a branch on the REMOTE
 #   L7  every declared skill/hook names a source, and every source names a declaration
 #
-# Usage: bash lock-verify.sh [--lock <path>]   Exit: 0 ok · 1 drift
+# Usage: bash lock-verify.sh [--lock <path> | --lock=<path>]
+# Exit:  0 ok · 1 drift · 2 bad arguments
 set -uo pipefail
 
 LOCK="loom.lock.json"
-[ "${1:-}" = "--lock" ] && LOCK="${2:?--lock needs a path}"
+# ARG LOOP, ADDED 2026-08-26. This was one positional line — `[ "${1:-}" = "--lock" ] &&
+# LOCK="${2:?...}"` — which read only $1, only the space form, and had no else-branch. Every
+# other spelling was DROPPED, and dropping it was not an error: `--lock=instances/x/…` left
+# LOCK at the root lockfile and the script then went on to print L1..L7 verdicts about a
+# machine the operator had not asked about. A wrong install is visible; a wrong PASS is what
+# stops the operator looking. The `=` form is the one the estate's own docs teach one line
+# above the lock-verify line (instances/README.md), so the repo taught the syntax that failed.
+# BOTH forms are accepted here rather than mirroring install.sh's reject-the-space-form
+# choice: the space form has shipped for this script's whole life and both install.sh
+# callers use it (loom-storage:508, loom_storage-ESO:274), so rejecting it would trade a
+# hand-invocation hazard for an automated-path outage.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --lock)   LOCK="${2:?--lock needs a path}"; shift 2 ;;
+    --lock=*) LOCK="${1#--lock=}"
+              [ -n "$LOCK" ] || { echo "FATAL: --lock= needs a path" >&2; exit 2; }
+              shift ;;
+    *) printf 'FATAL unknown option: %s\n' "$1" >&2
+       printf '  valid: --lock <path> | --lock=<path>\n' >&2
+       exit 2 ;;
+  esac
+done
 [ -f "$LOCK" ] || { echo "FATAL: no lockfile at $LOCK"; exit 1; }
 command -v jq >/dev/null || { echo "FATAL: jq required"; exit 1; }
 
