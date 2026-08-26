@@ -12,6 +12,7 @@
 #   L5  every skill/hook the lock says to install is installed on the machine
 #   L6  every pin is reachable from a branch on the REMOTE
 #   L7  every declared skill/hook names a source, and every source names a declaration
+#       — and the lockfile is in the shape the installers accept, not the old MAP they refuse
 #
 # Usage: bash lock-verify.sh [--lock <path> | --lock=<path>]
 # Exit:  0 ok · 1 drift · 2 bad arguments
@@ -326,26 +327,88 @@ fi
 #
 # Keys beginning with `$` are documentation, not entries — the shipped templates carry a
 # `$comment` inside both *Sources maps.
+#
+# ---- SHAPE FIRST, AND THE SAME THREE-WAY TEST THE INSTALLERS ALREADY MAKE.
+# `install.<kind>` has an older reading: a single MAP of name -> source, with no *Sources
+# key. Both shipped installers REFUSE it — `lock_shape_guard` in
+# starter-kit/templates/tier2-org/install.sh:153-168 and in its tier3-instance/install.sh:83-98
+# take `array|null`, `die` on `object`, and `die` on anything else. df-lock-migrate.py is
+# the one-command fix they name.
+#
+# L7 was never given that guard, and jq's `(.install[$k] // [])[]` iterates a map's VALUES.
+# So on the old shape L7 took "upstream:dark-factory/skills/agent-notepad" for a NAME,
+# looked it up in an absent skillSources, and reported drift — 50 lines, 46 skills + 4
+# hooks, every one false, on providentiaww/dark-factory-onedroid org.lock.json, the single
+# file that decides what the whole minted OneDroid Tier 3 fleet installs. Failing loud and
+# WRONG is worse than failing silent: it teaches the reader to skip the verdict.
+#
+# The verdict here must be the installers' verdict. A lockfile install.sh would refuse
+# outright cannot also be LOCKED, and a verifier that is more permissive than the installer
+# is how "in sync" comes to mean two different things in one estate. So: same case arms,
+# same remedy, named. Empty is not an exception — the guard dies on `object` whether or not
+# it has entries, and the live tier3 template is `{}` on both keys.
+#
+# Absence stays a fourth case. No declarations means nothing to check, which is a fact;
+# "every declaration has a source" would be a claim. Both UPSTREAM.lock files land there.
 echo "[L7] declarations and sources agree"
 L7BAD=""
+L7SHAPE=""
+L7CHECKED=0
 for kind in skills hooks; do
   case "$kind" in skills) smap=skillSources ;; hooks) smap=hookSources ;; esac
-  while read -r n; do
-    [ -n "$n" ] || continue
-    v="$(jq -r --arg n "$n" --arg m "$smap" '.install[$m][$n] // empty' "$LOCK")"
-    [ -n "$v" ] || L7BAD="$L7BAD ${kind%s}:$n declared with no $smap entry"$'\n'
-  done < <(jq -r --arg k "$kind" '(.install[$k] // [])[]' "$LOCK")
-  while read -r n; do
-    [ -n "$n" ] || continue
-    jq -e --arg n "$n" --arg k "$kind" '(.install[$k] // []) | index($n)' "$LOCK" >/dev/null 2>&1 \
-      || L7BAD="$L7BAD ${kind%s}:$n has a $smap entry but is not declared in install.$kind"$'\n'
-  done < <(jq -r --arg m "$smap" '(.install[$m] // {}) | keys[] | select(startswith("$") | not)' "$LOCK")
+  # Ask jq for the TYPE rather than iterating and letting it abort mid-level with a message
+  # that reads like a verdict. `.install` itself may be absent, or pathologically not an
+  # object; both are answered here rather than crashing the level.
+  t="$(jq -r --arg k "$kind" \
+        'if (.install|type) == "object" then (.install[$k] | type)
+         elif (.install|type) == "null" then "null"
+         else "BADINSTALL" end' "$LOCK" 2>/dev/null || echo BADINSTALL)"
+  case "$t" in
+    null) : ;;   # not declared at all. Nothing to check, and not a failure.
+    array)
+      while read -r n; do
+        [ -n "$n" ] || continue
+        L7CHECKED=$((L7CHECKED + 1))
+        v="$(jq -r --arg n "$n" --arg m "$smap" '.install[$m][$n] // empty' "$LOCK")"
+        [ -n "$v" ] || L7BAD="$L7BAD ${kind%s}:$n declared with no $smap entry"$'\n'
+      done < <(jq -r --arg k "$kind" '(.install[$k] // [])[]' "$LOCK")
+      while read -r n; do
+        [ -n "$n" ] || continue
+        L7CHECKED=$((L7CHECKED + 1))
+        jq -e --arg n "$n" --arg k "$kind" '(.install[$k] // []) | index($n)' "$LOCK" >/dev/null 2>&1 \
+          || L7BAD="$L7BAD ${kind%s}:$n has a $smap entry but is not declared in install.$kind"$'\n'
+      done < <(jq -r --arg m "$smap" '(.install[$m] // {}) | keys[] | select(startswith("$") | not)' "$LOCK")
+      ;;
+    object)
+      n="$(jq -r --arg k "$kind" '.install[$k] | keys | map(select(startswith("$") | not)) | length' "$LOCK")"
+      L7SHAPE="$L7SHAPE install.$kind is a MAP of $n entries — the old shape, from before names and sources were split. install.sh REFUSES this lockfile; nothing would be installed."$'\n'
+      ;;
+    BADINSTALL)
+      L7BAD="$L7BAD install is a $(jq -r '.install | type' "$LOCK") — expected an object"$'\n'
+      ;;
+    *)
+      L7SHAPE="$L7SHAPE install.$kind has unexpected type '$t' — expected an array of names."$'\n'
+      ;;
+  esac
 done
+if [ -n "$L7SHAPE" ]; then
+  drift "L7 lockfile is in a shape the installers refuse:"
+  printf '%s' "$L7SHAPE" | while read -r l; do [ -n "$l" ] && note "$l"; done
+  note "convert once, then re-run:  python3 <dark-factory checkout>/boot-kit/scripts/df-lock-migrate.py --lock $LOCK --apply"
+fi
 if [ -n "$L7BAD" ]; then
   drift "L7 declarations and sources disagree:"
   printf '%s' "$L7BAD" | while read -r l; do [ -n "$l" ] && note "$l"; done
-else
-  pass "L7 every declaration has a source and every source has a declaration"
+fi
+if [ -z "$L7BAD" ] && [ -z "$L7SHAPE" ]; then
+  if [ "$L7CHECKED" -gt 0 ]; then
+    pass "L7 every declaration has a source and every source has a declaration ($L7CHECKED checked)"
+  else
+    # An empty or absent install block. Deliberately NOT the sentence above: a reader who
+    # greps for that sentence is asking whether the cross-check ran, not whether it was
+    # vacuous. Both UPSTREAM.lock files in the estate land here.
+    pass "L7 nothing to check — no install.skills or install.hooks declarations"
+  fi
 fi
 
 echo ""

@@ -85,7 +85,9 @@ nothing while still reading like a declaration — `install.sh` reports either, 
 
 Older layers wrote `install.skills` as a single map of name → source. The installer
 **refuses** that shape rather than reading it — an installer that understands both forever
-is how a third reading appears. Convert once, then carry on:
+is how a third reading appears. `lock-verify` L7 refuses it too, and names this same
+command: a verifier more permissive than the installer is how "in sync" comes to mean two
+different things in one estate. Convert once, then carry on:
 
 ```sh
 python3 vendor/dark-factory/boot-kit/scripts/df-lock-migrate.py --lock org.lock.json          # inspect
