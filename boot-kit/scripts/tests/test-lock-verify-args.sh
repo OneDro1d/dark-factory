@@ -90,8 +90,8 @@ contains "A1 --lock=PATH selects PATH"          "lock   = $TARGET" "$OUT"
 absent   "A1b --lock=PATH does not fall back"   "lock   = loom.lock.json" "$OUT"
 contains "A1c --lock=PATH derives PATH's vendor" "vendor-probe" "$OUT"
 
-# A2  the space form must KEEP working. Both install.sh callers use it
-#     (loom-storage:508, loom_storage-ESO:274); breaking it to fix A1 would trade a
+# A2  the space form must KEEP working. Both Tier-3 instance installers in the reference
+#     estate call it that way (at lines 508 and 274); breaking it to fix A1 would trade a
 #     hand-invocation hazard for an automated-path outage.
 run --lock "$TARGET"
 contains "A2 --lock PATH still selects PATH"    "lock   = $TARGET" "$OUT"
