@@ -11,8 +11,8 @@
 # L7 — the VERIFIER — never got that guard. jq's `(.install[$k] // [])[]` iterates a map's
 # VALUES, so L7 took "upstream:dark-factory/skills/agent-notepad" for a NAME, looked it up in
 # an absent skillSources, and reported drift: 50 lines, 46 skills + 4 hooks, every one a
-# false positive, on providentiaww/dark-factory-onedroid org.lock.json — the one file that
-# decides what the whole minted OneDroid Tier 3 fleet installs. Loud and WRONG is worse than
+# false positive, on a live Tier-2 org layer's org.lock.json — the one file that
+# decides what that layer's whole minted Tier-3 fleet installs. Loud and WRONG is worse than
 # silent: it is what teaches a reader to skip the verdict.
 #
 # THE CONTRACT UNDER TEST IS AGREEMENT, not a message. A lockfile install.sh would refuse
@@ -190,9 +190,9 @@ contains "S2 the verdict names the field AND the bad type" "install.hooks has un
 absent   "S3 the type test runs BEFORE jq iterates" "Cannot iterate over" "$B"
 
 echo "=== an EMPTY map is still the old shape — the guard dies on any object ==="
-# This is the live case, not a hypothetical: providentiaww/dark-factory-onedroid
+# This is the live case, not a hypothetical: a Tier-2 org layer's
 # templates/tier3-instance/instance.lock.json is `{}` on BOTH keys, while Tier 1's own copy
-# of that template is `[]` + a *Sources map. Every Tier 3 instance minted from the OneDroid
+# of that template is `[]` + a *Sources map. Every Tier 3 instance minted from that
 # org layer inherits the old shape. Letting `{}` pass here would hide precisely that.
 B="$(l7 empty-map)"
 contains "E1 an empty map is refused, like a full one" "DRIFT L7" "$B"

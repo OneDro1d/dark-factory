@@ -2,8 +2,8 @@
 # test-org-layer-ci.sh — every org layer minted from the Tier 2 template ships a working
 # gate, and the generator does not damage it on the way out.
 #
-# WHY THIS EXISTS. `providentiaww/dark-factory-onedroid` — the OneDroid Tier 2 org layer,
-# the register that decides what every minted Tier 3 instance installs — had NO `.github/`
+# WHY THIS EXISTS. A live Tier-2 org layer in the reference estate — the register that
+# decides what every minted Tier 3 instance installs — had NO `.github/`
 # directory at all. Fixing that one repo leaves the generator producing CI-less org layers
 # forever, so the template gained the gate too. This suite is the other half: it pins the
 # claim "a minted layer has CI that works", which is otherwise maintained by whoever last

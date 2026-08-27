@@ -25,11 +25,12 @@
 # nobody saw it. Name an instance lockfile and they diverge — and the instance convention
 # is exactly what `--lock` exists to serve.
 #
-# WHAT THE INSTALLERS ACTUALLY DO, all four checked rather than assumed:
-#   loom-storage/install.sh:198              local:*) "$(pwd)/..."   pwd = the repo root
-#   loom_storage-ESO/install.sh:148          local:*) "$(pwd)/..."   pwd = the repo root
-#   tier2-org/install.sh:142                 local:*) "$ROOT/..."    ROOT = the repo root
-#   dark-factory-onedroid/install.sh:142     local:*) "$ROOT/..."    ROOT = the repo root
+# WHAT THE INSTALLERS ACTUALLY DO, all four checked rather than assumed — two Tier-3
+# instances, one Tier-2 template, one live Tier-2 org layer:
+#   tier3 instance A/install.sh:198     local:*) "$(pwd)/..."   pwd = the repo root
+#   tier3 instance B/install.sh:148     local:*) "$(pwd)/..."   pwd = the repo root
+#   tier2-org template/install.sh:142   local:*) "$ROOT/..."    ROOT = the repo root
+#   tier2 org layer/install.sh:142      local:*) "$ROOT/..."    ROOT = the repo root
 # Four readers, one meaning: `local:` is relative to the REPO, never to the lockfile.
 #
 # Worse than a wrong answer, this is a wrong answer in the SAFE-LOOKING direction of the

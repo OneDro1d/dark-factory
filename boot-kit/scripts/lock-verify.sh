@@ -27,9 +27,10 @@ LOCK="loom.lock.json"
 # stops the operator looking. The `=` form is the one the estate's own docs teach one line
 # above the lock-verify line (instances/README.md), so the repo taught the syntax that failed.
 # BOTH forms are accepted here rather than mirroring install.sh's reject-the-space-form
-# choice: the space form has shipped for this script's whole life and both install.sh
-# callers use it (loom-storage:508, loom_storage-ESO:274), so rejecting it would trade a
-# hand-invocation hazard for an automated-path outage.
+# choice: the space form has shipped for this script's whole life and both Tier-3 instance
+# installers in the reference estate call it that way (at lines 508 and 274 of their
+# respective install.sh), so rejecting it would trade a hand-invocation hazard for an
+# automated-path outage.
 while [ $# -gt 0 ]; do
   case "$1" in
     --lock)   LOCK="${2:?--lock needs a path}"; shift 2 ;;
@@ -51,11 +52,12 @@ VENDOR="$ROOT/$(jq -r '.vendorDir // "vendor"' "$LOCK")"
 # directory only for a ROOT lockfile, which is why this went unseen. Name an instance
 # lockfile, which is the whole point of --lock, and they diverge.
 #
-# All four installers in the estate agree, checked rather than assumed:
-#   loom-storage/install.sh:198           local:*) "$(pwd)/..."   pwd = the repo root
-#   loom_storage-ESO/install.sh:148       local:*) "$(pwd)/..."   pwd = the repo root
-#   tier2-org/install.sh:142              local:*) "$ROOT/..."    ROOT = the repo root
-#   dark-factory-onedroid/install.sh:142  local:*) "$ROOT/..."    ROOT = the repo root
+# All four installers in the reference estate agree, checked rather than assumed —
+# two Tier-3 instances, one Tier-2 template, one live Tier-2 org layer:
+#   tier3 instance A/install.sh:198   local:*) "$(pwd)/..."   pwd = the repo root
+#   tier3 instance B/install.sh:148   local:*) "$(pwd)/..."   pwd = the repo root
+#   tier2-org template/install.sh:142 local:*) "$ROOT/..."    ROOT = the repo root
+#   tier2 org layer/install.sh:142    local:*) "$ROOT/..."    ROOT = the repo root
 #
 # Resolving it here against the lockfile's directory made L5 print DRIFT over a correct
 # install on both AWS/ESO Coder workspaces, 2026-08-26 — the safe-looking half of the same
@@ -371,8 +373,8 @@ fi
 # L7 was never given that guard, and jq's `(.install[$k] // [])[]` iterates a map's VALUES.
 # So on the old shape L7 took "upstream:dark-factory/skills/agent-notepad" for a NAME,
 # looked it up in an absent skillSources, and reported drift — 50 lines, 46 skills + 4
-# hooks, every one false, on providentiaww/dark-factory-onedroid org.lock.json, the single
-# file that decides what the whole minted OneDroid Tier 3 fleet installs. Failing loud and
+# hooks, every one false, on a live Tier-2 org layer's org.lock.json, the single
+# file that decides what that layer's whole minted Tier-3 fleet installs. Failing loud and
 # WRONG is worse than failing silent: it teaches the reader to skip the verdict.
 #
 # The verdict here must be the installers' verdict. A lockfile install.sh would refuse
