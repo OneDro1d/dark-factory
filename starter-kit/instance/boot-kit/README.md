@@ -47,6 +47,41 @@ twice.
 **A hook only takes effect in a NEW session.** Hooks are read once, at session start.
 "My hook edit did nothing" is almost always one of these two.
 
+**`install.sh` does NOT wire hooks.** It copies them and never touches `settings.json`.
+Claude Code runs a hook only because a `settings.json` event chain names it, so a hook can
+be declared, installed, hash-verified and completely **inert**. On disk is not on duty.
+Wiring is a human step, every time, and nothing used to check it — `lock-verify` L9 does now.
+
+### Declared, installed, and still not running
+
+`lock-verify` checks the hook directory in both directions, added 2026-08-29 after four
+machines in the reference estate were measured:
+
+- **L8** — every hook present in `~/.claude/hooks` must be declared in the lockfile. This
+  is L2's question asked of hooks, and until it existed a hand-copied hook could work for
+  months while being installed by nothing and restored by nothing. All five instance
+  records in that estate declared the same five hooks — this repo's own set — and between
+  7 and 13 more per machine were undeclared, including the hooks supplying identity and
+  memory. Every one of them passed L1–L7 and printed `LOCKED`.
+- **L9** — every declared hook must appear in a live `settings.json` (or
+  `settings.local.json`) event chain, and every wired path must exist on disk.
+
+If a declared hook genuinely should not be wired — it is invoked by another hook, or it is
+staged ahead of its chain — record it in `install.hooksUnwired`, a map of hook name to a
+**reason string**:
+
+```json
+"install": {
+  "hooks": ["a.sh"],
+  "hookSources": { "a.sh": "upstream:dark-factory/hooks/a.sh" },
+  "hooksUnwired": { "a.sh": "a helper the session-start hook calls, never an event chain" }
+}
+```
+
+The reason is not decoration. An empty reason is itself reported as drift: an exception
+nobody can audit is a silent failure wearing a lockfile key, and a gate with a free mute
+button becomes a gate people learn to ignore.
+
 ### Where a source can point
 
 A `hookSources` (or `skillSources`) value takes one of three forms:
