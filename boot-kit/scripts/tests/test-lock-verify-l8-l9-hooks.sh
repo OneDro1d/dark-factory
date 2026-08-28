@@ -109,6 +109,23 @@ settings d3 settings.json '{"hooks":{}}'
 O="$(run d3 L8)"
 contains "D3 an undeclared hook DIRECTORY is reported"     "some-plugin" "$O"
 
+# D3b — but a directory whose CONTENTS are declared is NOT undeclared. A plugin hook suite
+# is declared under nested names and the parent dir is never itself a lockfile entry.
+# Found by declaring a real one: all five hooks correctly declared, the directory still
+# reported, and a finding that cannot be resolved is a finding people learn to skip.
+mk d3b '{"skills":[],"skillSources":{},"hooks":["suite/hooks/a.sh"],"hookSources":{"suite/hooks/a.sh":"upstream:x/hooks/a.sh"}}'
+mkdir -p "$WORK/d3b/live/hooks/suite/hooks"
+printf '#!/bin/sh\nexit 0\n' > "$WORK/d3b/live/hooks/suite/hooks/a.sh"
+settings d3b settings.json '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"${HOME}/.claude/hooks/suite/hooks/a.sh"}]}]}}'
+O="$(run d3b L8)"
+absent   "D3b a directory whose contents are declared is not flagged" "suite" "$O"
+
+# D3c — and the guard is not a blanket pass for directories: an undeclared sibling of a
+# declared suite must still be reported, or D3b would have bought silence, not accuracy.
+mkdir -p "$WORK/d3b/live/hooks/other-suite"
+O="$(run d3b L8)"
+contains "D3c an undeclared sibling directory is still reported" "other-suite" "$O"
+
 # D4 — no hooks directory at all is a fact, not a failure.
 mk d4 '{"skills":[],"skillSources":{},"hooks":[],"hookSources":{}}'
 rmdir "$WORK/d4/live/hooks"

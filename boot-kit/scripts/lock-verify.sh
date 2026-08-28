@@ -499,7 +499,19 @@ else
       __pycache__|*.bak|*.bak.*|*.retired-*|*.orig|*.rej|.*) L8SKIP=$((L8SKIP + 1)); continue ;;
     esac
     L8SEEN=$((L8SEEN + 1))
-    printf '%s\n' "$DECLARED_HOOKS" | grep -qxF "$b" || L8UNDECL="$L8UNDECL $b"$'\n'
+    # An exact name match is the ordinary case. A DIRECTORY also counts as declared when
+    # something inside it is declared: a plugin hook suite is installed under a nested name
+    # (`agent-notepad/hooks/session-start.sh`) and the parent directory is never itself a
+    # lockfile entry. Without this second test, correctly declaring all five hooks of a
+    # suite still leaves its directory reported as undeclared for ever — a finding that
+    # cannot be resolved is a finding people learn to skip. Found by declaring one.
+    if printf '%s\n' "$DECLARED_HOOKS" | grep -qxF "$b"; then
+      continue
+    fi
+    if [ -d "$LIVE/hooks/$b" ] && printf '%s\n' "$DECLARED_HOOKS" | grep -q "^$b/"; then
+      continue
+    fi
+    L8UNDECL="$L8UNDECL $b"$'\n'
   done < <(find "$LIVE/hooks" -mindepth 1 -maxdepth 1 2>/dev/null | sort)
   if [ -n "$L8UNDECL" ]; then
     drift "L8 present in $LIVE/hooks but declared in NO lockfile entry here:"
@@ -536,11 +548,20 @@ echo ""
 # reported as unwired — a false DRIFT, which empties the verdict that is supposed to mean
 # "this instance is right".
 #
+# ⚠️ SCOPE, AND WHY THE ESCAPE HATCH IS DESIGN RATHER THAN A FUDGE. Only the USER-level
+# settings are read. A harness also merges PROJECT-level settings, and a hook can legitimately
+# be wired there — the reference estate's notepad commit gate is wired in each notepad repo's
+# own .claude/settings.json precisely so it arms in those sessions and nowhere else. This
+# layer cannot enumerate every project on a machine, and pretending otherwise would mean
+# either a false DRIFT on every such hook or a check that quietly stopped looking. So user
+# level is checked, and a project-wired hook is RECORDED, with that as its stated reason.
+#
 # ESCAPE HATCH, deliberately narrow: `install.hooksUnwired` maps a hook NAME to a REASON
-# STRING. A genuine exception (a hook invoked by another hook, or staged ahead of its
-# wiring) can be recorded — but it cannot be silenced anonymously. An empty or missing
-# reason is itself reported. A gate with a free mute button becomes a gate people learn to
-# ignore, which is how verify-kit passed for weeks with 15 mandated skills absent.
+# STRING. A genuine exception (project-level wiring, a hook invoked by another hook, or one
+# staged ahead of its wiring) can be recorded — but it cannot be silenced anonymously. An
+# empty or missing reason is itself reported. A gate with a free mute button becomes a gate
+# people learn to ignore, which is how verify-kit passed for weeks with 15 mandated skills
+# absent.
 echo "[L9] every declared hook is wired into the live settings"
 L9SETTINGS=""
 for s in "$LIVE/settings.json" "$LIVE/settings.local.json"; do
