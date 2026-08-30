@@ -15,11 +15,18 @@
 #       — and the lockfile is in the shape the installers accept, not the old MAP they refuse
 #   L8  every hook ON THE MACHINE is declared here     (the reverse direction, for hooks)
 #   L9  every declared hook is WIRED in the live settings, and every wired path exists
+#   L10 every skill ON THE MACHINE is declared here    (the reverse direction, for skills)
 #
 # L8/L9 added 2026-08-29. L1..L7 could all pass on a machine that boots with no identity and
 # no memory, because the hooks supplying those were in no lockfile (L8) or in one and wired
 # nowhere (L9). "LOCKED" meant the cache agreed with the lock; it did not mean the machine
 # came back. See the block comments at each layer for what was measured.
+#
+# L10 added 2026-08-30, and it is THE SAME OMISSION A SECOND TIME. L8 closed the reverse
+# direction for hooks and stopped there; skills kept the identical blind spot for one more
+# day, until undeclaring one left a live symlink that every layer above still called LOCKED.
+# Whenever a layer is added in one direction for one artefact kind, ask what the OTHER kind
+# is still missing. That question, asked on 2026-08-29, would have shipped both at once.
 #
 # Usage: bash lock-verify.sh [--lock <path> | --lock=<path>]
 # Exit:  0 ok · 1 drift · 2 bad arguments
@@ -638,6 +645,126 @@ else
     note "L9 deliberate exceptions recorded in install.hooksUnwired:"
     printf '%s' "$L9EXCUSED" | while read -r l; do [ -n "$l" ] && note "$l"; done
   }
+fi
+
+echo ""
+
+# ---- L10: skills on the machine that this lock does not declare -------------
+# THE SKILLS DIRECTORY HAD THE BLIND SPOT HOOKS HAD BEFORE L8. The layers that touch an
+# artefact ran in one direction only, and the gap is visible the moment they are listed:
+#
+#     L2   vendor dirs       -> declared?      content, both directions covered
+#     L5   declared skills   -> installed?     ONE DIRECTION
+#     L8   hooks on machine  -> declared?      the reverse, for hooks
+#     ---  skills on machine -> declared?      DID NOT EXIST
+#
+# Measured 2026-08-30 while retiring a duplicate: dropping `smart-contract-auditor` from
+# install.skills left ~/.claude/skills/smart-contract-auditor as a LIVE SYMLINK into the
+# vendor tree, declared by nothing — and lock-verify printed LOCKED. Every layer above was
+# satisfied. L5 does not iterate the machine, only the lock; L8 does not look at skills.
+# The skill still loads, still fires on its triggers, and is restored by nothing.
+#
+# ⚠️ WHY THIS LAYER CAN DO WHAT L8 CANNOT. L8's own comment states the limit: hooks are
+# COPIED, so nothing on disk records a hook's provenance and L8 can report only the set
+# difference. Skills are installed as SYMLINKS — the same fact that forced L5 to resolve
+# rather than test existence — so an undeclared skill still carries where it came from.
+# That is worth spending, because the three ways a skill can be undeclared want three
+# different remedies, and reporting them as one class is how a finding becomes noise:
+#
+#   ORPHANED    resolves INTO this instance's own vendor/ or repo. This lock owns the
+#               content and declares nothing. Almost always a half-finished retirement or
+#               a hand-linked skill. Declare it here, or remove the link.
+#   FOREIGN     resolves somewhere else. $LIVE is SHARED BY EVERY INSTANCE on the machine,
+#               so another instance may declare this correctly and it is not a defect
+#               here. Read that instance's lock before touching it.
+#   OPAQUE      not a symlink at all — a real directory, hand-copied. No provenance exists
+#               on disk, which is exactly the hook situation, and the reason L8 can only
+#               ever print names.
+#
+# ⚠️ AND WHY THERE IS NO ESCAPE HATCH, unlike L9. L9's `install.hooksUnwired` exists because
+# a hook can be legitimately wired at PROJECT level, which this script cannot enumerate — a
+# structural blind spot needing a recorded exception. Nothing equivalent is true here: every
+# skill on the machine is visible to this layer, so a mute button would buy nothing except
+# the ability to hide a finding. The file's own verdict on that trade, from L9: a gate with
+# a free mute button becomes a gate people learn to ignore.
+echo "[L10] every skill on the machine is declared in this lock"
+if [ ! -d "$LIVE/skills" ]; then
+  pass "L10 no $LIVE/skills directory — nothing to check"
+else
+  # Same denominator discipline as L8: files that cannot be a skill are counted and
+  # named-by-pattern, never silently dropped. A reader must be able to audit what was
+  # excluded, or the pass count means nothing.
+  L10SKIP=0
+  L10SEEN=0
+  L10ORPHAN=""
+  L10FOREIGN=""
+  L10OPAQUE=""
+  DECLARED_SKILLS="$(jq -r '(.install.skills // [])[]' "$LOCK")"
+  # Resolve the two trees this instance owns ONCE. Both may be absent — a lockfile does not
+  # require a checkout — and an empty prefix must never match, or every foreign skill would
+  # be misreported as this instance's own.
+  L10_VENDOR_P="$(phys "$VENDOR" || true)"
+  L10_REPO_P="$(phys "$REPO" || true)"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    b="$(basename "$f")"
+    case "$b" in
+      __pycache__|*.bak|*.bak.*|*.retired-*|*.orig|*.rej|.*) L10SKIP=$((L10SKIP + 1)); continue ;;
+    esac
+    L10SEEN=$((L10SEEN + 1))
+    printf '%s\n' "$DECLARED_SKILLS" | grep -qxF "$b" && continue
+    if [ ! -L "$LIVE/skills/$b" ]; then
+      L10OPAQUE="$L10OPAQUE$b"$'\n'
+      continue
+    fi
+    p="$(phys "$LIVE/skills/$b" || true)"
+    OWNED=0
+    if [ -n "$L10_VENDOR_P" ]; then
+      case "$p" in "$L10_VENDOR_P"/*) OWNED=1 ;; esac
+    fi
+    if [ -n "$L10_REPO_P" ]; then
+      case "$p" in "$L10_REPO_P"/*) OWNED=1 ;; esac
+    fi
+    if [ -z "$p" ]; then
+      # A symlink whose target is gone. Undeclared AND broken: it loads nothing, but it is
+      # still a name in the skills directory that no lockfile accounts for.
+      L10ORPHAN="$L10ORPHAN$b|dangling symlink -> $(readlink "$LIVE/skills/$b" 2>/dev/null)"$'\n'
+    elif [ "$OWNED" -eq 1 ]; then
+      L10ORPHAN="$L10ORPHAN$b|$p"$'\n'
+    else
+      L10FOREIGN="$L10FOREIGN$b|$p"$'\n'
+    fi
+  done < <(find "$LIVE/skills" -mindepth 1 -maxdepth 1 2>/dev/null | sort)
+  if [ -n "$L10ORPHAN" ] || [ -n "$L10OPAQUE" ] || [ -n "$L10FOREIGN" ]; then
+    [ -n "$L10ORPHAN" ] && {
+      drift "L10 resolves INTO this instance but is declared by nothing here:"
+      printf '%s' "$L10ORPHAN" | while IFS='|' read -r n d; do
+        [ -n "$n" ] && note "$n -> $d"
+      done
+      note "this lock owns the content and does not declare it. Installed by nothing,"
+      note "restored by nothing — and still loaded by the harness every session."
+      note "declare it in install.skills + install.skillSources, or remove the link."
+    }
+    [ -n "$L10OPAQUE" ] && {
+      drift "L10 present in $LIVE/skills as a real directory, not a symlink:"
+      printf '%s' "$L10OPAQUE" | while read -r l; do [ -n "$l" ] && note "$l"; done
+      note "hand-copied content. Nothing on disk records where it came from, so this"
+      note "layer cannot say whose it is — the same limit L8 lives with for hooks."
+      note "give it a source and declare it, or record it as deliberately machine-local."
+    }
+    [ -n "$L10FOREIGN" ] && {
+      drift "L10 present in $LIVE/skills, resolving OUTSIDE this instance:"
+      printf '%s' "$L10FOREIGN" | while IFS='|' read -r n d; do
+        [ -n "$n" ] && note "$n -> $d"
+      done
+      note "⚠️ $LIVE is shared by every instance on this machine. Another instance may"
+      note "declare these correctly, in which case they are not a defect HERE. Read its"
+      note "lock before deleting anything. This layer sees only the lockfile it was given."
+    }
+  else
+    pass "L10 all $L10SEEN skill entry/entries are declared in this lock"
+  fi
+  [ "$L10SKIP" -gt 0 ] && note "L10 skipped $L10SKIP non-skill file(s) (.bak* / .retired-* / .orig / .rej / dotfiles / __pycache__)"
 fi
 
 echo ""
