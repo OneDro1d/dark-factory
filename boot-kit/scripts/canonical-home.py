@@ -83,19 +83,76 @@ def declared_skills(lock):
     return []
 
 
+def _strip_fences(body):
+    """Drop fenced code blocks.
+
+    ⚠️ MEASURED DEFECT, 2026-08-30. A skill that GENERATES documents embeds those documents
+    as fenced templates, and their headings are not this skill's structure — they are its
+    output. `cold-start-generator` embeds a whole CLAUDE.md and a whole cold-start doc, so
+    12 of its 32 "headings" belonged to artifacts it writes. They inflate the denominator
+    and can never match a variant whose generated templates differ, which pushed a real
+    fork's score to 4/32 and produced the wrong remedy.
+    """
+    out, fenced = [], False
+    for line in body.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if not fenced:
+            out.append(line)
+    return "\n".join(out)
+
+
+# `Step 2: Generate CLAUDE.md` and `Step 3: Generate CLAUDE.md` are the same section in two
+# documents where one inserted a step above it. Exact string matching calls them different,
+# so a fork that renumbers reads as unrelated — the second half of the same measured defect.
+_NUM_PREFIX = re.compile(r"^(?:step\s+)?\d+[.):]?\s+", re.I)
+
+
 def headings(path):
     """The set of markdown headings in a SKILL.md — the structural fingerprint.
 
     Headings rather than lines because prose gets rewritten while structure survives: a
     genuine fork keeps its parent's shape even after every sentence is reworded, and an
     unrelated skill does not, however similar its vocabulary.
+
+    Fences are stripped and ordinals normalised first; see the two notes above. Both were
+    found by this gate returning a confidently wrong verdict on a real pair.
     """
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             body = fh.read()
     except Exception:
         return None
-    return {h.strip().lower() for h in re.findall(r"^#{1,6}\s+(.+?)\s*$", body, re.M)}
+    raw = re.findall(r"^#{1,6}\s+(.+?)\s*$", _strip_fences(body), re.M)
+    return {_NUM_PREFIX.sub("", h.strip().lower()) for h in raw}
+
+
+def triggers(path):
+    """The quoted trigger phrases in a skill's `description:` frontmatter.
+
+    ⚠️ THIS IS THE MEASURE THAT MATTERS OPERATIONALLY, and the gate shipped without it.
+    Heading overlap answers "did these share a parent?", which is a question about history.
+    The harm is in the present: two skills whose trigger phrases coincide both match the
+    same user sentence, and nothing chooses between them. That is what made `sc-audit` and
+    `smart-contract-auditor` fire arbitrarily — byte-identical `description:` fields — and
+    RENAMING either of them would not have changed it by one character.
+
+    So a rename verdict must never be issued over an identical trigger set. Structure can
+    say "these are unrelated"; triggers can still say "they collide anyway".
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            head = fh.read(8192)
+    except Exception:
+        return None
+    m = re.match(r"^---\s*\n(.*?)\n---\s*\n", head, re.S)
+    if not m:
+        return None
+    d = re.search(r"^description:\s*(.+?)\s*$", m.group(1), re.M | re.S)
+    if not d:
+        return None
+    return {t.strip().lower() for t in re.findall(r'"([^"]{2,})"', d.group(1))}
 
 
 def owning_repo(lockpath, lock):
@@ -237,13 +294,14 @@ def main(argv):
     else:
         print("REPORT D2 %d stem collision(s) — read the overlap, the remedy inverts on it:" % len(collisions))
         for special, general in collisions:
-            a = b = None
+            a = b = ta = tb = None
             for label, root in roots.items():
                 pa, pb = os.path.join(root, special, "SKILL.md"), os.path.join(root, general, "SKILL.md")
                 if a is None and os.path.isfile(pa):
-                    a = headings(pa)
+                    a, ta = headings(pa), triggers(pa)
                 if b is None and os.path.isfile(pb):
-                    b = headings(pb)
+                    b, tb = headings(pb), triggers(pb)
+            shared_t = (ta & tb) if (ta and tb) else set()
             if a and b:
                 shared = len(a & b)
                 pct = (100.0 * shared / len(b)) if b else 0.0
@@ -257,10 +315,22 @@ def main(argv):
                     verdict = "BINDING — cites its parent; low overlap is correct"
                 elif pct >= 50:
                     verdict = "FORK — strip to a delta"
+                elif shared_t:
+                    # ⚠️ STRUCTURE SAYS UNRELATED, TRIGGERS SAY THEY COLLIDE ANYWAY, and the
+                    # triggers win. Renaming changes which NAME the model sees; it does not
+                    # change which sentences match. Two skills answering the same phrases
+                    # still fire arbitrarily afterwards, so "rename" would be a remedy that
+                    # cannot touch the defect. Measured on a real pair whose trigger lists
+                    # were byte-identical while heading overlap read 4/32.
+                    verdict = ("TRIGGER COLLISION — %d shared trigger(s); rename does NOT fix this"
+                               % len(shared_t))
                 else:
                     verdict = "UNRELATED — rename, do not strip"
                 print("        %-38s vs %-26s %d/%d headings (%.0f%%)  %s"
                       % (special, general, shared, len(b), pct, verdict))
+                if shared_t:
+                    print("          shared triggers: %s"
+                          % ", ".join('"%s"' % t for t in sorted(shared_t)[:6]))
             else:
                 print("        %-38s vs %-26s overlap UNMEASURED (pass --skills-root to measure)"
                       % (special, general))
