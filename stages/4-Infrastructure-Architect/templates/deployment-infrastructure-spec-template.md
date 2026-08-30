@@ -18,7 +18,7 @@ Record only what differs from the platform default (the standard Dev → Test �
 
 | Service | dev | test | acceptance | prod | Notes (deltas) |
 |---|---|---|---|---|---|
-| `<service>` | ✓ | ✓ | ✓ | ✓ | <e.g. amd64-only; external RabbitMQ> |
+| `<service>` | ✓ | ✓ | ✓ | ✓ | <e.g. amd64-only; broker is external to this cluster> |
 
 ## Secrets
 
@@ -28,7 +28,7 @@ Record only what differs from the platform default (the standard Dev → Test �
 
 ## Network posture
 
-- **Ingress:** which services are exposed; auth (Clerk SSO / mTLS / API key).
+- **Ingress:** which services are exposed; auth (SSO / mTLS / API key).
 - **Internal:** AMQP only; any internal HTTP path is ADR-justified (cite the SA HTTP-vs-AMQP map).
 - **Egress:** external partner calls; egress controls.
 

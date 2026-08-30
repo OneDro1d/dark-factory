@@ -58,6 +58,14 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL  %s\n' "$1"; [ $# -gt 1 ] && printf '  
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
+# ⚠️ THIS SUITE SCANS TRACKED FILES, WHICH MEANS IT GOES GREEN ON A NEW FILE UNTIL `git add`.
+# Observed 2026-08-30: a new config naming Engram was written, the full runner passed 33/33
+# twice, and the suite only failed in CI — because CI checks out a commit, where the file is
+# tracked by definition, while locally it was still untracked and therefore invisible.
+# Discovery MUST stay `git ls-files`-based (an untracked scratch file is not the repo's
+# problem), so the trap cannot be designed away — but if you are adding a file that names a
+# product and the runner is suspiciously green, stage it and run again before believing it.
+#
 # The files that legitimately mention Engram WITHOUT pointing at the explanation, and why.
 # Keep this list short and keep the reasons specific: "it is inconvenient" is not a reason.
 EXCLUDE_PATHS=(
@@ -71,6 +79,12 @@ EXCLUDE_PATHS=(
   "starter-kit/instance/tests/test-authentication-doc.sh"
   "starter-kit/instance/tests/test-start-here-doc.sh"
   "boot-kit/scripts/tests/test-engram-references.sh"
+  # A VOCABULARY, not prose. tier1-generic.conf lists product names the genericity gate
+  # scans FOR — the word appears as a scanner token, so a "what is Engram" pointer would
+  # be documentation attached to a data row, and R2's premise (a stranger meets the name
+  # and needs to know what it is) does not hold: nobody meets a product here without
+  # already reading the gate that consumes the file.
+  "boot-kit/scripts/tier1-generic.conf"
 )
 
 excluded() {

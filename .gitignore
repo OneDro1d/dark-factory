@@ -29,3 +29,9 @@ boot-kit/scripts/gate-requirements.conf
 # The substrate leak denylist holds the SOURCE PROJECT real identifiers - same rule as
 # landmarks.conf: the real list stays local, the committed script explains the shape.
 skills/df-context-store/substrate-template/substrate-denylist.conf
+
+# Estate-PRIVATE product names for the Tier-1 genericity gate. The shipped
+# tier1-generic.conf carries public third-party products only; in-house service names are
+# themselves landmarks, and the first draft of that file was rejected by publish-gate P1/P3
+# for carrying three of them. Same rule again: the real list stays local.
+boot-kit/scripts/tier1-generic.local.conf
