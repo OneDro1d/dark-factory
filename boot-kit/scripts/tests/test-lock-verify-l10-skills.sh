@@ -211,5 +211,10 @@ contains "D4 opaque class present"                      "not a symlink"         
 
 echo ""
 printf 'L10 skills-direction: %d ok, %d failed\n' "$PASS" "$FAIL"
+# run-tests.sh treats a suite that exits 0 without this line as UNMEASURED, not as a pass —
+# a green rc with an unknown denominator is the same false assurance this whole layer is
+# about. Total, not the pass count: a suite that silently ran fewer assertions than last
+# week must be visible as a shrinking number.
+printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0
