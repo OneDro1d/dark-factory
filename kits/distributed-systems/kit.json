@@ -1,0 +1,14 @@
+{
+  "name": "distributed-systems",
+  "description": "Designing and mapping systems made of many services — the axiom set, the service map, and the reviewers that catch coupling and blast radius before a change ships.",
+  "skills": [
+    "architecture-reviewer",
+    "backend-service-auditor",
+    "microservices-architect",
+    "production-readiness-reviewer",
+    "service-mapper"
+  ],
+  "hooks": [],
+  "harnesses": ["claude-code", "codex"],
+  "$thinNote": "⚠️ This kit is THIN — two of its five skills are its own (microservices-architect, service-mapper) and three are borrowed from code-review. Said plainly rather than padded: a kit that looks full because it lists neighbouring skills is a worse answer than a small one that is honest. If distributed-systems is to be a first-class kit it needs content that does not exist in this repo yet."
+}

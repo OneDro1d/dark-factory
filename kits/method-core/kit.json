@@ -1,0 +1,30 @@
+{
+  "name": "method-core",
+  "description": "The Dark Factory method itself — the stage pipeline, the evidence gate, and the operating stance. Every other kit assumes this one.",
+  "$note": "The floor. A kit that is not method-core should not restate these; it should depend on them being installed alongside.",
+  "skills": [
+    "critical-thinking",
+    "dark-factory-build",
+    "df-adversary-gate",
+    "df-data-transform-lens",
+    "df-infrastructure",
+    "df-observability",
+    "df-product-owner",
+    "df-qa",
+    "df-solution-architect",
+    "df-tdd-developer",
+    "vinculum-loop",
+    "work-autonomously"
+  ],
+  "hooks": [
+    "df-stage-gate.py",
+    "df-dispatch-subagents-reminder.py",
+    "orchestrator-autonomy-reminder.py"
+  ],
+  "harnesses": ["claude-code", "codex"],
+  "$harnessNote": "Skills are portable as-is — Codex CLI reads the same SKILL.md format. HOOK WIRING IS NOT: Claude Code uses settings.json, Codex uses hooks.json / [hooks] in config.toml, and Codex implements a superset of the events (11 vs 5). The hook SCRIPTS are shared; the wiring is rendered per harness by the consuming instance. ⚠️ UNVERIFIED: that these hook scripts run unchanged under Codex is inferred from its documentation, not measured. Do not claim Codex support on this line alone.",
+  "$excluded": {
+    "develop-and-test": "Ships in this repo but is hardwired to one estate's stack — Supabase, RabbitMQ, DigitalOcean, pnpm, Zod, Fastify — and cites an internal table. It is a binding wearing the method's name and is scheduled to move to an org layer. Naming it here would put an estate's stack in every install.",
+    "requirements-discovery": "Same shape: the four-round interview is generic, its REQUIREMENTS-TEMPLATE.md is one estate's services and pipeline. The rounds belong here; the template does not."
+  }
+}
