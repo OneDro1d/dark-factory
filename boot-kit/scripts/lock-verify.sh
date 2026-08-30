@@ -13,6 +13,13 @@
 #   L6  every pin is reachable from a branch on the REMOTE
 #   L7  every declared skill/hook names a source, and every source names a declaration
 #       — and the lockfile is in the shape the installers accept, not the old MAP they refuse
+#   L8  every hook ON THE MACHINE is declared here     (the reverse direction, for hooks)
+#   L9  every declared hook is WIRED in the live settings, and every wired path exists
+#
+# L8/L9 added 2026-08-29. L1..L7 could all pass on a machine that boots with no identity and
+# no memory, because the hooks supplying those were in no lockfile (L8) or in one and wired
+# nowhere (L9). "LOCKED" meant the cache agreed with the lock; it did not mean the machine
+# came back. See the block comments at each layer for what was measured.
 #
 # Usage: bash lock-verify.sh [--lock <path> | --lock=<path>]
 # Exit:  0 ok · 1 drift · 2 bad arguments
@@ -444,6 +451,193 @@ if [ -z "$L7BAD" ] && [ -z "$L7SHAPE" ]; then
     # vacuous. Both UPSTREAM.lock files in the estate land here.
     pass "L7 nothing to check — no install.skills or install.hooks declarations"
   fi
+fi
+
+# ---- L8: hooks on the machine that this lock does not declare ---------------
+# THE HOOK DIRECTORY HAD NO L2. L2 asks "is every vendored dir declared?" and catches
+# unprovenanced CONTENT. Nothing asked the same question of $LIVE/hooks, so a hook could be
+# hand-copied onto a machine, hand-wired into settings.json, work perfectly for months, and
+# appear in no lockfile — installed by nothing, reported by nothing, restored by nothing.
+#
+# Measured across the reference estate 2026-08-28/29, four machines, and it is not drift —
+# it is structural. Every one of the five instance records declared THE SAME FIVE HOOKS,
+# exactly this repo's own hooks/ set. Everything a human ever added since is undeclared:
+# 13 on the laptop, 8 and 10 and 7 on the three workspaces. On the laptop 3 of the 4
+# SessionStart entries were undeclared, including the one that supplies the agent's identity.
+# The lockfile only ever grew through an install from here; hand-wiring never wrote back.
+#
+# The consequence is the one RESTORE promises against: wipe ~/.claude, restore from the
+# lockfile, pass L1..L7, print LOCKED — and boot with no identity and no memory. On a cloud
+# workspace whose ~/.claude is local disk and whose vendor mount survives a reset, the
+# undeclared half is EXACTLY the half a reset destroys.
+#
+# ⚠️ WHY THIS IS NOT WORDED LIKE L2. $LIVE/hooks is SHARED BY EVERY INSTANCE on the machine
+# — the same fact that forced L5 to resolve symlinks rather than test existence. A hook
+# another instance correctly declares and installs is undeclared HERE and is not a defect.
+# So the finding is "declared by no lockfile THIS check can see", never "unprovenanced".
+# Read it with the other instances' locks in hand before deleting anything.
+#
+# ⚠️ AND WHY IT CANNOT DO BETTER. Skills are installed as symlinks, so L5 can resolve one and
+# name the tree it came from. Hooks are COPIED — L5 tests them with a bare `[ -f ]`. Nothing
+# on disk records a hook's provenance. That absence is why the class stayed invisible, and it
+# is why L8 can only report the set difference, not attribute it.
+echo "[L8] every hook on the machine is declared in this lock"
+if [ ! -d "$LIVE/hooks" ]; then
+  pass "L8 no $LIVE/hooks directory — nothing to check"
+else
+  # Files that cannot be a hook are counted and named-by-pattern, never silently dropped:
+  # a reader must be able to audit the denominator. The reference laptop carried 12 such
+  # backups beside 16 real hooks, enough to bury the finding if they were listed inline.
+  L8SKIP=0
+  L8UNDECL=""
+  L8SEEN=0
+  DECLARED_HOOKS="$(jq -r '(.install.hooks // [])[]' "$LOCK")"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    b="$(basename "$f")"
+    case "$b" in
+      __pycache__|*.bak|*.bak.*|*.retired-*|*.orig|*.rej|.*) L8SKIP=$((L8SKIP + 1)); continue ;;
+    esac
+    L8SEEN=$((L8SEEN + 1))
+    # An exact name match is the ordinary case. A DIRECTORY also counts as declared when
+    # something inside it is declared: a plugin hook suite is installed under a nested name
+    # (`agent-notepad/hooks/session-start.sh`) and the parent directory is never itself a
+    # lockfile entry. Without this second test, correctly declaring all five hooks of a
+    # suite still leaves its directory reported as undeclared for ever — a finding that
+    # cannot be resolved is a finding people learn to skip. Found by declaring one.
+    if printf '%s\n' "$DECLARED_HOOKS" | grep -qxF "$b"; then
+      continue
+    fi
+    if [ -d "$LIVE/hooks/$b" ] && printf '%s\n' "$DECLARED_HOOKS" | grep -q "^$b/"; then
+      continue
+    fi
+    L8UNDECL="$L8UNDECL $b"$'\n'
+  done < <(find "$LIVE/hooks" -mindepth 1 -maxdepth 1 2>/dev/null | sort)
+  if [ -n "$L8UNDECL" ]; then
+    drift "L8 present in $LIVE/hooks but declared in NO lockfile entry here:"
+    printf '%s' "$L8UNDECL" | while read -r l; do [ -n "$l" ] && note "$l"; done
+    note "each of these is installed by nothing and restored by nothing."
+    note "decide per artefact: declare it here, own it in a plugin manifest, serve it"
+    note "from the doctrine store, or record it as deliberately machine-local."
+    note "⚠️ another instance sharing this LOOM_LIVE may declare some of them — check its"
+    note "lock before deleting. This layer sees only the lockfile it was given."
+  else
+    pass "L8 all $L8SEEN hook entry/entries are declared in this lock"
+  fi
+  [ "$L8SKIP" -gt 0 ] && note "L8 skipped $L8SKIP non-hook file(s) (.bak* / .retired-* / .orig / .rej / dotfiles / __pycache__)"
+fi
+
+echo ""
+
+# ---- L9: every declared hook is actually WIRED into the live settings -------
+# A hook can be declared, installed, hash-verified and INERT. On disk is not on duty: Claude
+# Code runs a hook only because settings.json names it in an event chain, and install.sh
+# copies hooks and NEVER TOUCHES settings.json. That gap was hit twice in one day
+# (2026-08-28) on two different workspaces — the hook was present, the gate was green, and
+# the behaviour it enforces simply did not happen.
+#
+# The installer already carries this concept FOR SKILLS ("on disk is inert until settings
+# names it") and never carried it for hooks, which is the whole defect in one sentence.
+#
+# Both directions are checked, because they fail differently:
+#   declared but unwired   -> silent no-op. The gate says LOCKED and nothing enforces.
+#   wired but not on disk  -> a broken event chain, every session, on every fire.
+#
+# Settings are read from settings.json AND settings.local.json. The reference estate's
+# workspaces carry both, and a hook wired only in the local file would otherwise be
+# reported as unwired — a false DRIFT, which empties the verdict that is supposed to mean
+# "this instance is right".
+#
+# ⚠️ SCOPE, AND WHY THE ESCAPE HATCH IS DESIGN RATHER THAN A FUDGE. Only the USER-level
+# settings are read. A harness also merges PROJECT-level settings, and a hook can legitimately
+# be wired there — the reference estate's notepad commit gate is wired in each notepad repo's
+# own .claude/settings.json precisely so it arms in those sessions and nowhere else. This
+# layer cannot enumerate every project on a machine, and pretending otherwise would mean
+# either a false DRIFT on every such hook or a check that quietly stopped looking. So user
+# level is checked, and a project-wired hook is RECORDED, with that as its stated reason.
+#
+# ESCAPE HATCH, deliberately narrow: `install.hooksUnwired` maps a hook NAME to a REASON
+# STRING. A genuine exception (project-level wiring, a hook invoked by another hook, or one
+# staged ahead of its wiring) can be recorded — but it cannot be silenced anonymously. An
+# empty or missing reason is itself reported. A gate with a free mute button becomes a gate
+# people learn to ignore, which is how verify-kit passed for weeks with 15 mandated skills
+# absent.
+echo "[L9] every declared hook is wired into the live settings"
+L9SETTINGS=""
+for s in "$LIVE/settings.json" "$LIVE/settings.local.json"; do
+  [ -f "$s" ] && L9SETTINGS="$L9SETTINGS$s"$'\n'
+done
+if [ -z "$L9SETTINGS" ]; then
+  drift "L9 no settings.json or settings.local.json under $LIVE — NOTHING is wired"
+  note "every declared hook is inert. This is not a pass: an absent settings file means"
+  note "the event chains do not exist, not that they are empty."
+else
+  # Every command string in every event chain, from every settings file present.
+  L9CMDS=""
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    if ! jq -e . "$s" >/dev/null 2>&1; then
+      drift "L9 $s is not valid JSON — Claude Code cannot read it, so nothing is wired"
+      continue
+    fi
+    L9CMDS="$L9CMDS$(jq -r '[.hooks // {} | to_entries[] | .value[]? | .hooks[]? | .command? // empty] | .[]' "$s" 2>/dev/null)"$'\n'
+  done <<< "$L9SETTINGS"
+
+  L9UNWIRED=""
+  L9EXCUSED=""
+  L9BADEXCUSE=""
+  while read -r h; do
+    [ -n "$h" ] || continue
+    if printf '%s' "$L9CMDS" | grep -qF -- "$h"; then
+      continue
+    fi
+    reason="$(jq -r --arg h "$h" '.install.hooksUnwired[$h] // empty' "$LOCK" 2>/dev/null)"
+    if [ -n "$reason" ]; then
+      L9EXCUSED="$L9EXCUSED $h — $reason"$'\n'
+    elif jq -e --arg h "$h" '.install.hooksUnwired | has($h)' "$LOCK" >/dev/null 2>&1; then
+      L9BADEXCUSE="$L9BADEXCUSE $h"$'\n'
+    else
+      L9UNWIRED="$L9UNWIRED $h"$'\n'
+    fi
+  done <<< "$(jq -r '(.install.hooks // [])[]' "$LOCK")"
+
+  # The other direction: a chain naming a file that is not there.
+  L9GHOST=""
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    case "$c" in *"/hooks/"*) ;; *) continue ;; esac
+    # Expand the two spellings the estate's settings files actually use, then take the
+    # first whitespace-delimited token: chains carry arguments, paths do not.
+    p="${c//\$\{HOME\}/$HOME}"
+    p="${p//\$HOME/$HOME}"
+    p="${p%% *}"
+    [ -e "$p" ] || L9GHOST="$L9GHOST $p"$'\n'
+  done <<< "$L9CMDS"
+
+  if [ -n "$L9UNWIRED" ] || [ -n "$L9BADEXCUSE" ] || [ -n "$L9GHOST" ]; then
+    [ -n "$L9UNWIRED" ] && {
+      drift "L9 declared and installed but WIRED NOWHERE — inert:"
+      printf '%s' "$L9UNWIRED" | while read -r l; do [ -n "$l" ] && note "$l"; done
+      note "add it to a settings.json event chain, or record the exception with a reason"
+      note "in install.hooksUnwired. install.sh does not wire hooks — a human does."
+    }
+    [ -n "$L9BADEXCUSE" ] && {
+      drift "L9 listed in install.hooksUnwired with NO reason:"
+      printf '%s' "$L9BADEXCUSE" | while read -r l; do [ -n "$l" ] && note "$l"; done
+      note "the reason is the point. An exception nobody can audit is a silent failure"
+      note "wearing a lockfile key."
+    }
+    [ -n "$L9GHOST" ] && {
+      drift "L9 wired in settings but NOT PRESENT on disk — the chain breaks every session:"
+      printf '%s' "$L9GHOST" | while read -r l; do [ -n "$l" ] && note "$l"; done
+    }
+  else
+    pass "L9 every declared hook is wired, and every wired hook path exists"
+  fi
+  [ -n "$L9EXCUSED" ] && {
+    note "L9 deliberate exceptions recorded in install.hooksUnwired:"
+    printf '%s' "$L9EXCUSED" | while read -r l; do [ -n "$l" ] && note "$l"; done
+  }
 fi
 
 echo ""
