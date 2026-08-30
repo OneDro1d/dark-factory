@@ -1,0 +1,16 @@
+{
+  "name": "knowledge-worker",
+  "description": "Turning work into documents other people can act on — repo documentation, walkthrough recordings, video and meeting intake, and handoffs that survive a context reset.",
+  "$note": "The kit for someone whose output is understanding rather than code — a product owner, an analyst, a technical writer. It is the one kit that assumes the least about the target repo: none of these skills needs a build, a stack, or a deploy target.",
+  "skills": [
+    "agent-notepad",
+    "df-app-walkthrough",
+    "df-video-intake",
+    "handoff",
+    "repo-docs",
+    "service-mapper"
+  ],
+  "hooks": [],
+  "harnesses": ["claude-code", "codex"],
+  "$overlapNote": "agent-notepad and handoff are also in agent-ops. That is deliberate and is NOT a 'one artifact, one home' violation: one home is about which repo OWNS the directory, and exactly one does. A kit only references a skill by name, so two kits naming it create no second copy and nothing that can drift. Kits are curated bundles; overlap between them is the normal case."
+}

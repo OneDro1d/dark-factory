@@ -1,0 +1,19 @@
+{
+  "name": "code-review",
+  "description": "Reviewing and auditing a codebase across the dimensions that need different lenses — correctness, architecture, security, dependencies, frontend, tests, maintainability, and readiness to deploy.",
+  "$note": "Nine skills that share one template and one job. They were the clearest kit-shaped cluster in the repo and fitted no existing category, which is what surfaced this kit rather than an author inventing it.",
+  "skills": [
+    "architecture-reviewer",
+    "backend-service-auditor",
+    "code-reviewer",
+    "dependency-risk-auditor",
+    "dx-maintainability-reviewer",
+    "frontend-auditor",
+    "production-readiness-reviewer",
+    "security-threat-modeler",
+    "test-quality-gatekeeper"
+  ],
+  "hooks": [],
+  "harnesses": ["claude-code", "codex"],
+  "$overlapNote": "code-reviewer overlaps architecture-reviewer and dx-maintainability-reviewer — its own SKILL.md covers 'Architecture Review' and 'Quality Review' sections the two specialists own, and it is the only one still on the older EXAMPLES.md template while the other eight share CHECKLIST.md + PATTERNS.md. Bundled together deliberately for now: the overlap is real but the remedy is a merge decision, and shipping them as a set is honest about what they are. Do not read this kit as an assertion that all nine are distinct."
+}

@@ -1,0 +1,13 @@
+{
+  "name": "frontend",
+  "description": "Building and auditing web interfaces — React and Next.js performance rules, the Web Interface Guidelines, and a frontend audit pass covering security, UX, performance and accessibility.",
+  "skills": [
+    "frontend-auditor",
+    "vercel-react-best-practices",
+    "web-design-guidelines"
+  ],
+  "hooks": [],
+  "harnesses": ["claude-code", "codex"],
+  "$provenanceNote": "⚠️ Two of these three are VENDORED THIRD-PARTY CONTENT, not ours: vercel-react-best-practices is Vercel Engineering's React/Next.js rule set (MIT) and web-design-guidelines fetches Vercel's public Web Interface Guidelines at runtime. Keep `license: MIT` and the author attribution on any move, and note the second carries a runtime dependency on a public GitHub raw URL — it degrades if that URL moves, which is a different failure from a skill that is merely wrong.",
+  "$thinNote": "⚠️ Also THIN, and only one skill in it is originally ours. Recorded rather than disguised."
+}
