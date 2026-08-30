@@ -13,7 +13,7 @@ A mission larger than one context window cannot live in the conversation. It liv
 
 ## The tracker is chosen per mission
 
-Declare it when the loop is invoked — "run the loop on X, tracker: jira, project CAT". Record the choice in the map's **Tracker** field so every later session inherits it.
+Declare it when the loop is invoked — "run the loop on X, tracker: jira, project ABC". Record the choice in the map's **Tracker** field so every later session inherits it.
 
 | Tracker | Status | Map is | Tickets are | Blocking |
 |---|---|---|---|---|
