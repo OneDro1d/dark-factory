@@ -104,6 +104,94 @@ mk map-a.json '{"instance":"m","install":{"skills":{"x":"up/skills/x"}}}'
 OUT="$(python3 "$GATE" "$WORK/map-a.json" 2>&1)"
 absent   "S4 a MAP-shaped lockfile does not read as empty" "skills    : 0" "$OUT"
 
+# ---- 5. the overlap metric itself, which shipped WRONG and produced a wrong remedy ----
+# Measured 2026-08-30 on a real pair. `trilix-cold-start-generator` scored 4/32 against its
+# Tier-1 namesake and the gate said "UNRELATED — rename". Both halves were artefacts of the
+# metric:
+#
+#   a) the Tier-1 skill EMBEDS the documents it generates as fenced templates, so 12 of its
+#      32 "headings" were its OUTPUT, not its structure — they inflate the denominator and
+#      can never match a variant whose generated templates differ;
+#   b) the variant inserts one step, so `Step 2: Generate CLAUDE.md` became `Step 3: …` and
+#      exact string matching called every later section different.
+#
+# Corrected, the same pair reads 9/14 = 64% — a fork. And the wrong verdict was not merely
+# imprecise: RENAME was proposed for two skills whose trigger phrases are byte-identical,
+# which is the `sc-audit` / `smart-contract-auditor` defect that a whole PR was spent
+# retiring. Renaming cannot change which sentences match.
+mkskill() { # mkskill <root> <name> <desc> <body>
+  mkdir -p "$WORK/$1/$2"
+  printf -- '---\nname: %s\ndescription: %s\n---\n\n%s\n' "$2" "$3" "$4" > "$WORK/$1/$2/SKILL.md"
+}
+
+# A parent whose headings are mostly inside a fenced template it generates.
+mkskill roots gen 'Generates docs. Triggers on "bootstrap", "cold start".' \
+'## When to Use
+## Analysis Process
+### Step 1: Recon
+### Step 2: Generate CLAUDE.md
+
+```markdown
+# CLAUDE.md
+## Project Overview
+## Architecture
+## Testing
+## Deployment
+```
+
+### Step 3: Validate'
+# The variant: same shape, one step inserted, so every later ordinal shifts.
+mkskill roots org-gen 'Generates docs for Org. Triggers on "bootstrap", "cold start".' \
+'## When to Use
+## Analysis Process
+### Step 1: Recon
+### Step 2: Check House Rules
+### Step 3: Generate CLAUDE.md
+### Step 4: Validate'
+
+mk ov.json '{"instance":"m","install":{"skills":["gen","org-gen"],"skillSources":{"gen":"up/skills/gen","org-gen":"local:skills/org-gen"}}}'
+OUT="$(python3 "$GATE" "$WORK/ov.json" --skills-root r="$WORK/roots" 2>&1)"
+# The parent has 5 real headings and 5 more inside the fenced CLAUDE.md template. A
+# denominator of 5 is therefore the proof that the fence was stripped; 10 would mean it
+# was not, and would drag the percentage to half of the truth.
+contains "S5 fenced template headings are excluded from the denominator" "5/5 headings" "$OUT"
+contains "S5 renumbered sections still match — verdict is FORK"  "FORK — strip to a delta" "$OUT"
+# Assert on the VERDICT text, not the bare word: "UNRELATED" also appears in the standing
+# legend below the table, so an `absent` on the word alone fails against correct output.
+# That is the same over-broad-assertion mistake this suite's S1 comment already records.
+absent   "S5 the fork is NOT given the rename verdict"  "UNRELATED — rename" "$OUT"
+
+# ---- 6. a rename is never proposed over a shared trigger set ------------------
+# Structure may genuinely say "unrelated". Triggers can still say "they collide anyway",
+# and then RENAME is a remedy that cannot touch the defect. This pair shares no heading at
+# all and every trigger phrase.
+mkskill roots2 alpha 'Does alpha. Triggers on "run the thing", "do it".' \
+'## Purpose
+## Steps'
+mkskill roots2 org-alpha 'Does org alpha. Triggers on "run the thing", "do it".' \
+'## Completely
+## Different
+## Structure'
+mk trig.json '{"instance":"m","install":{"skills":["alpha","org-alpha"],"skillSources":{"alpha":"up/skills/alpha","org-alpha":"local:skills/org-alpha"}}}'
+OUT="$(python3 "$GATE" "$WORK/trig.json" --skills-root r="$WORK/roots2" 2>&1)"
+contains "S6 a trigger collision is named"                 "TRIGGER COLLISION" "$OUT"
+contains "S6 it says rename does not fix it"               "rename does NOT fix" "$OUT"
+contains "S6 the shared phrases are printed for the reader" "shared triggers:"  "$OUT"
+
+# CONTROL — genuinely unrelated, and NO shared triggers. This must still say rename, or the
+# fix above has simply deleted the unrelated verdict rather than narrowing it.
+mkskill roots3 beta 'Does beta. Triggers on "beta phrase".' \
+'## Purpose
+## Steps'
+mkskill roots3 org-beta 'Does org beta. Triggers on "totally other phrase".' \
+'## Completely
+## Different
+## Structure'
+mk notrig.json '{"instance":"m","install":{"skills":["beta","org-beta"],"skillSources":{"beta":"up/skills/beta","org-beta":"local:skills/org-beta"}}}'
+OUT="$(python3 "$GATE" "$WORK/notrig.json" --skills-root r="$WORK/roots3" 2>&1)"
+contains "S6 control: no shared triggers still yields rename" "UNRELATED — rename" "$OUT"
+absent   "S6 control: not reported as a trigger collision"    "TRIGGER COLLISION"  "$OUT"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
