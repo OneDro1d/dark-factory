@@ -79,6 +79,24 @@ OUT="$(python3 "$GATE" "$WORK/clean-a.json" "$WORK/clean-b.json" 2>&1)"
 absent   "S3 instances composing the same skill is NOT a finding" "FAIL  D1" "$OUT"
 contains "S3 and it says how many it checked"                     "PASS  D1" "$OUT"
 
+# ---- 3b. `local:` resolves to the REPO, not to the instance ------------------
+# The second over-correction, and it produced SIX false findings out of seven on the first
+# real cross-estate run. An org layer OWNS a skill (`local:skills/x`) and an instance
+# VENDORS that same file by the layer's name (`the-layer/skills/x`). One source, one home.
+# Reporting it as two accuses the tier model of the defect it exists to prevent — and six
+# false findings in a seven-finding report is a gate nobody reads a second time.
+mk org.json  '{"repo":"org/the-layer","install":{"skills":["x"],"skillSources":{"x":"local:skills/x"}}}'
+mk inst.json '{"instance":"m1","install":{"skills":["x"],"skillSources":{"x":"the-layer/skills/x"}}}'
+OUT="$(python3 "$GATE" "$WORK/org.json" "$WORK/inst.json" 2>&1)"
+absent   "S3b layer-owns + instance-vendors is ONE home"    "FAIL  D1" "$OUT"
+
+# ...and the real fork it must STILL catch: a different repo owning the same name locally.
+# Without this, the fix above could have been "never report local:" — which would have
+# silenced the one genuine finding the real run surfaced.
+mk fork.json '{"repo":"org/other-repo","install":{"skills":["x"],"skillSources":{"x":"local:skills/x"}}}'
+OUT="$(python3 "$GATE" "$WORK/org.json" "$WORK/fork.json" 2>&1)"
+contains "S3b a second repo owning it locally IS two homes" "FAIL  D1" "$OUT"
+
 # ---- 4. the old MAP lockfile shape must be SEEN, not read as empty -----------
 # A lockfile in the shape the installers refuse still declares intent. Reporting "0 skills"
 # for it would render a broken record as a clean one.

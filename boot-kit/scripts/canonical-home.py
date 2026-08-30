@@ -98,6 +98,29 @@ def headings(path):
     return {h.strip().lower() for h in re.findall(r"^#{1,6}\s+(.+?)\s*$", body, re.M)}
 
 
+def owning_repo(lockpath, lock):
+    """Which REPO does this lockfile live in? That is what `local:` resolves to.
+
+    Preference order, most authoritative first:
+      1. an explicit `repo` key — the org layers carry one, e.g. "org/dark-factory-onedroid"
+      2. the git worktree's directory name, walked up from the lockfile
+      3. the lockfile's own directory name, as a last resort
+
+    NOT `instance`. Two instance lockfiles inside ONE repo (a root lockfile plus
+    `instances/<machine>/`) both mean the same repo when they say `local:`, and keying on
+    the instance name splits one home into three.
+    """
+    explicit = lock.get("repo")
+    if isinstance(explicit, str) and explicit:
+        return explicit.rstrip("/").split("/")[-1]
+    d = os.path.dirname(os.path.abspath(lockpath))
+    while d and d != "/":
+        if os.path.isdir(os.path.join(d, ".git")):
+            return os.path.basename(d)
+        d = os.path.dirname(d)
+    return os.path.basename(os.path.dirname(os.path.abspath(lockpath)))
+
+
 def cites_parent(special, general, roots):
     """Does the specialised skill NAME the general one? Then it is a binding, not a clone.
 
@@ -162,11 +185,18 @@ def main(argv):
     for lp in locks:
         lock = load(lp)
         srcs = (lock.get("install") or {}).get("skillSources") or {}
-        label = lock.get("instance") or os.path.basename(os.path.dirname(os.path.abspath(lp))) or lp
+        owner = owning_repo(lp, lock)
         for s in declared_skills(lock):
             src = srcs.get(s) or ""
             if src.startswith("local:"):
-                supplier = "local:%s" % label      # this instance owns it outright
+                # ⚠️ `local:` means "the repo THIS lockfile lives in" — NOT the instance.
+                # Resolving it to the instance name produced SIX false positives on the
+                # first real run: an org layer declaring `local:skills/x` and an instance
+                # vendoring the same file as `<that-layer>/skills/x` are the SAME source,
+                # and calling them two homes accuses the tier model of the very defect it
+                # prevents. Only a real second copy survives this — an instance forking a
+                # layer's skill under its own `local:`.
+                supplier = owner
             elif src:
                 supplier = src.split("/")[0].replace("upstream:", "")
             else:
