@@ -102,7 +102,7 @@ def owning_repo(lockpath, lock):
     """Which REPO does this lockfile live in? That is what `local:` resolves to.
 
     Preference order, most authoritative first:
-      1. an explicit `repo` key — the org layers carry one, e.g. "org/dark-factory-onedroid"
+      1. an explicit `repo` key — org layers carry one, e.g. "<org>/dark-factory-<org>"
       2. the git worktree's directory name, walked up from the lockfile
       3. the lockfile's own directory name, as a last resort
 

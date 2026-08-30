@@ -54,6 +54,19 @@ jobs:
         # condition P8 exists to detect.
         run: bash boot-kit/scripts/run-tests.sh
 
+      - name: Tier-1 genericity — is the method repo actually generic?
+        # The property every other gate assumes and none checks. `tier-check.py` asks
+        # whether a LOWER tier reaches up; nothing asked whether Tier 1 is estate-neutral,
+        # and by 2026-08-30 the public "generic method" listed a Supabase branch, a
+        # RabbitMQ instance and a DigitalOcean app as prerequisites.
+        #
+        # ⚠️ UNLIKE THE PUBLISH GATE BELOW, THIS ONE RUNS AT FULL STRENGTH HERE. Its
+        # vocabulary (`tier1-generic.conf`) is committed, because no product name in it is
+        # secret — where `landmarks.conf` must be gitignored and CI is left running
+        # placeholders (ticket 12915091248). So a green tick on this step means what it
+        # says, and that difference is the reason the config was designed to ship.
+        run: python3 boot-kit/scripts/tier1-generic.py
+
       - name: Publish gate — PLACEHOLDER patterns only, not a real-landmark pass
         # The step NAME carries the caveat because that is what a reader skimming a green
         # check actually sees. The job summary below says the same thing at length, and
