@@ -84,8 +84,28 @@ serves both. **Hook wiring is not**: Claude Code uses `settings.json`, Codex use
 events (11 against Claude Code's 5). The hook **scripts** are shared; the **wiring** is
 rendered per harness by the consuming instance.
 
-⚠️ **Unverified:** that these hook scripts run unchanged under Codex is inferred from its
-documentation, not measured. Do not claim Codex support on the strength of this file.
+### What is measured, and what is still inferred
+
+Probed against an installed Codex CLI 0.139.0, rather than read from a changelog:
+
+| claim | status |
+|---|---|
+| Codex supports lifecycle hooks | ✅ **measured** — the CLI ships `--dangerously-bypass-hook-trust` and speaks of *"enabled hooks"* and *"persisted hook trust"* |
+| Codex requires a hook to be **TRUSTED**, not merely wired | ✅ **measured** — same flag. Claude Code has no analogue |
+| the event set is a superset of Claude Code's | ⚠️ from documentation only |
+| our hook **scripts** run unchanged | ⚠️ **still unverified** — needs a live session, not a flag |
+
+⚠️ **The trust model is the constraint a renderer must carry.** Under Claude Code a hook is
+live once `settings.json` names it. Under Codex it must *also* be trusted — so "rendered the
+wiring" is not the same as "the hook runs". That is the same gap, one layer over, that
+`lock-verify` L9 exists to catch for Claude Code.
+
+⚠️ **A prior port exists on one reference machine and is NOT prior art.** Its `hooks.json`
+(April 2026) is Claude Code's `settings.json` hooks block copied verbatim under a Codex
+filename, and its own first line says so: *"Codex CLI does not currently expose Claude
+Code-style event hooks; these are archived for reference, not automatically executed."*
+Honest, inert, and a **copy rather than a translation**. Codex gained hook support at some
+point after it was written — which is exactly the kind of gap not to assume across.
 
 ## Checking
 
