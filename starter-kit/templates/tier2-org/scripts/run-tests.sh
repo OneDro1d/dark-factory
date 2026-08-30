@@ -21,8 +21,8 @@
 #   2. There is no `boot-kit/` in an org layer at all, so the path a copy would be
 #      fetched from does not exist here.
 #
-# The three guarantees ARE carried over verbatim, because each one exists to stop a
-# specific way a runner reports a false pass:
+# The guarantees ARE carried over verbatim, because each one exists to stop a specific way
+# a runner reports a false pass:
 #
 #   1. Enrolment is by the file EXISTING, never by a hand-written list. A list is the
 #      thing that rots: Tier 1's workflow once named ONE suite while the repo shipped 22.
@@ -32,6 +32,26 @@
 #   3. A glob that matches nothing exits 0. Discovering zero suites is a HARD FAILURE,
 #      not a pass — it means a broken checkout, a moved directory, or a gate wired up
 #      before anything was written for it to run.
+#   4. THE ASSERTION-COUNT CONTRACT. Exit status cannot tell "asserted 44 things" from
+#      "asserted nothing" — both exit 0. Every suite must print `ASSERTIONS: <n>` as its
+#      last word on the subject, and this runner reads it:
+#        * no such line     -> UNMEASURED, counted as a FAILURE. The suite has not
+#                              adopted the contract, so its green means nothing.
+#        * `ASSERTIONS: 0`  -> VACUOUS, counted as a FAILURE. Distinct from UNMEASURED
+#                              because the repair differs: this one HAS the contract and
+#                              its assertions stopped executing.
+#      Consequence for the child call: output is CAPTURED, not discarded, because the
+#      count is in it. A pass still prints one line; a failure now shows the tail.
+#
+# ⚠️ GUARANTEE 4 ARRIVED LATE, AND HOW IT ARRIVED IS THE POINT. Tier 1 added it in its own
+# runner (PR #35) and this template was not updated — so every org layer minted in the
+# interval was born one guarantee behind its parent, unable to tell a dead suite from a
+# passing one, and the live reference layer was still in that state on 2026-08-30. The
+# prose above used to read "the three guarantees", a fixed count in a comment, which is
+# the same rot as the hand-maintained suite list guarantee 1 exists to abolish: nothing
+# connected Tier 1 gaining a fourth to this file needing it. If you add a fifth upstream,
+# it belongs here in the same change — a generator that lags its parent ships the lag to
+# every consumer it stamps out.
 #
 # Usage:
 #   bash scripts/run-tests.sh              # run every suite under the repo root
@@ -39,8 +59,9 @@
 #   bash scripts/run-tests.sh --root=DIR   # same, `=` form
 #   bash scripts/run-tests.sh --list       # print what WOULD run, run nothing
 #
-# Exit: 0 = every discovered suite passed. 1 = at least one failed. 2 = usage error, or
-# no suites discovered.
+# Exit: 0 = every discovered suite passed AND declared a positive assertion count.
+# 1 = at least one suite failed, was UNMEASURED, or was VACUOUS. 2 = usage error, or no
+# suites discovered.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -102,33 +123,63 @@ echo
 
 PASSED=0
 FAILED=0
+ASSERTIONS=0
 FAILED_NAMES=""
+
+# The child's output is CAPTURED rather than discarded, because the assertion count is in
+# it (guarantee 4). It is still not echoed on a pass — a green run stays one line per
+# suite. On a failure the tail is shown, since discarding everything and printing `rc=1`
+# made every failure cost a second command before you learned anything.
+CAP="$(mktemp "${TMPDIR:-/tmp}/run-tests.XXXXXX")"
+trap 'rm -f "$CAP"' EXIT
 
 while IFS= read -r suite; do
   [ -n "$suite" ] || continue
   rel="${suite#$ROOT/}"
   start=$(date +%s)
-  if bash "$suite" >/dev/null 2>&1; then
+  if bash "$suite" >"$CAP" 2>&1; then
     rc=0
   else
     rc=$?
   fi
   elapsed=$(( $(date +%s) - start ))
-  if [ "$rc" -eq 0 ]; then
-    PASSED=$((PASSED + 1))
-    printf 'PASS  %3ss  %s\n' "$elapsed" "$rel"
-  else
+
+  # LAST match wins — a suite that drives sub-suites prints one line per child and its own
+  # total is the last. `10#` forces base 10 so `ASSERTIONS: 08` is not an octal error
+  # inside `[ … -eq … ]`, which would read as a runner bug rather than a suite typo.
+  n="$(grep -Eo '^[[:space:]]*ASSERTIONS:[[:space:]]*[0-9]+[[:space:]]*$' "$CAP" \
+       | tail -1 | tr -cd '0-9')"
+  [ -n "$n" ] && n=$((10#$n))
+
+  if [ "$rc" -ne 0 ]; then
     FAILED=$((FAILED + 1))
     FAILED_NAMES="$FAILED_NAMES$rel (rc=$rc)
 "
     printf 'FAIL  %3ss  %s  rc=%s\n' "$elapsed" "$rel" "$rc"
+    tail -5 "$CAP" | sed 's/^/          | /'
+  elif [ -z "$n" ]; then
+    # Exited 0 and told us nothing. This is the state the contract exists for: it is
+    # indistinguishable from a pass by exit status, so it must not be scored as one.
+    FAILED=$((FAILED + 1))
+    FAILED_NAMES="$FAILED_NAMES$rel (UNMEASURED — exited 0 but printed no 'ASSERTIONS: <n>' line)
+"
+    printf 'UNMEASURED  %3ss  %s  — exited 0 but declared no assertion count\n' "$elapsed" "$rel"
+  elif [ "$n" -eq 0 ]; then
+    FAILED=$((FAILED + 1))
+    FAILED_NAMES="$FAILED_NAMES$rel (VACUOUS — declared 0 assertions)
+"
+    printf 'VACUOUS     %3ss  %s  — declared 0 assertions\n' "$elapsed" "$rel"
+  else
+    PASSED=$((PASSED + 1))
+    ASSERTIONS=$((ASSERTIONS + n))
+    printf 'PASS  %3ss  %s  (%s assertions)\n' "$elapsed" "$rel" "$n"
   fi
 done <<EOF
 $SUITES
 EOF
 
 echo
-echo "=== $PASSED passed, $FAILED failed, of $COUNT discovered ==="
+echo "=== $PASSED passed ($ASSERTIONS assertions), $FAILED failed, of $COUNT discovered ==="
 
 # The exit status is derived from the tally, never from the last child. A run where suite
 # 1 fails and suite 5 passes must not exit 0.
@@ -136,6 +187,9 @@ if [ "$FAILED" -gt 0 ]; then
   echo
   echo "Failing suites:"
   printf '%s' "$FAILED_NAMES"
+  echo
+  echo "Re-run one directly to see its output:  bash <path>"
+  echo "UNMEASURED means the suite must print 'ASSERTIONS: <n>' — see the header of this runner."
   exit 1
 fi
 exit 0
