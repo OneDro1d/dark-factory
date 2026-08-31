@@ -84,6 +84,48 @@ else
 fi
 
 echo
+echo "R5  their CAVEAT lines are identical too"
+# ⚠️ ADDED 2026-08-31 BECAUSE R2 MISSED A LIVE ONE. `scope-init` had contradictory DIGEST.md
+# instructions, and the correction was written into the PLUGIN copy — the one nothing
+# installs — exactly as `handoff`'s fix had been. R2 compares fenced code and saw nothing,
+# because in an instructions skill the instructions ARE the prose.
+#
+# WHY CAVEATS AND NOT ALL PROSE. The header above is right that a whole-file compare fails on
+# day one and gets waived: relative links resolve from each copy's own depth and each header
+# describes its own side. A ⚠️ line is the exception — this repo's own rule is that a caveat is
+# never compressed away, and a caveat is about the SKILL, not about which tree the copy sits
+# in. If one ever must differ per copy, the right repair is to word it identically, not to
+# widen this comparison.
+#
+# Measured before landing: all three pairs already match (7 / 1 / 0 lines), so this does not
+# ship a red gate.
+caveats_of() { grep '⚠️' "$1" 2>/dev/null; }
+for s in $SKILLS; do
+  caveats_of "$TOP/$s/SKILL.md"  > "$TMP/$s.top.cav"
+  caveats_of "$PLUG/$s/SKILL.md" > "$TMP/$s.plug.cav"
+  c="$(wc -l < "$TMP/$s.top.cav" | tr -d ' ')"
+  if cmp -s "$TMP/$s.top.cav" "$TMP/$s.plug.cav"; then
+    # The count is printed even when it is 0. "Both copies have no caveats" and "the
+    # extractor found nothing" render identically otherwise, and only one of them is a fact
+    # about the files.
+    ok "$s caveats identical ($c line(s) compared)"
+  else
+    bad "$s CAVEATS HAVE DRIFTED — one copy carries a warning the other does not"
+    diff "$TMP/$s.top.cav" "$TMP/$s.plug.cav" | sed 's/^/        /' | head -20
+  fi
+done
+
+echo
+echo "R6  canary: a dropped caveat IS detected"
+cp "$TMP/scope-init.top.cav" "$TMP/cav-canary"
+sed -i.bak '1d' "$TMP/cav-canary" && rm -f "$TMP/cav-canary.bak"
+if cmp -s "$TMP/scope-init.top.cav" "$TMP/cav-canary"; then
+  bad "canary: a caveat set with a line REMOVED compared equal — this check cannot fail"
+else
+  ok "canary: a removed caveat line is detected"
+fi
+
+echo
 echo "R4  canary: the extractor actually extracts something"
 # A test whose extractor silently returns nothing would report every pair identical.
 if [ -s "$TMP/handoff.top" ]; then

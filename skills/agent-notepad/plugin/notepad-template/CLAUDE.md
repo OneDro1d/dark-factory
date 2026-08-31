@@ -21,7 +21,8 @@ Authoritative list is `repos.manifest.json`. Drive each via absolute path
 ## Read-first (every session)
 
 1. `NOTES.md` — compact working memory (auto-loaded on start).
-2. `DIGEST.md` — precomputed cross-scope digest (derived, gitignored, auto-loaded).
+2. `DIGEST.md` — the standing caveats, hand-maintained, **committed**, auto-loaded. It was
+   once derived and gitignored; that producer was removed 2026-07-29.
 3. `repos.manifest.json` — the code repos this notepad drives.
 4. Each in-scope repo's `.claude/context/SERVICE-MAP.md` → `DATA-FLOW.md` → `FINDINGS.md`
    → `DECISIONS.md` — read the store instead of re-scanning the repo.

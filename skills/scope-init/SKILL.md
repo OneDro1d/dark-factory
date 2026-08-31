@@ -143,22 +143,29 @@ intact (append a short "refreshed <date>" note at most).
 Copy any missing scaffold from `../../plugin/notepad-template/` into the notepad:
 `CLAUDE.md` (orientation), `DIGEST.md`, `sessions/index.json`, `handoffs/`,
 and `.claude/settings.json` (which arms the PreToolUse commit and push gates).
-⚠️ **`DIGEST.md` must NOT be gitignored.** The template's `.gitignore` called it
-"derived (precomputed cross-scope digest from the memory index)" — that producer was
-removed 2026-07-29 and nothing has regenerated the file since. It is now
-hand-maintained and holds the notepad's standing caveats, and the SessionStart hook
+⚠️ **`DIGEST.md` must NOT be gitignored, and the template no longer ignores it.** That rule
+called the file "derived (precomputed cross-scope digest from the memory index)"; the
+producer was removed 2026-07-29 and nothing has regenerated it since. It is
+hand-maintained now, holds the notepad's standing caveats, and the SessionStart hook
 injects it alongside `NOTES.md`. Ignoring it puts those caveats on ONE machine while
-every other clone loads nothing where they used to be — strictly worse than the
-overlong `NOTES.md` the split exists to relieve. Fill the bracketed placeholders in CLAUDE.md from the
-interview. Copy only what's missing; never overwrite live files.
+every other clone loads nothing where they used to be — strictly worse than the overlong
+`NOTES.md` the split exists to relieve. **On an OLDER notepad the rule is still there**:
+`git -C <notepad> check-ignore -q DIGEST.md` succeeding means this notepad predates the
+fix, and the repair is to delete that line and `git add -f DIGEST.md`. Fill the bracketed
+placeholders in CLAUDE.md from the interview. Copy only what's missing; never overwrite
+live files.
 
 ### 9. Wire best-effort pull/push
 
 Confirm the notepad is a git repo (`git -C <notepad> init` if brand-new) and, if a remote
 exists, that the SessionStart pull / Stop push hooks will find it. These are **best-effort**
 by design — no remote is a valid, silent state. Do an initial commit of the scaffold
-(SCOPE, manifest, CLAUDE, settings) so the first Stop cycle has a base; **do not** commit
-`DIGEST.md` (derived) or anything the `.gitignore` excludes.
+(SCOPE, manifest, CLAUDE, settings, **and `DIGEST.md`**) so the first Stop cycle has a base;
+do not commit anything the `.gitignore` excludes.
+⚠️ **This line used to say "do not commit `DIGEST.md` (derived)" — fifteen lines below the
+warning in step 8 saying it must not be gitignored.** One file, two opposite answers, and
+whichever a reader hit first was the one they acted on. A caveat added in one place does not
+retire the instruction it contradicts somewhere else.
 
 ---
 

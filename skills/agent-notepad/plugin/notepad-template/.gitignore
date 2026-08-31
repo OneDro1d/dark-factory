@@ -1,7 +1,22 @@
-# DIGEST.md is derived (precomputed cross-scope digest from the memory index) — never commit it.
-DIGEST.md
+# DIGEST.md IS COMMITTED, DELIBERATELY, AND MUST NOT BE ADDED HERE.
+#
+# This file used to ignore it as "derived (precomputed cross-scope digest from the memory
+# index)". That producer was removed 2026-07-29 and nothing has regenerated the file since,
+# so DIGEST.md is now hand-maintained: it holds the notepad's standing caveats, and the
+# SessionStart hook injects it alongside NOTES.md on every start.
+#
+# Ignoring it therefore puts those caveats on ONE machine while every other clone loads
+# nothing where they used to be — strictly worse than the overlong NOTES.md the split exists
+# to relieve. The rule was not wrong when it was written; it outlived what it described,
+# which is the only way this kind of line survives review.
+#
+# plugin/tests/test_notepad_model.sh asserts DIGEST.md is absent from this file, so
+# re-adding it is a test failure rather than a discovery.
 
-# Memory-mirror staging (rendered journal Markdown fed to the memory index) — derived, never commit.
+# Memory-mirror staging, from the same removed subsystem: `hooks/mirror-guarded.sh` was
+# deleted 2026-08-03, so nothing writes this directory any more. Kept as an inert rule
+# because it ignores nothing on a current notepad — unlike the line above, which ignored
+# something that matters.
 .anp-mirror/
 
 # OS / editor cruft

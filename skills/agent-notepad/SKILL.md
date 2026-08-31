@@ -43,7 +43,7 @@ proj-arbbot/
   CLAUDE.md            # orientation: objective, repos-in-scope, read-first/dispatch rules
   NOTES.md             # compact working memory, auto-loaded (≤150 lines, redacted)
   SCOPE.md             # charter: objective, done-criteria, repo subset
-  DIGEST.md            # precomputed cross-scope digest [gitignored — derived]
+  DIGEST.md            # standing caveats, hand-maintained, COMMITTED, auto-loaded
   repos.manifest.json  # the CODE repos this notepad drives
   sessions/
     index.json         # session metadata index
