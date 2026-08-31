@@ -50,10 +50,25 @@ Compose the handoff **body** (the sections below), then publish via the helper. 
 helper writes the file, redacts, commits, and pushes; it prints the path it wrote.
 
 ```bash
+# Resolve the helper under BOTH install modes.
+#   plugin mode     -> ${CLAUDE_PLUGIN_ROOT}/lib/...
+#   install.sh mode -> ~/.claude/hooks/agent-notepad/lib/...
+# ⚠️ ${CLAUDE_PLUGIN_ROOT} is set ONLY when agent-notepad is loaded as a PLUGIN. Under
+# install.sh it is EMPTY, and the bare "${CLAUDE_PLUGIN_ROOT}/lib/publish-handoff.sh" this
+# file used to print collapsed to "/lib/publish-handoff.sh" — an absolute path that does not
+# exist. Measured 2026-08-31: the installed copy on this estate's laptop is THIS file, and
+# CLAUDE_PLUGIN_ROOT was unset, so the command this skill documented could not run. The
+# corrected line already existed in the plugin-bundled twin, which nothing installs.
+PUBLISH_HANDOFF="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/hooks/agent-notepad}/lib/publish-handoff.sh"
+
 # body on stdin; args: <notepad-root> <topic>
 printf '%s' "$HANDOFF_BODY" \
-  | "${CLAUDE_PLUGIN_ROOT}/lib/publish-handoff.sh" "$NOTEPAD_ROOT" "Arb bot milestone"
+  | "$PUBLISH_HANDOFF" "$NOTEPAD_ROOT" "Arb bot milestone"
 ```
+
+If `$PUBLISH_HANDOFF` does not exist, agent-notepad is not installed — say so and stop.
+Do **not** hand-roll the write: the helper owns the notepad-root guard, the redaction
+pass, the commit and the forced push, and the `AGENT_NOTEPAD_*` test overrides.
 
 `$NOTEPAD_ROOT` is the current notepad (the nearest ancestor with `NOTES.md`; the
 SessionStart hook already resolved it). The helper **refuses** (non-zero exit, no write)

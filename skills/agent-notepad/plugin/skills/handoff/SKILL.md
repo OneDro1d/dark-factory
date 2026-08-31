@@ -50,11 +50,14 @@ Compose the handoff **body** (the sections below), then publish via the helper. 
 helper writes the file, redacts, commits, and pushes; it prints the path it wrote.
 
 ```bash
-# Resolve the helper under BOTH install modes (see plugin.json §15 comment):
-#   plugin mode    -> ${CLAUDE_PLUGIN_ROOT}/lib/...
+# Resolve the helper under BOTH install modes.
+#   plugin mode     -> ${CLAUDE_PLUGIN_ROOT}/lib/...
 #   install.sh mode -> ~/.claude/hooks/agent-notepad/lib/...
-# ${CLAUDE_PLUGIN_ROOT} is set ONLY when agent-notepad is loaded as a plugin; under
-# install.sh it is empty and the path would collapse to "/lib/publish-handoff.sh".
+# ⚠️ ${CLAUDE_PLUGIN_ROOT} is set ONLY when agent-notepad is loaded as a PLUGIN. Under
+# install.sh it is EMPTY, and a bare "${CLAUDE_PLUGIN_ROOT}/lib/publish-handoff.sh" collapses
+# to "/lib/publish-handoff.sh" — an absolute path that does not exist. This fallback existed
+# here and NOT in the top-level twin that installs, so the installed skill documented a
+# command that could not run. Fixed there 2026-08-31; keep the two in step.
 PUBLISH_HANDOFF="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/hooks/agent-notepad}/lib/publish-handoff.sh"
 
 # body on stdin; args: <notepad-root> <topic>
