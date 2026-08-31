@@ -1,0 +1,1 @@
+GET https://clerk-telemetry.com/v1/event 400
