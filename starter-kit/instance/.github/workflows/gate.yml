@@ -1,0 +1,50 @@
+name: gate
+
+# WHY THIS FILE EXISTS. A Tier-3 instance is the record of ONE machine — a lockfile plus the
+# config deciding what actually gets installed there. It is the last tier before a real
+# environment and it was the ONLY tier in the estate with no CI: Tier 1 fixed that for
+# itself, Tier 2 got the same treatment, and Tier 3 was left behind twice.
+#
+# ⚠️ The gap was worse than "no tests". The reference instance ships a suite
+# (`boot-kit/tests/test-engine-pin.sh`) with no runner and no workflow, so it runs only when
+# a human types the path. Somebody wrote a check that nothing executes — testing that
+# reports nothing, which is the failure this estate keeps paying for.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: this workflow reads the tree and runs shell tests. It never writes to the
+# repo. Deliberately `pull_request`, NOT `pull_request_target` — the latter runs with
+# repository secrets against the base branch and, combined with a checkout of the PR head,
+# hands write-scoped credentials to untrusted code.
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        # Pinned to a commit SHA, not a tag: a tag is mutable and can be repointed at new
+        # code by whoever controls the action's repo.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Test suites — EVERY suite in the instance, discovered by existence
+        # `run-tests.sh` globs `test-*.sh`, so a suite is enrolled by being COMMITTED rather
+        # than by anyone remembering to edit this file. Tier 1 learned that the expensive
+        # way: its workflow named ONE suite while the repo shipped 22, and the ticket filing
+        # the finding enumerated them by hand and was already wrong.
+        #
+        # Four failure modes the runner refuses, each of which would restore the original
+        # defect while looking like a fix:
+        #   · a hand-written suite list (rots silently)
+        #   · exit status from the LAST child (an early failure then a pass exits 0)
+        #   · a glob matching nothing (exits 0 — "no suites" is a hard failure here)
+        #   · a suite that exits 0 having asserted NOTHING (UNMEASURED, counted as a failure)
+        #
+        # ⚠️ This does NOT run `install.sh`. Installing is a machine-mutating act against
+        # `$HOME`, and a CI runner is not the machine this instance records — a green tick
+        # here means the record is well-formed, never that the install works. Only
+        # `lock-verify` on the target machine can say that.
+        run: bash boot-kit/scripts/run-tests.sh
