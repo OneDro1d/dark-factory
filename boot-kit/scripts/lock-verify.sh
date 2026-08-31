@@ -460,6 +460,28 @@ if [ -z "$L7BAD" ] && [ -z "$L7SHAPE" ]; then
   fi
 fi
 
+# ---- the not-an-entry set, named ONCE ---------------------------------------
+# L8 and L10 both walk a live directory and both have to skip the same debris: editor and
+# tool leftovers that are not hooks and not skills. Until now that set was written out twice,
+# verbatim, in two `case` arms four hundred lines apart, and its human-readable form twice
+# more in two `note` strings — four copies of one decision.
+#
+# ⚠️ WHY THAT MATTERS MORE HERE THAN IT LOOKS. These layers report DRIFT: an entry on the
+# machine that no lockfile declares. Add a pattern to one copy and not the other and the two
+# layers disagree about what counts as a file — L8 stays quiet about a `.bak` while L10 calls
+# the same debris undeclared drift. A verifier that contradicts itself is one whose verdicts
+# get skipped, which is the specific failure this file's own comments warn about twice.
+#
+# So: one function, one string, and the `case` arms both call it. A shell `case` cannot take
+# its patterns from a variable, so a function is the only way to name this once.
+is_not_an_entry() { # <basename> -> 0 if this is debris rather than a hook/skill
+  case "$1" in
+    __pycache__|*.bak|*.bak.*|*.retired-*|*.orig|*.rej|.*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+NOT_AN_ENTRY_DESC=".bak* / .retired-* / .orig / .rej / dotfiles / __pycache__"
+
 # ---- L8: hooks on the machine that this lock does not declare ---------------
 # THE HOOK DIRECTORY HAD NO L2. L2 asks "is every vendored dir declared?" and catches
 # unprovenanced CONTENT. Nothing asked the same question of $LIVE/hooks, so a hook could be
@@ -502,9 +524,7 @@ else
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     b="$(basename "$f")"
-    case "$b" in
-      __pycache__|*.bak|*.bak.*|*.retired-*|*.orig|*.rej|.*) L8SKIP=$((L8SKIP + 1)); continue ;;
-    esac
+    if is_not_an_entry "$b"; then L8SKIP=$((L8SKIP + 1)); continue; fi
     L8SEEN=$((L8SEEN + 1))
     # An exact name match is the ordinary case. A DIRECTORY also counts as declared when
     # something inside it is declared: a plugin hook suite is installed under a nested name
@@ -531,7 +551,7 @@ else
   else
     pass "L8 all $L8SEEN hook entry/entries are declared in this lock"
   fi
-  [ "$L8SKIP" -gt 0 ] && note "L8 skipped $L8SKIP non-hook file(s) (.bak* / .retired-* / .orig / .rej / dotfiles / __pycache__)"
+  [ "$L8SKIP" -gt 0 ] && note "L8 skipped $L8SKIP non-hook file(s) ($NOT_AN_ENTRY_DESC)"
 fi
 
 echo ""
@@ -708,9 +728,7 @@ else
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     b="$(basename "$f")"
-    case "$b" in
-      __pycache__|*.bak|*.bak.*|*.retired-*|*.orig|*.rej|.*) L10SKIP=$((L10SKIP + 1)); continue ;;
-    esac
+    if is_not_an_entry "$b"; then L10SKIP=$((L10SKIP + 1)); continue; fi
     L10SEEN=$((L10SEEN + 1))
     printf '%s\n' "$DECLARED_SKILLS" | grep -qxF "$b" && continue
     if [ ! -L "$LIVE/skills/$b" ]; then
@@ -764,7 +782,7 @@ else
   else
     pass "L10 all $L10SEEN skill entry/entries are declared in this lock"
   fi
-  [ "$L10SKIP" -gt 0 ] && note "L10 skipped $L10SKIP non-skill file(s) (.bak* / .retired-* / .orig / .rej / dotfiles / __pycache__)"
+  [ "$L10SKIP" -gt 0 ] && note "L10 skipped $L10SKIP non-skill file(s) ($NOT_AN_ENTRY_DESC)"
 fi
 
 echo ""
