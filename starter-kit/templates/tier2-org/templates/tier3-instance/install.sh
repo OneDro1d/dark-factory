@@ -177,11 +177,11 @@ while read -r s; do
   [ -n "$s" ] || continue
   src="$(source_for skills "$s")"
   if [ -z "$src" ]; then
-    warn "$s: declared in install.skills with no entry in install.skillSources — installs nothing"
+    warn "skill $s: declared in install.skills with no entry in install.skillSources — installs nothing"
     continue
   fi
   if src_escapes "$src"; then
-    warn "$s: source '$src' climbs out of the tree it names — refused, not normalised"
+    warn "skill $s: source '$src' climbs out of the tree it names — refused, not normalised"
     continue
   fi
   abs="$(resolve_src "$src")"
@@ -204,18 +204,27 @@ while read -r h; do
   [ -n "$h" ] || continue
   src="$(source_for hooks "$h")"
   if [ -z "$src" ]; then
-    warn "$h: declared in install.hooks with no entry in install.hookSources — installs nothing"
+    warn "hook $h: declared in install.hooks with no entry in install.hookSources — installs nothing"
     continue
   fi
   if src_escapes "$src"; then
-    warn "$h: source '$src' climbs out of the tree it names — refused, not normalised"
+    warn "hook $h: source '$src' climbs out of the tree it names — refused, not normalised"
     continue
   fi
   abs="$(resolve_src "$src")"
   [ -f "$abs" ] || { warn "hook $h: nothing at $src"; continue; }
-  [ -f "$LIVE/hooks/$h" ] && { warn "$h OVERRIDES a Tier 2 hook — intended?"; OVERRIDE=$((OVERRIDE+1)); }
+  # CONTENT, not existence. A hook is copied, so a file at this path proves only that some
+  # earlier run put one there — including THIS installer's own previous run. Testing
+  # existence reports an override on every re-install, and a warning that is wrong every
+  # second time trains the reader past the one that is right. Two layers installing
+  # byte-identical text override nothing in effect, and are not reported.
+  rendered="$(sed "s|__HOME__|$HOME|g" "$abs")"
+  if [ -f "$LIVE/hooks/$h" ] && [ "$rendered" != "$(cat "$LIVE/hooks/$h")" ]; then
+    warn "$h OVERRIDES a Tier 2 hook — intended? A silent override is how tiers rot."
+    OVERRIDE=$((OVERRIDE+1))
+  fi
   if [ "$DRY" -eq 0 ]; then
-    sed "s|__HOME__|$HOME|g" "$abs" > "$LIVE/hooks/$h"; chmod +x "$LIVE/hooks/$h"
+    printf '%s\n' "$rendered" > "$LIVE/hooks/$h"; chmod +x "$LIVE/hooks/$h"
   fi
   LOCAL_HK=$((LOCAL_HK+1))
 done < <(declared hooks)
