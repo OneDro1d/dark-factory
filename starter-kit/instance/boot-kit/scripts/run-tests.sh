@@ -100,8 +100,22 @@ export RUN_TESTS_ACTIVE=1
 
 # Prune the generated and vendored trees. `vendor/` is a cache that can hold a COPY of
 # these very suites; running those would report on the cache, not on this repo.
+#
+# ⚠️ `workers/` IS PRUNED HERE AND DELIBERATELY NOT IN THE TIER-2 COPY. The same directory
+# name means opposite things at the two tiers, so keeping the three runners in lockstep on
+# this line would be the wrong kind of consistency:
+#   · in a TIER-3 INSTANCE it is worker SCRATCH — `workers/<role>/<session>/` holding whole
+#     copies of other machines' kits. Measured on a live instance 2026-08-31: 16 suites
+#     discovered, 15 of them scratch, every one UNMEASURED, gate red and saying nothing about
+#     the repo it was gating.
+#   · in a TIER-2 ORG LAYER it is SOURCE — `dispatch.sh`, `profiles.json`, `mcp/`. Pruning it
+#     there would hide the code, and any future test of the dispatcher with it.
+#
+# ⚠️ The template could never have shown this: a template has no scratch, so the condition
+# only exists once the thing is USED. A gate proven against a fixture is proven against the
+# one state that cannot exhibit the bug.
 SUITES="$(find "$ROOT" \
-  \( -name .git -o -name vendor -o -name node_modules -o -name .venv -o -name __pycache__ \) -prune \
+  \( -name .git -o -name vendor -o -name workers -o -name node_modules -o -name .venv -o -name __pycache__ \) -prune \
   -o -type f -name 'test-*.sh' -print | LC_ALL=C sort)"
 
 COUNT=0
