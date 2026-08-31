@@ -44,6 +44,10 @@ yours: personal doctrine, experiments, work in progress.
    `"<name>": "local:skills/<name>"` in `install.skillSources`. Both halves are required:
    either alone installs nothing while still reading like a declaration, and `install.sh`
    reports the mismatch in whichever direction it happens.
+   ⚠️ The older single-map form (`"skills": { "<name>": "<source>" }`) is **refused, not
+   read** — an installer that guessed at it would install a shape nobody declared. Convert
+   an older file once with
+   `python3 <dark-factory checkout>/boot-kit/scripts/df-lock-migrate.py --lock instance.lock.json --apply`.
 3. `bash install.sh` — skills symlink, so later edits are live immediately.
 
 ### A hook
