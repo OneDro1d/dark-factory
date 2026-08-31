@@ -120,8 +120,8 @@ new_index="$(jq --arg s "$sid" --arg ts "$ts" --arg jf "$jf_base" --argjson cur 
 # The skill now lives in a repo we own, so the dead subsystem is DELETED rather than
 # disabled: mp-adapter.py, mirror-guarded.sh and their two tests are gone. Keeping a
 # neutered call to a tool that no longer exists is how a reinstall silently
-# resurrects it — the same resurrection path the ~/Code/mempalace symlink in
-# .ws-carryover/hydrate.sh represented.
+# resurrects it — the same resurrection path a leftover symlink into a
+# machine-local checkout represented, in a carry-over hydrate script.
 #
 # Durable memory now goes to Engram by deliberate engram_write; session continuity
 # lives in NOTES.md + this journal.

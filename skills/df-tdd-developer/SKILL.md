@@ -26,7 +26,14 @@ Build every service **test-first**: RED → GREEN → REFACTOR, one case at a ti
 Your own tests drive your build loop, but the **acceptance evidence (PO Test Scenarios, the QA held-back acceptance suite) is withheld from you** — you're verified against cases you never saw, which proves you built the *spec*, not your own test. Don't build to the holdout: `if known_input: return known_answer` is the lookup-degeneration failure.
 
 ## GREEN discipline
-Minimal code only; honour the exact Avro contracts (no invented schemas); `Log.Warn` not `Log.Error` (panics in this stack's shared messaging library); decimal for money; config over code.
+Minimal code only; honour the exact contracts (no invented schemas); `Log.Warn` not `Log.Error` (panics in this stack's shared messaging library); decimal for money; config over code.
+
+⚠️ **That logging rule is an instance, not a universal.** Some libraries escalate an
+error-level call into a panic or a process exit, so a defensive `Log.Error` in a handler takes
+the service down on the first bad message — the opposite of what the author meant. Others do
+nothing of the kind. **Check what your own stack does and write the answer into your own
+guidance**; the rule above is kept because a reader who follows it on a stack that behaves this
+way is saved, and one who does not know to ask is not.
 
 ## Worked example — a LOCAL validation rule (Go + Python)
 Rule: a vitals reading with no `correlationId`, or heart rate outside 0–300, is rejected.

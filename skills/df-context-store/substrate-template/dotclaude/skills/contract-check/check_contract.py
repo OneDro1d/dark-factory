@@ -2,7 +2,7 @@
 """
 Agent handoff contract checker — the LOCAL validation rule, mechanised.
 
-Each TR2 agent emits a structured artifact that the next agent consumes
+Each agent in the chain emits a structured artifact that the next one consumes
 (Evidence Bundle -> Root Cause -> Design Spec -> Implementation Report ->
 Validation Report; plus Knowledge Entry into the context store). Today those
 shapes are prose conventions: nothing stops a malformed or under-evidenced

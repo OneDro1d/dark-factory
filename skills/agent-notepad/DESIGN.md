@@ -90,6 +90,7 @@ Format follows the *consumer* (read-as-context by the model vs parsed-by-code by
 
 1. **SessionStart — restore + auto-pull (READ end):** best-effort `git pull` (non-blocking) → read `NOTES.md` + `DIGEST.md` + `repos.manifest.json` + per-repo context-store pointers → inject via dual-field JSON. **File reads only** (~1–3 s budget; no live search — digest is precomputed). Degrades to `handoff-auto` behavior outside a notepad.
 2. **Stop — journal + mirror + sync (WRITE end):** append deterministic journal entries → upsert `index.json` → **mirror new entries into the memory index** (`mempalace mine <notepad>/sessions/` or the venv-python adapter, `wing=<prefix>`, `room=<repo>`) → best-effort `git push`. Guarantees the index is *written* every cycle.
+   ⚠️ **Historical from here on.** The named implementation was removed 2026-07-29 — see the banner at the top of this file. What follows is the DESIGN, and the tool is not the current one. Said again here because a reader arriving at a section does not see a banner nine screens up — the same reason CI names its own limitation in a step title and not only in a job summary.
 3. **Digest builder — async, off critical path:** `mempalace search "<objective>" --wing <prefix>` → rewrite `DIGEST.md`. Guarantees the index is *queried* every cycle. Trigger: debounced Stop or scheduled job.
 4. **UserPromptSubmit — live Notes refresh:** soft nudge to keep `NOTES.md` current; backed by the Stop floor.
 5. **PreCompact — floor (kept):** deterministic snapshot into `NOTES.md` + journal.

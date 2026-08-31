@@ -20,16 +20,16 @@ all run). Use absolute paths.
   "hooks": {
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command",
-        "command": "~/Code/loom-handoff-autocompaction/hooks/user-prompt.sh" }] }
+        "command": "<this-skill-checkout>/hooks/user-prompt.sh" }] }
     ],
     "PreCompact": [
       { "hooks": [{ "type": "command",
-        "command": "~/Code/loom-handoff-autocompaction/hooks/pre-compact.sh" }] }
+        "command": "<this-skill-checkout>/hooks/pre-compact.sh" }] }
     ],
     "SessionStart": [
       { "matcher": "compact|clear",
         "hooks": [{ "type": "command",
-        "command": "~/Code/loom-handoff-autocompaction/hooks/session-start.sh" }] }
+        "command": "<this-skill-checkout>/hooks/session-start.sh" }] }
     ]
   }
 }
