@@ -1,5 +1,5 @@
 {
-  "$comment": "U8 — notepad-scoped hooks. Arms ONLY in notepad sessions; Claude Code MERGES this with the user-level agent-notepad read-hooks (SessionStart/UserPromptSubmit/PreCompact/Stop). The PreToolUse(Bash) commit gate intercepts each `git [ -C <code-repo> ] commit` and applies the df-context-store staleness check (DESIGN §7.6): it governs AGENT code-commits, not manual human commits (arm the code repo's own git pre-commit hook for those). Runtime path convention per DESIGN §15: the installer (U10) copies hooks to the STABLE path ~/.claude/hooks/agent-notepad/ (NOT the branch-fragile repo path). Bypass a single commit with `--no-verify`; disable the gate for a session with AGENT_NOTEPAD_COMMIT_GATE=off.",
+  "$comment": "U8 — notepad-scoped hooks. Arms ONLY in notepad sessions; Claude Code MERGES this with the user-level agent-notepad read-hooks (SessionStart/UserPromptSubmit/PreCompact/Stop). TWO PreToolUse(Bash) gates run on every Bash call, in order. commit-gate.sh intercepts `git [ -C <repo> ] commit` and applies the df-context-store staleness check (DESIGN §7.6). push-gate.sh intercepts `git [ -C <repo> ] push` and applies that repo's own `.claude/docs-map.json` (DESIGN §7.7, scope-init §6a); with no such file it abstains, never a default rule set. BOTH govern AGENT actions only — a human's `git commit` or `git push` in a terminal never reaches a PreToolUse hook, so arm the code repo's own git hooks for those. Runtime path convention per DESIGN §15: the installer (U10) copies hooks to the STABLE path ~/.claude/hooks/agent-notepad/ (NOT the branch-fragile repo path). Bypass one action with `--no-verify`; disable for a session with AGENT_NOTEPAD_COMMIT_GATE=off / AGENT_NOTEPAD_PUSH_GATE=off.",
   "hooks": {
     "PreToolUse": [
       {
@@ -8,6 +8,10 @@
           {
             "type": "command",
             "command": "${HOME}/.claude/hooks/agent-notepad/hooks/commit-gate.sh"
+          },
+          {
+            "type": "command",
+            "command": "${HOME}/.claude/hooks/agent-notepad/hooks/push-gate.sh"
           }
         ]
       }
