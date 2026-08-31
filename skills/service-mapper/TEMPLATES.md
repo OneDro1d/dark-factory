@@ -137,7 +137,7 @@ The service map output must be structured for both human readability and AI agen
 | SendGrid | notification-service | outbound | REST | API key | Emails |
 | Market-data API | data-ingestion | inbound (webhook) | HTTP | HMAC | Market indicators |
 | Exchange API | trade-execution | bidirectional | REST + WebSocket | HMAC signing | Orders, fills, balances |
-| Supabase | database-service | outbound | REST | Service key | All DB operations |
+| Managed Postgres | database-service | outbound | REST | Service key | All DB operations |
 
 ---
 
@@ -179,7 +179,7 @@ User → [gateway] POST /orders
 
 | Variable | Used By | Purpose |
 |----------|---------|---------|
-| `RABBITMQ_URL` | all services | Message bus connection |
+| `MESSAGE_BUS_URL` | all services | Message bus connection |
 | `DATABASE_URL` | database-service | PostgreSQL connection |
 | `NODE_ENV` | all services | Environment identifier |
 | `PORT` | webservices | HTTP listen port |
