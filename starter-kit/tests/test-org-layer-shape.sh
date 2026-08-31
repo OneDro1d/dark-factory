@@ -165,17 +165,48 @@ eq "E8 sources carry the upstream: prefix"  "true" \
 # the way it breaks is quiet: `cp -R "$TEMPLATE"/* dst` instead of `cp -R "$TEMPLATE" dst`
 # drops nested directories, and every layer minted afterwards would look complete while
 # being unable to produce a single machine. Same class as A3 one tier up.
-GT3="$E/dest/scratchlayer/templates/tier3-instance/install.sh"
+GT3DIR="$E/dest/scratchlayer/templates/tier3-instance"
+GT3="$GT3DIR/install.sh"
 eq "E9 the minted layer carries a tier-3 template" "yes" "$([ -f "$GT3" ] && echo yes || echo no)"
-# THE ONLY DIFFERENCE IS THE PLACEHOLDER. This is the byte-for-byte pin between the
+# THE ONLY DIFFERENCE IS THE PLACEHOLDERS. This is the byte-for-byte pin between the
 # generator's template and its output — the one pair CI can see. It does NOT pin a layer
 # that was minted months ago and edited since: that copy lives in another repo, and the
 # only thing that ever detects ITS drift is someone diffing it by hand. Which is how a
 # better warning string sat unshared in a minted copy while the template kept the worse
 # one.
-eq "E10 the minted tier-3 installer is the template with only __ORG_DISPLAY__ resolved" "" \
-   "$(diff <(sed 's|__ORG_DISPLAY__|Scratch|g' "$T3T/install.sh") "$GT3" 2>&1)"
-absent "E11 no template token survives into the minted file" "__ORG_DISPLAY__" "$(slurp "$GT3")"
+#
+# ⚠️ AND THIS PIN USED TO NAME A FILE RATHER THAN THE ARTIFACT. It covered install.sh and
+# nothing else, while the template ships seven files. Measured 2026-09-01 against the one
+# layer minted from it: install.sh was the ONE file whose only difference was the
+# placeholder, and the other three that differ each held a real divergence — a README
+# paragraph the fork had and the template did not, an instance.lock.json the template had
+# documented further, a CLAUDE.md that happened to be clean. A pin over one file of seven
+# reported green through all of it. The fix is not a better file to name: it is to stop
+# naming one.
+E10_DRIFT=0; E10_N=0
+while IFS= read -r rel; do
+  E10_N=$((E10_N + 1))
+  d="$(diff <(sed -e "s|__ORG_LAYER_NAME__|scratchlayer|g" \
+                  -e "s|__ORG_REPO__|acme/scratchlayer|g" \
+                  -e "s|__ORG_DISPLAY__|Scratch|g" "$T3T/$rel") \
+            "$GT3DIR/$rel" 2>&1)"
+  if [ -n "$d" ]; then
+    E10_DRIFT=$((E10_DRIFT + 1))
+    echo "     drift in $rel"
+  fi
+done < <(cd "$T3T" && find . -type f | sed -e "s:^\./::" | sort)
+eq "E10 every minted tier-3 file is the template with only the org placeholders resolved" "0" "$E10_DRIFT"
+# The oracle needs its own control. A find that matches nothing leaves E10 comparing zero
+# files and reporting 0 drift — green, and meaningless. This suite has already been bitten
+# by a count that stopped counting.
+eq "E10a the pin actually compared the whole template" "7" "$E10_N"
+absent "E11 no org template token survives into the minted installer" "__ORG_DISPLAY__" "$(slurp "$GT3")"
+# A .bak is not a file the generator meant to ship. It substitutes with `sed -i.bak` and
+# removes the backup on success — so one surviving anywhere means a substitution failed
+# quietly, and the minted layer carries a pre-substitution copy of a file it also carries
+# resolved. The Codex importer shipped six of these as if they were hooks.
+eq "E12 no .bak survives anywhere in the minted layer" "0" \
+   "$(find "$E/dest/scratchlayer" -name '*.bak' -type f | wc -l | tr -d ' ')"
 
 echo "=== F. the generator's output survives lock-verify L7 ==="
 if [ -f "$LOCKVERIFY" ] && [ -f "$GL" ]; then
