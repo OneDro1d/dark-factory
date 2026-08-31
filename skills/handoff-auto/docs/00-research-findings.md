@@ -47,14 +47,18 @@ Background: [Context Compaction (Inside Claude Code)](https://y-agent.github.io/
 [Claude Code vs OpenCode 5.3](https://0xtresser.github.io/Claude-Code-VS-OpenCode/en/Chapter_05_Session_and_Context/5.3_Context_Compaction.html),
 [Hooks reference](https://code.claude.com/docs/en/hooks).
 
-## What Loom already has (reuse surface)
+## What an adopting estate is assumed to have already (reuse surface)
 
-- **`handoff` skill** — model-written; saves to OS temp + Engram; references artifacts by
-  path/URL instead of duplicating; redacts secrets/PII; emits a "Suggested Skills" section.
-  This is our high-fidelity content engine — designs should *invoke it*, not re-implement a dump.
-- **Engram** — durable, searchable cross-session store (chain-linkable handoffs).
-- **SessionStart hook** already injecting the Synapse capability map (so the read-back slot
-  is already wired; we add a handoff section).
+⚠️ This section described one estate's live setup by name. Rewritten against roles: the design
+depends on these CAPABILITIES existing, not on whose they are.
+
+- **A `handoff` skill** — model-written; saves to OS temp plus a durable store; references
+  artifacts by path/URL instead of duplicating; redacts secrets/PII; emits a "Suggested Skills"
+  section. This is the high-fidelity content engine — designs should *invoke it*, not
+  re-implement a dump.
+- **A durable, searchable cross-session store** for chain-linkable handoffs.
+- **A SessionStart hook already injecting a capability map**, so the read-back slot is wired
+  and this design only adds a handoff section to it.
 - **Hook discipline (from memory):** SessionStart latency budget 1–3s → *read a precomputed
   file, never compute*; restoration must be a **hard mechanism**, not a soft imperative;
   non-tool-event hooks (PreCompact/SessionStart/Stop) use `systemMessage`.

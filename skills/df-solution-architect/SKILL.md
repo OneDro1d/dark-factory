@@ -17,7 +17,7 @@ The SA answers **how**. It produces **Data Model, Data Flow, Service Map**. Thro
 ## Ownership handoff (PO → SA)
 The PO + SMEs defined the semantics (data, `origin`, `trust`, `authority`, `governance`, the validation-rule predicates). Your job is **formalization**:
 - turn each into a schema / Avro contract;
-- assign every validation rule its enforcement **locus** (`LOCAL` → reject at an edge; `GLOBAL` → reconcile by `authority`) and **mechanism** (XSD / Schematron / DB constraint / reconciliation job — e.g. TR2 does XSD for structure + Schematron for cross-field business rules);
+- assign every validation rule its enforcement **locus** (`LOCAL` → reject at an edge; `GLOBAL` → reconcile by `authority`) and **mechanism** (XSD / Schematron / DB constraint / reconciliation job — a common split is XSD for structure and Schematron for cross-field business rules, but name the mechanism your stack actually enforces with);
 - tag transforms `pure`/`effect` with idempotency + compensation.
 Do **not** re-decide domain facts (which source is authoritative, what must be true) — if one is missing or wrong, loop back to PO.
 
