@@ -31,21 +31,25 @@ jobs:
         # test-tier3-template-pin.sh compares templates/tier3-instance/ against Tier 1's
         # template AT THE PINNED COMMIT. It never fetches on its own: a test that quietly
         # clones is a test whose dependency nobody can see in the workflow that runs it.
-        # So the checkout is HERE, in the open, and the path is handed over explicitly.
-        # That suite asserts this step's existence by NAME (W1) — remove it and the gate
-        # goes red rather than quietly ceasing to compare anything.
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: OneDro1d/dark-factory
-          path: .tier1
-          # The pin is a commit this layer declares, which may be well behind main. Full
-          # history rather than the shallow default, or it may simply not be there.
-          fetch-depth: 0
-          persist-credentials: false
+        # So the fetch is HERE, in the open, and the path is handed over explicitly. That
+        # suite asserts this step's wiring by CONTENT (W1/W2) — remove it and the gate goes
+        # red rather than quietly ceasing to compare anything.
+        #
+        # ⚠️ IT MUST LAND OUTSIDE THE WORKSPACE, which is why this is a git clone into
+        # RUNNER_TEMP and not actions/checkout (whose `path:` cannot leave the workspace).
+        # MEASURED: with Tier 1 checked out to ./.tier1, run-tests.sh — which enrols a suite
+        # by EXISTENCE — discovered 45 suites instead of 3 and ran Tier 1's entire test
+        # suite as if it were this layer's. Green, forty seconds longer, and a Tier 1
+        # failure would have reddened this gate for something that is not this repo's.
+        env:
+          T1_DEST: ${{ runner.temp }}/tier1
+        run: |
+          git clone --quiet --filter=blob:none --no-checkout \
+            https://github.com/OneDro1d/dark-factory.git "$T1_DEST"
 
       - name: Test suites — EVERY suite in the repo, discovered by existence
         env:
-          DF_T1_DIR: ${{ github.workspace }}/.tier1
+          DF_T1_DIR: ${{ runner.temp }}/tier1
         # `run-tests.sh` globs `test-*.sh`; a suite is enrolled by being COMMITTED, not by
         # anyone remembering to edit this file. Tier 1 learned that the expensive way: its
         # workflow named ONE suite while the repo shipped 22, and the ticket that filed the
