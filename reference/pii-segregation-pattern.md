@@ -423,8 +423,7 @@ cite it by ordinal.
 Older kits carry the line *"Prime Directive #14 — PII physically separated"*. That ordinal
 never resolved: the canonical list in [`10-prime-directives.md`](10-prime-directives.md) has
 exactly ten entries and ends at ten, and the architecture axioms it might otherwise have
-belonged to were authored numbered 18–54 — so they had no 14 at all — while after their
-renumbering to 1–37 the entry at 14 is something unrelated. A reader arriving from one of
+belonged to are numbered 1–37, where the entry at 14 is something unrelated. A reader arriving from one of
 those kits should learn here that the number was never real, rather than try to restore it.
 
 **An ordinal into a curated list fails open.** Once the list is re-curated the citation still
