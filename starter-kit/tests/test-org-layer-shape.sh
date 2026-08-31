@@ -207,6 +207,20 @@ absent "E11 no org template token survives into the minted installer" "__ORG_DIS
 # resolved. The Codex importer shipped six of these as if they were hooks.
 eq "E12 no .bak survives anywhere in the minted layer" "0" \
    "$(find "$E/dest/scratchlayer" -name '*.bak' -type f | wc -l | tr -d ' ')"
+# A minted layer must arrive with its own gates, not just its own content. The layer is the
+# only place that can check ITS tier-3 template against Tier 1 — Tier 1's CI sees one
+# freshly minted pair and nothing else — so a layer minted without the suite is a layer
+# whose drift is again detectable only by hand. Byte-identical because these files carry no
+# org placeholder: if one ever does, this assertion is where you find out.
+E13_MISSING=0
+for suite in test-repo-shape.sh test-tier3-template-pin.sh; do
+  m="$E/dest/scratchlayer/scripts/tests/$suite"
+  if [ ! -f "$m" ] || ! diff -q "$T2T/scripts/tests/$suite" "$m" >/dev/null 2>&1; then
+    E13_MISSING=$((E13_MISSING + 1))
+    echo "     missing or drifted: scripts/tests/$suite"
+  fi
+done
+eq "E13 the minted layer ships both gate suites, byte-identical" "0" "$E13_MISSING"
 
 echo "=== F. the generator's output survives lock-verify L7 ==="
 if [ -f "$LOCKVERIFY" ] && [ -f "$GL" ]; then
