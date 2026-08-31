@@ -56,8 +56,20 @@ case "$OUT" in *"assertions)"*) ok "B2 per-suite assertion counts are reported" 
               *) bad "B2 per-suite assertion counts are reported" "guarantee 4 is missing here" ;; esac
 
 echo "=== C: enrolment is by existence ==="
-case "$OUT" in *"discovered 5 suites"*) ok "C1 all five shipped suites are discovered" ;;
-              *) bad "C1 all five shipped suites are discovered" "$(printf '%s' "$OUT" | head -1)" ;; esac
+# The number is COUNTED here, not written here. This assertion used to read
+# `discovered 5 suites`, and adding a sixth suite to the kit turned a correct change into
+# a red gate — the hand-written count is the very thing the runner's glob replaced, and it
+# had reappeared one level up, inside the suite that tests the glob.
+#
+# Counting it with an independent `find` is not a tautology: the runner prunes `vendor/`,
+# `.git` and the rest, so the two agree only while the runner's discovery matches a plain
+# walk of the tree. If they disagree, one of them is wrong about what ships, which is the
+# claim this case exists to make. Zero cannot pass either side — the runner exits 2 on
+# discovering none.
+KIT_SUITES="$(find "$KIT" \( -name .git -o -name vendor -o -name node_modules -o -name .venv -o -name __pycache__ \) -prune \
+  -o -type f -name 'test-*.sh' -print | wc -l | tr -d ' ')"
+case "$OUT" in *"discovered $KIT_SUITES suites"*) ok "C1 every suite the kit ships is discovered ($KIT_SUITES)" ;;
+              *) bad "C1 every suite the kit ships is discovered" "expected $KIT_SUITES — $(printf '%s' "$OUT" | head -1)" ;; esac
 
 echo "=== D: DEPTH — the runner sees the instance, not just boot-kit ==="
 # The whole point. `tests/` sits at the instance root; `boot-kit/tests/` sits beside the

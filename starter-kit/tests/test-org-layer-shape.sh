@@ -161,6 +161,22 @@ eq "E7 the two Tier-1 skills are declared" "2" "$(jq -r '.install.skills|length'
 eq "E8 sources carry the upstream: prefix"  "true" \
    "$(jq -r '[.install.skillSources|to_entries[]|select(.key|startswith("$")|not)|.value|startswith("upstream:")]|all' "$GL" 2>/dev/null)"
 
+# A minted org layer must be able to mint an INSTANCE. Nothing asserted that before, and
+# the way it breaks is quiet: `cp -R "$TEMPLATE"/* dst` instead of `cp -R "$TEMPLATE" dst`
+# drops nested directories, and every layer minted afterwards would look complete while
+# being unable to produce a single machine. Same class as A3 one tier up.
+GT3="$E/dest/scratchlayer/templates/tier3-instance/install.sh"
+eq "E9 the minted layer carries a tier-3 template" "yes" "$([ -f "$GT3" ] && echo yes || echo no)"
+# THE ONLY DIFFERENCE IS THE PLACEHOLDER. This is the byte-for-byte pin between the
+# generator's template and its output — the one pair CI can see. It does NOT pin a layer
+# that was minted months ago and edited since: that copy lives in another repo, and the
+# only thing that ever detects ITS drift is someone diffing it by hand. Which is how a
+# better warning string sat unshared in a minted copy while the template kept the worse
+# one.
+eq "E10 the minted tier-3 installer is the template with only __ORG_DISPLAY__ resolved" "" \
+   "$(diff <(sed 's|__ORG_DISPLAY__|Scratch|g' "$T3T/install.sh") "$GT3" 2>&1)"
+absent "E11 no template token survives into the minted file" "__ORG_DISPLAY__" "$(slurp "$GT3")"
+
 echo "=== F. the generator's output survives lock-verify L7 ==="
 if [ -f "$LOCKVERIFY" ] && [ -f "$GL" ]; then
   LV="$(bash "$LOCKVERIFY" --lock "$GL" 2>&1)"

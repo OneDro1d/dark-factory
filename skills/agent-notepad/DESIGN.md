@@ -64,7 +64,8 @@ proj-arbbot/
   CLAUDE.md            # orientation: objective, repos-in-scope, read-first/dispatch rules
   NOTES.md             # compact working memory, auto-loaded (§6.1)
   SCOPE.md             # charter: objective, done-criteria, repo-subset (§6.5)
-  DIGEST.md            # precomputed cross-scope digest from the memory index [gitignored — derived]
+  DIGEST.md            # was: derived from the memory index, gitignored. SUPERSEDED — see the
+                       # banner: the producer is gone, so the file is hand-maintained and COMMITTED
   repos.manifest.json  # the CODE repos this scope drives (§6.4)
   sessions/
     index.json         # session metadata index (§6.3)
@@ -80,7 +81,7 @@ proj-arbbot/
 - **6.3 `sessions/index.json`** — `[{sessionId,startedAt,lastInteractionAt,journalFile,turns}]`, upserted by the Stop hook.
 - **6.4 `repos.manifest.json`** — `{"repos":[{"path","branch","role"}],"requires_df_context_store":true}`. Every repo should hold a context store; missing = SessionStart warning.
 - **6.5 `SCOPE.md`** — Objective · Done-criteria · Repo subset (optional).
-- **6.6 `DIGEST.md`** — cross-scope digest, derived/gitignored, ≤60 lines, auto-loaded.
+- **6.6 `DIGEST.md`** — auto-loaded, ≤60 lines. ⚠️ **SUPERSEDED**: "derived/gitignored" described the removed digest builder. Hand-maintained and **committed** since 2026-07-29 — it carries the standing caveats, and ignoring it leaves them on one machine.
 - **6.7 `handoffs/<date>-<topic>.md`** — deliberate structured docs; creating one **forces a `git push`**.
 
 ### 6.8 Formats & rationale

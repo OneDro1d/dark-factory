@@ -265,8 +265,20 @@ while read -r h; do
     case "$src:$DRY" in local:*) : ;; *:1) HK_PEND=$((HK_PEND+1)); continue ;; esac
     warn "$h: not present at ${src}"; HK_MISS=$((HK_MISS+1)); continue
   fi
+  # Say what is being replaced, as the skills loop above already does. Hooks were the
+  # asymmetric half: a skill got "repointing $s (was …)" while a hook was overwritten in
+  # silence, and a machine may well mix these with hooks installed by other means.
+  #
+  # CONTENT, not existence. A hook is copied, so a file at this path proves only that some
+  # earlier run put one there — including this installer's own. Testing existence reports
+  # a replacement on every re-install, and a warning that is wrong every second time
+  # trains the reader past the one that is right.
+  rendered="$(sed "s|__HOME__|$HOME|g" "$abs")"
+  if [ -f "$LIVE/hooks/$h" ] && [ "$rendered" != "$(cat "$LIVE/hooks/$h")" ]; then
+    warn "replacing a different copy of $h that was already installed here"
+  fi
   if [ "$DRY" -eq 0 ]; then
-    sed "s|__HOME__|$HOME|g" "$abs" > "$LIVE/hooks/$h"
+    printf '%s\n' "$rendered" > "$LIVE/hooks/$h"
     chmod +x "$LIVE/hooks/$h"
   fi
   HK_OK=$((HK_OK+1))

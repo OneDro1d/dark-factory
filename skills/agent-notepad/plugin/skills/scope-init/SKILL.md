@@ -79,6 +79,56 @@ skill (that plants SERVICE-MAP / DATA-FLOW / FINDINGS / DECISIONS + the commit g
 operator declines, note it — a missing store just yields a SessionStart warning, not a hard
 failure.
 
+### 6a. Offer a docs-map per repo (CONSENT, per repo)
+
+The push gate (§7.7) blocks an agent `git -C <repo> push` when the push changes a declared
+area and no declared doc moved with it. It reads its rules from **`<repo>/.claude/docs-map.json`
+— in the CODE REPO, not from this notepad.** For each code repo without one, OFFER to write a
+starter map. Ask per repo; wait for a yes.
+
+⚠️ **WHY THE RULES LIVE WITH THE REPO AND NOT IN `repos.manifest.json`.** The manifest is
+*objective-scoped*: one notepad per objective, and the same code repo can be driven by two
+notepads or by none. Put a repo's doc policy there and the repo acquires two definitions of
+done, or zero — which is the one-artifact-two-homes failure this whole model exists to remove,
+reappearing one level up. **The notepad answers "which repos am I working on"; the repo answers
+"what does this repo require".** Keep those separate.
+
+⚠️ **NO FILE MEANS ABSTAIN, never a default set.** A gate that invents rules for a repo nobody
+configured fires wrong on its first run, and a gate that fires wrong is one people learn to
+`--no-verify` past. This is the same abstain-by-default the commit gate already uses when a
+repo has no `.claude/context/` store.
+
+Shape — globs against the push range `@{u}..HEAD`, each rule `block` or `warn`:
+
+```json
+{
+  "$comment": "Read by the agent-notepad push gate. Paths are repo-relative globs.",
+  "rules": [
+    { "when": "skills/*/**",   "requires": ["skills/$1/SKILL.md"], "level": "block" },
+    { "when": "services/**",   "requires": ["docs/index.md"],      "level": "block" },
+    { "when": "**/migrations/**", "requires": ["docs/*schema*.md"], "level": "block" },
+    { "when": "scripts/**",    "requires": ["docs/admin-scripts.md"], "level": "warn" }
+  ]
+}
+```
+
+Propose the starter set from what the repo actually has — do not paste a template. A rule
+naming a doc the repo does not contain is a rule that blocks every push on day one.
+
+**Where to draw `block` vs `warn`:** block where a missing doc makes something
+**undiscoverable** (a service nobody indexed) or lets **two repos disagree** (a cross-repo
+message contract). Warn everywhere else. ⚠️ Do NOT block on files that carry sensitive detail
+— a rule forcing a doc edit whenever a strategy or a credential path changes pushes exactly
+that content into documentation.
+
+⚠️ **A hook can only prove a doc MOVED, never that it is right.** One whitespace character
+passes. This gate catches the mechanical class; a reader catches the semantic one. **Never let
+a green push be read as "the docs are current".**
+
+⚠️ **The gate governs AGENT pushes only** — it is a `PreToolUse(Bash)` hook, so a human's
+`git push` in a terminal is untouched. Say so when you offer it; an operator who thinks it
+covers their own pushes is worse off than one who knows it does not.
+
 ### 7. Warm-start NOTES.md from the repo stores
 
 Build the initial `NOTES.md` (§6.1, ≤150 lines, secrets/PII redacted) from what's already
@@ -91,18 +141,31 @@ intact (append a short "refreshed <date>" note at most).
 ### 8. Lay down the notepad template
 
 Copy any missing scaffold from `../../plugin/notepad-template/` into the notepad:
-`CLAUDE.md` (orientation), `DIGEST.md` placeholder (gitignored/derived),
-`sessions/index.json`, `handoffs/`, and `.claude/settings.json` (which arms the
-PreToolUse commit gate — §7.6). Fill the bracketed placeholders in CLAUDE.md from the
-interview. Copy only what's missing; never overwrite live files.
+`CLAUDE.md` (orientation), `DIGEST.md`, `sessions/index.json`, `handoffs/`,
+and `.claude/settings.json` (which arms the PreToolUse commit and push gates).
+⚠️ **`DIGEST.md` must NOT be gitignored, and the template no longer ignores it.** That rule
+called the file "derived (precomputed cross-scope digest from the memory index)"; the
+producer was removed 2026-07-29 and nothing has regenerated it since. It is
+hand-maintained now, holds the notepad's standing caveats, and the SessionStart hook
+injects it alongside `NOTES.md`. Ignoring it puts those caveats on ONE machine while
+every other clone loads nothing where they used to be — strictly worse than the overlong
+`NOTES.md` the split exists to relieve. **On an OLDER notepad the rule is still there**:
+`git -C <notepad> check-ignore -q DIGEST.md` succeeding means this notepad predates the
+fix, and the repair is to delete that line and `git add -f DIGEST.md`. Fill the bracketed
+placeholders in CLAUDE.md from the interview. Copy only what's missing; never overwrite
+live files.
 
 ### 9. Wire best-effort pull/push
 
 Confirm the notepad is a git repo (`git -C <notepad> init` if brand-new) and, if a remote
 exists, that the SessionStart pull / Stop push hooks will find it. These are **best-effort**
 by design — no remote is a valid, silent state. Do an initial commit of the scaffold
-(SCOPE, manifest, CLAUDE, settings) so the first Stop cycle has a base; **do not** commit
-`DIGEST.md` (derived) or anything the `.gitignore` excludes.
+(SCOPE, manifest, CLAUDE, settings, **and `DIGEST.md`**) so the first Stop cycle has a base;
+do not commit anything the `.gitignore` excludes.
+⚠️ **This line used to say "do not commit `DIGEST.md` (derived)" — fifteen lines below the
+warning in step 8 saying it must not be gitignored.** One file, two opposite answers, and
+whichever a reader hit first was the one they acted on. A caveat added in one place does not
+retire the instruction it contradicts somewhere else.
 
 ---
 

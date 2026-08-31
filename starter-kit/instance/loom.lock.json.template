@@ -37,6 +37,13 @@
   },
   "$upstreamsNote": "Add your own upstreams inside `upstreams`, one object each, same shape as dark-factory. `account` is optional and only matters when a machine holds several git identities: it names the one that can resolve THAT repo, and the wrong identity fails as a 404 that reads like 'repo does not exist' rather than as 'wrong account'. This note sits OUTSIDE the map on purpose -- the installer iterates every key of `upstreams` and would try to clone a comment.",
 
+  "org": {
+    "$comment": "OPTIONAL, and ABSENT BY DEFAULT: leave `upstream` empty and this machine installs Tier 1 directly, exactly as it did before this block existed. That is what makes it safe to add to a generator without re-minting every machine the generator already produced. Set it to the KEY of an entry in `upstreams` -- a key, never a repo, so the coordinates, the pin and the account are declared exactly once -- and install.sh runs THAT layer's own installer before this instance's declarations are layered on top. Delegating rather than re-listing is the whole point: the org layer decides what the org installs, and a lockfile carrying a second copy of that list drifts in the direction nobody watches, where a stale entry reads as a machine that was never set up rather than as a list that fell behind.",
+    "upstream": "",
+    "installer": "install.sh",
+    "$installerNote": "The layer's entry point, resolved INSIDE the vendored layer. A value that is absolute or contains `..` is refused, never normalised -- the same rule the *Sources values follow, for the same reason. Order is precedence and is not cosmetic: the org installs first, this instance last, so a name declared in both resolves to THIS instance's copy, and rehydrate.sh says so on the line where it happens. A silent override is how tiers rot."
+  },
+
   "install": {
     "$comment": "Skills SYMLINK (an edit in vendor/ is live in the next session). Hooks COPY, because __HOME__ inside them is substituted per machine -- so a hook edit needs a reinstall AND a new session. Each name must have a matching entry in its *Sources map AND each *Sources entry must have a name: lock-verify L7 checks both directions, because either half on its own installs nothing while still reading like a declaration. A source value is resolved under vendorDir unless it begins with `local:`, which resolves inside THIS instance; `upstream:` is the explicit spelling of the default. A value containing `..` is refused, never normalised.",
     "skills": [],

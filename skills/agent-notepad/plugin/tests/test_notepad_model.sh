@@ -33,6 +33,10 @@ test_required_files_exist() {
   assert_file_exists "$np/NOTES.md" "NOTES.md scaffolded"
   assert_file_exists "$np/SCOPE.md" "SCOPE.md scaffolded"
   assert_file_exists "$np/.gitignore" ".gitignore scaffolded"
+  # scope-init step 8 tells the operator to copy DIGEST.md out of this template. It named a
+  # file the template did not contain — an instruction that cannot be followed, and nothing
+  # said so, because the only test of the template's contents did not list it.
+  assert_file_exists "$np/DIGEST.md" "DIGEST.md scaffolded"
   assert_file_exists "$np/repos.manifest.json" "repos.manifest.json scaffolded"
   assert_file_exists "$np/org-routing.example.json" "org-routing.example.json scaffolded"
   assert_file_exists "$np/sessions/index.json" "sessions/index.json scaffolded"
@@ -52,9 +56,28 @@ test_notes_has_seven_sections() {
   rm -rf "$(dirname "$np")"
 }
 
-test_gitignore_ignores_digest() {
-  local np; np="$(_scaffold)"
-  assert_contains "$(cat "$np/.gitignore")" "DIGEST.md" ".gitignore lists DIGEST.md"
+# DIGEST.md must be COMMITTABLE. This case used to assert the opposite — that .gitignore
+# listed it — because the file was once produced by a memory-index digest builder. That
+# producer was removed 2026-07-29; DIGEST.md is hand-maintained now, holds the notepad's
+# standing caveats, and is injected by SessionStart. Ignoring it keeps those caveats on one
+# machine and gives every other clone nothing.
+#
+# ASK GIT, NEVER THE FILE TEXT. A `assert_contains .gitignore "DIGEST.md"` — and its lazy
+# inverse — matches the explanatory COMMENT that now sits at the top of that file, so a
+# text assertion would report on prose while the rule it cares about did whatever it liked.
+# `git check-ignore` answers the only question that matters: would a commit drop this file.
+#
+# The .anp-mirror/ half is the CANARY. Without it, a fixture where `git init` silently
+# failed would report "not ignored" for everything and pass vacuously — the shape of green
+# that means nothing was looked at.
+test_gitignore_does_not_ignore_digest() {
+  local np ignored_digest ignored_mirror
+  np="$(_scaffold)"
+  ( cd "$np" && git init -q . ) >/dev/null 2>&1
+  ( cd "$np" && git check-ignore -q DIGEST.md ) && ignored_digest=yes || ignored_digest=no
+  ( cd "$np" && git check-ignore -q .anp-mirror/ ) && ignored_mirror=yes || ignored_mirror=no
+  assert_eq "no"  "$ignored_digest" "DIGEST.md is committable, not ignored"
+  assert_eq "yes" "$ignored_mirror" "canary: check-ignore does work here (.anp-mirror/ is ignored)"
   rm -rf "$(dirname "$np")"
 }
 

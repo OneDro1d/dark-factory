@@ -34,6 +34,10 @@ test_install_lays_down_stable_runtime_tree() {
   assert_file_exists "$base/hooks/user-prompt.sh"   "user-prompt.sh at stable path"
   assert_file_exists "$base/hooks/pre-compact.sh"    "pre-compact.sh at stable path"
   assert_file_exists "$base/hooks/commit-gate.sh"   "commit-gate.sh at stable path"
+  # A hook the template's settings.json names but the installer does not copy is a hook that
+  # fails silently at the stable path — the settings entry looks like wiring and installs
+  # nothing. Both gates are listed here for that reason.
+  assert_file_exists "$base/hooks/push-gate.sh"     "push-gate.sh at stable path"
   assert_file_exists "$base/lib/notepad.sh"          "lib/notepad.sh at stable path"
   assert_file_exists "$base/notepad-template/CLAUDE.md" "notepad-template copied"
   [ -x "$base/hooks/session-start.sh" ] && assert_eq "x" "x" "installed hook is +x" \
