@@ -13,10 +13,6 @@ The canonical set is [AXIOMS.md](../skills/microservices-architect/AXIOMS.md) �
 numbered **1–37**, grouped by section. Its section headings are the index; there is no
 separately generated one.
 
-⚠️ **Numbering.** Older material cites these axioms in a longer internal numbering where
-this set sat at **18–54**. To resolve such a citation, **subtract 17**; a citation below 18
-has no counterpart here. The curated list below uses the canonical 1–37.
-
 ## High-Impact Axioms (curated)
 
 - **5. Public APIs are protocol-adaptive at the edge, wire-native inside.**
