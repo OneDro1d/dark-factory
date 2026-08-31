@@ -38,14 +38,40 @@ So the test is SELF-DECLARATION plus DENSITY:
                     describes itself as Clerk-based, so Clerk is its subject, not its
                     coupling. Declaring it is the price of being allowed to assume it.
 
-  density           ONE undeclared product is an illustration ("e.g. RabbitMQ") and is
-                    REPORTED, not failed. TWO OR MORE DISTINCT undeclared products in one
-                    artifact is a document written against somebody's stack — the shape both
-                    real offenders have, and the shape a passing illustration does not.
+  co-occurrence     ONE undeclared product is an illustration ("e.g. RabbitMQ") and is
+                    REPORTED, not failed. Products from TWO DIFFERENT CATEGORIES, composed
+                    together in one PROSE BLOCK, is a document written against somebody's
+                    stack — the shape both real offenders have.
 
-Measured against the reference estate, that rule separates the set cleanly: d=5 for
-`develop-and-test/SKILL.md` and d=5 for `requirements-discovery/REQUIREMENTS-TEMPLATE.md`,
-against d=1 for every legitimate tool skill.
+⚠️ THE RULE WAS FILE-WIDE UNTIL 2026-08-31, AND THAT WAS WRONG IN A THIRD DIRECTION.
+
+It counted categories across the whole artifact. First it counted PRODUCTS, which punished
+`Database queries (Prisma, Drizzle, etc.)` — the generic phrasing. Counting categories fixed
+that and introduced the mirror defect: a document that must offer alternatives for MORE THAN
+ONE CONCERN. `service-mapper/SKILL.md` names four brokers in one table row and an ORM in the
+next, which is the most generic writing in the repo, and it failed. It carried a standing
+exception whose own text said the fix belonged in the gate.
+
+So the unit of judgement is now a PROSE BLOCK — a run of consecutive non-blank lines that is
+neither a table row nor inside a code fence:
+
+    PROSE COMPOSES.   "Dev Supabase project accessible / Dev RabbitMQ accessible / Dev
+                      DigitalOcean app exists", three bullets in one block, is a stack. So is
+                      "Wire: Fastify, RabbitMQ". These still fail, and the failure now names
+                      the block.
+    TABLES AND CODE   One concern per row, alternatives inside the row; a grep whose pattern
+    ENUMERATE.        lists what to look for. These name several products and compose none.
+
+⚠️ AND THE VOCABULARY IS WHY A CATALOGUE LOOKED LIKE A STACK. Of the five ORMs on that row
+the gate knows one; of the three databases on the next it knows one. A menu of five reads as
+a lone choice to a reader who can only see one option — so the vocabulary does not merely
+miss couplings, it MANUFACTURES the appearance of one in text doing the opposite.
+
+⚠️ THE COST, STATED RATHER THAN BURIED. A genuinely coupled document that never puts two
+products in one block now passes. Such a file is still REPORTED — tagged `catalogued not
+composed`, which is the weaker verdict and says so — but it does not fail. That is the
+deliberate trade: the alternative is failing the most generic writing in the repo, and a gate
+that does that is one people switch off.
 
 ⚠️ THE VOCABULARY SHIPS — FOR THE THIRD-PARTY CLASS, AND THAT CAVEAT WAS EARNED.
 
@@ -168,18 +194,67 @@ def subject_of(root, relpath):
 
 
 def scan_file(path, vocab):
+    """-> (totals, blocks). `totals` is token -> count across the whole file. `blocks` is a
+    list of (first_lineno, {token}) for PROSE blocks only — a block being a run of
+    consecutive non-blank prose lines.
+
+    ⚠️ WHERE A PRODUCT IS NAMED IS PART OF WHAT IT MEANS, and a file-wide tally throws that
+    away before the verdict is computed. Two shapes carry opposite meanings:
+
+      PROSE COMPOSES.     "Dev Supabase branch accessible / Dev RabbitMQ accessible / Dev
+                          DigitalOcean app exists" is a list of things that must ALL hold.
+                          That is a stack, and it is what this gate exists to catch.
+
+      TABLES AND CODE     "| Message bus (RabbitMQ, Kafka, NATS, SQS) | look for publish… |"
+      BLOCKS ENUMERATE.   and "| ORM models | Prisma schema, TypeORM entities, GORM models |"
+                          are a catalogue of things to go and look for, one row per concern,
+                          alternatives inside each row. That is the most generic writing in
+                          the repo, and the old rule failed it.
+
+    So table rows (a line whose first non-space character is `|`) and fenced code blocks are
+    read as CATALOGUE and excluded from the coupling verdict. Their tokens still count in
+    `totals`, so the file is still reported — it is the FAILING verdict they are exempt from,
+    not visibility.
+
+    ⚠️ The gate's own vocabulary is why a catalogue looked like a stack in the first place.
+    Of the five ORMs on one of those rows it knows one; of the three databases on the next it
+    knows one. A menu of five reads as a lone choice to a reader who can only see one option.
+    That is F-11 from a third side: the vocabulary does not merely miss things, it
+    MANUFACTURES the appearance of coupling in text doing the opposite.
+    """
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             body = fh.read()
     except OSError:
-        return {}
-    low = body.lower()
-    found = {}
-    for tok in vocab:
-        n = len(re.findall(r"(?<![a-z0-9])%s(?![a-z0-9])" % re.escape(tok), low))
-        if n:
-            found[tok] = n
-    return found
+        return {}, []
+    pats = [(tok, re.compile(r"(?<![a-z0-9])%s(?![a-z0-9])" % re.escape(tok))) for tok in vocab]
+    totals, blocks = {}, []
+    cur_toks, cur_start, in_fence = set(), 0, False
+    for lineno, line in enumerate(body.lower().split("\n"), 1):
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            continue
+        hits = set()
+        for tok, pat in pats:
+            n = len(pat.findall(line))
+            if n:
+                totals[tok] = totals.get(tok, 0) + n
+                hits.add(tok)
+        catalogue = in_fence or stripped.startswith("|")
+        if not stripped:
+            if cur_toks:
+                blocks.append((cur_start, cur_toks))
+            cur_toks, cur_start = set(), 0
+            continue
+        if catalogue or not hits:
+            continue
+        if not cur_toks:
+            cur_start = lineno
+        cur_toks |= hits
+    if cur_toks:
+        blocks.append((cur_start, cur_toks))
+    return totals, blocks
 
 
 def check_repo(root, vocab_path=None, allow_path=None, local_path=None):
@@ -223,7 +298,7 @@ def check_repo(root, vocab_path=None, allow_path=None, local_path=None):
                     continue
                 full = os.path.join(dirpath, fn)
                 rel = os.path.relpath(full, root)
-                found = scan_file(full, vocab)
+                found, blocks = scan_file(full, vocab)
                 if not found:
                     continue
                 subject = subject_of(root, rel)
@@ -237,12 +312,43 @@ def check_repo(root, vocab_path=None, allow_path=None, local_path=None):
                     else:
                         unreasoned.append(rel)
                     continue
-                # THE VERDICT IS CATEGORY COUNT, NOT PRODUCT COUNT. Two products from one
-                # category is a document naming alternatives ("Prisma, Drizzle, etc.");
-                # products from two categories is a document naming a stack.
+                # THE VERDICT IS CO-OCCURRENCE, NOT A FILE-WIDE CATEGORY COUNT.
+                #
+                # Two products from one category are alternatives ("Prisma, Drizzle, etc.").
+                # That much the file-wide count already got right. What it got WRONG is a
+                # document that offers a menu in each of SEVERAL categories — a service
+                # mapper telling you to look for a message bus (RabbitMQ, Kafka, NATS, SQS)
+                # and then for ORM models (Prisma schema, TypeORM entities, GORM models) is
+                # the most generic possible phrasing, and the old rule failed it for naming
+                # two categories.
+                #
+                # ⚠️ AND THE REASON IT LOOKED LIKE A STACK IS THIS GATE'S OWN VOCABULARY.
+                # Of the five ORMs on that line it knows one; of the three databases on the
+                # next it knows one. A menu of five reads as a lone choice when the reader
+                # can only see one of the options. That is F-11 met from a third side: the
+                # vocabulary does not merely fail to catch things, it MANUFACTURES the
+                # appearance of coupling in text that is doing the opposite.
+                #
+                # A stack is products named TOGETHER — "a Supabase branch, a RabbitMQ
+                # instance and a DigitalOcean app", "Wire: Fastify, RabbitMQ". A menu is
+                # products named INSTEAD of one another, and they never share a sentence
+                # with a product from a different concern. So the categories are counted
+                # PER LINE, and the failure names the line.
+                #
+                # ⚠️ The cost, stated rather than buried: a genuinely coupled document that
+                # never puts two products in one sentence now passes. That file is still
+                # REPORTED (multi-category, never together) — visible, not failed — because
+                # the alternative is the false positive above, and a gate that fires on the
+                # most generic writing in the repo is one people switch off.
                 cats = {vocab[t] for t in undeclared}
-                if len(cats) >= 2:
-                    coupled.append((rel, undeclared, sorted(cats)))
+                coupling_lines = []
+                for start, toks_all in blocks:
+                    toks = sorted(t for t in toks_all if t in undeclared)
+                    lcats = sorted({vocab[t] for t in toks})
+                    if len(lcats) >= 2:
+                        coupling_lines.append((start, toks, lcats))
+                if coupling_lines:
+                    coupled.append((rel, undeclared, sorted(cats), coupling_lines))
                 else:
                     notes.append((rel, undeclared, sorted(cats)))
 
@@ -251,10 +357,18 @@ def check_repo(root, vocab_path=None, allow_path=None, local_path=None):
     if coupled:
         fail = 1
         print("COUPLED  %d artifact(s) written against a specific estate's stack:" % len(coupled))
-        for rel, prods, cats in coupled:
+        for rel, prods, cats, lines in coupled:
             detail = " ".join("%s×%d" % (t, n) for t, n in sorted(prods.items()))
             print("         %s" % rel)
             print("           %d categories (%s): %s" % (len(cats), ", ".join(cats), detail))
+            # Name the LINE, not just the file. The old output said which file and left the
+            # reader to find the sentence; on a 250-line skill that is a second search, and
+            # a diagnostic that stops one step short is one people stop reading.
+            for ln, toks, lcats in lines[:5]:
+                print("           prose block at line %d names %s (%s)"
+                      % (ln, ", ".join(toks), ", ".join(lcats)))
+            if len(lines) > 5:
+                print("           ... and %d more such block(s)" % (len(lines) - 5))
         print("")
         print("         Each names products it does not declare as its subject. Either move")
         print("         the coupled material down to the Tier-2 layer that owns that stack,")
@@ -288,15 +402,20 @@ def check_repo(root, vocab_path=None, allow_path=None, local_path=None):
         print("")
 
     if notes:
-        print("NOTE     %d artifact(s) stay inside ONE category — reported, not failed:" % len(notes))
+        print("NOTE     %d artifact(s) name products but never two concerns TOGETHER —" % len(notes))
+        print("         reported, not failed:")
         for rel, prods, cats in notes:
             detail = " ".join("%s×%d" % (t, n) for t, n in sorted(prods.items()))
-            print("         %-56s [%s] %s" % (rel, cats[0], detail))
-        print("         One category reads as naming alternatives. Two is a stack.")
+            tag = cats[0] if len(cats) == 1 else "%d cats, catalogued not composed" % len(cats)
+            print("         %-56s [%s] %s" % (rel, tag, detail))
+        print("         Products named instead of one another are a menu. Products named")
+        print("         together in prose are a stack. The second tag is the WEAKER verdict:")
+        print("         those files do span concerns, and it is only their shape — a table")
+        print("         row or a code block per concern — that says they are catalogued.")
         print("")
 
     if not coupled and not unreasoned and not stale:
-        print("PASS     no artifact names undeclared estate products from two categories")
+        print("PASS     no prose block composes undeclared estate products from two categories")
         print("")
 
     print("=== RESULT: %s ===" % ("NOT GENERIC" if fail else "GENERIC"))
@@ -391,6 +510,63 @@ def self_test():
            "Run Prisma against the Supabase branch.\n")
         run(d, "canary: two products across TWO categories is a stack", 1, vocab)
         os.remove(os.path.join(d, "skills/architecture-reviewer/SKILL.md"))
+
+        # ---- menu vs stack: the shape of the text, not the tally -------------------
+        # CANARY — the REAL shape of the offender this gate was built for. Its stack is
+        # three consecutive bullets, one product each, so a rule that looked at a single
+        # LINE would find one category per line and pass the file. Measured: the first
+        # attempt at this fix did exactly that and demoted the canonical offender to a note.
+        mk(d, "skills/develop-and-test/SKILL.md",
+           "---\nname: develop-and-test\ndescription: Build and test a service.\n---\n"
+           "Preconditions:\n"
+           "  - Dev Supabase project accessible\n"
+           "  - The Fastify service is running\n"
+           "  - Run the build\n")
+        run(d, "canary: a stack spread down consecutive bullets still couples", 1, vocab)
+        os.remove(os.path.join(d, "skills/develop-and-test/SKILL.md"))
+
+        # CONTROL — a CATALOGUE: one concern per table row, alternatives inside the row.
+        # This is the false positive that motivated the change (service-mapper), and it is
+        # the most generic writing in the repo.
+        mk(d, "skills/service-mapper/SKILL.md",
+           "---\nname: service-mapper\ndescription: Map services.\n---\n"
+           "| Concern | Look for |\n"
+           "|---|---|\n"
+           "| Message bus (RabbitMQ, Kafka) | publish, subscribe |\n"
+           "| DB connection strings | SUPABASE_URL, MONGO_URI |\n")
+        run(d, "control: one concern per table row is a catalogue, not a stack", 0, vocab)
+
+        # CONTROL — the same, in a fenced code block: a grep whose pattern lists what to
+        # search for names several products and composes none of them.
+        mk(d, "skills/service-mapper/SKILL.md",
+           "---\nname: service-mapper\ndescription: Map services.\n---\n"
+           "Search for the queue and the database:\n\n"
+           "```bash\n"
+           "grep -rn 'RabbitMQ\\|SUPABASE_URL' .\n"
+           "```\n")
+        run(d, "control: a fenced code block is a catalogue too", 0, vocab)
+
+        # CANARY — the matched pair for both controls. Same two products, now composed in a
+        # sentence, so "tables and code are exempt" cannot become "anything is exempt".
+        mk(d, "skills/service-mapper/SKILL.md",
+           "---\nname: service-mapper\ndescription: Map services.\n---\n"
+           "Point the RabbitMQ consumer at the Supabase project.\n")
+        run(d, "canary: the same two products composed in prose DO couple", 1, vocab)
+        os.remove(os.path.join(d, "skills/service-mapper/SKILL.md"))
+
+        # CONTROL — STRUCTURAL, and it is the one that keeps the rest honest. If blocks ever
+        # stopped splitting on blank lines, every file would collapse into one block and the
+        # rule would silently revert to the file-wide count this change replaced. Two
+        # paragraphs, one category each, far apart: must pass.
+        mk(d, "skills/repo-docs/SKILL.md",
+           "---\nname: repo-docs\ndescription: Document a repo.\n---\n"
+           "Describe the queue, for example RabbitMQ.\n"
+           "\n"
+           "Filler paragraph with nothing in it.\n"
+           "\n"
+           "Separately, note the hosting, for example Vercel.\n")
+        run(d, "control: a blank line really does separate blocks", 0, vocab)
+        os.remove(os.path.join(d, "skills/repo-docs/SKILL.md"))
 
         # CANARY — outside skills/ nothing has a subject to plead.
         mk(d, "stages/3-Developer/templates/spec.md",

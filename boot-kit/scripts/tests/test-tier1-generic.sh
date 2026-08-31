@@ -47,6 +47,18 @@ contains "A6 the tool-skill control ran"           "names its declared subject" 
 contains "A7 the unreasoned-exception canary ran"  "exception with no reason fails"       "$OUT"
 contains "A8 the stale-exception canary ran"       "stale exception fails"                "$OUT"
 contains "A9 the empty-vocabulary canary ran"      "empty vocabulary must be FATAL"       "$OUT"
+# The menu-vs-stack cases, added 2026-08-31 with the prose-block rule. Named individually
+# for the same reason as A3–A9, and because these four are a matched SET: three controls
+# that must pass and the canary that stops "tables and code are exempt" becoming "anything
+# is exempt". A set is the easy thing to half-drop.
+contains "A10 the bullet-list stack canary ran"    "spread down consecutive bullets"      "$OUT"
+contains "A11 the table-catalogue control ran"     "one concern per table row"            "$OUT"
+contains "A12 the code-fence control ran"          "fenced code block is a catalogue"     "$OUT"
+contains "A13 the matched prose canary ran"        "composed in prose DO couple"          "$OUT"
+# The structural one. If blocks stopped splitting on blank lines every file would collapse
+# into a single block and the rule would silently revert to the file-wide count it replaced
+# — passing this suite the whole way, because every other case is one block anyway.
+contains "A14 the block-splitting control ran"     "blank line really does separate"      "$OUT"
 
 echo "=== B: the gate is green on THIS repo, and that is a ratchet ==="
 OUT="$(python3 "$GATE" "$ROOT" 2>&1)"
