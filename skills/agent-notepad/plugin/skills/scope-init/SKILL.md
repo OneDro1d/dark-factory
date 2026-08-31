@@ -22,6 +22,15 @@ Everything else is local file writes and read-only repo validation.
 CLAUDE.md and re-validate repos, but **never** clobber `NOTES.md` or any journal file —
 merge/append only. A second `scope-init` is a safe no-harm refresh.
 
+**A re-run is not a shorter run.** Steps 6 and 6a are per-REPO offers, and the repo set
+moves: a repo added to the manifest last month was never offered anything, because it did
+not exist when the offers were made. So a re-run walks **every** repo in the manifest, not
+only the ones this run created.
+⚠️ **First init is the one moment the repo set is complete by accident.** After that, "it was
+offered" is a fact about the repos that existed then, and a step that runs only at init
+quietly stops covering the estate it claims to — the gap widening in exactly the direction
+nobody looks, because the notepad reports success either way.
+
 ---
 
 ## Procedure
@@ -124,6 +133,32 @@ that content into documentation.
 ⚠️ **A hook can only prove a doc MOVED, never that it is right.** One whitespace character
 passes. This gate catches the mechanical class; a reader catches the semantic one. **Never let
 a green push be read as "the docs are current".**
+
+**On a re-run over an existing notepad.** Walk every repo in `repos.manifest.json` — not only
+the ones added this run — and offer a starter map for each that has no
+`.claude/docs-map.json`. Record each outcome in the manifest under `$docsMapOffers`:
+
+```json
+{
+  "$docsMapOffers": {
+    "$comment": "OFFER HISTORY for this notepad. Not policy — see the caveat in scope-init §6a.",
+    "<repo-a>": "written 2026-01-30",
+    "<repo-b>": "declined 2026-01-30"
+  }
+}
+```
+
+Skip anything already recorded unless the operator asks to revisit it.
+
+⚠️ **That record is OFFER HISTORY, not policy.** The policy lives in the repo, in its own
+`.claude/docs-map.json`. This line exists so the distinction survives the next reader: the
+manifest may say *"this notepad asked and was told no"*; it may never say what the repo
+requires. The moment it does, the repo has two definitions of done again — the failure §6a
+opens by naming, walking back in through the door left ajar for its own bookkeeping.
+
+⚠️ **Ask once, then stop asking.** A prompt that returns on every re-run is trained past within
+two sessions, and an operator's "no" is a decision rather than a state to re-litigate. The
+decline is recorded for exactly that reason: so it does not have to be given twice.
 
 ⚠️ **The gate governs AGENT pushes only** — it is a `PreToolUse(Bash)` hook, so a human's
 `git push` in a terminal is untouched. Say so when you offer it; an operator who thinks it
