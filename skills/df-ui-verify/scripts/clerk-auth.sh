@@ -48,7 +48,7 @@ resolve_user_id() {
     -H "Authorization: Bearer $CLERK_SECRET_KEY" | jq -r '.[0].id // empty'
 }
 
-# dev_handshake -> sets DB_JWT TESTING_TOKEN SESSION_ID SESSION_JWT (engram 55e16569).
+# dev_handshake -> sets DB_JWT TESTING_TOKEN SESSION_ID SESSION_JWT.
 dev_handshake() {
   local fapi="$CLERK_FRONTEND_API" origin="${APP_ORIGIN:?set APP_ORIGIN}"
   DB_JWT="$(curl -sS -X POST "$fapi/v1/dev_browser" -H "Origin: $origin" -H "Accept: application/json" | jq -r '.token // empty')"
