@@ -16,6 +16,11 @@
 #                           its kit root two levels up from itself, so left in vendor/ it
 #                           would resolve to the vendored copy of Tier 1 and read that
 #                           repo's facts as this instance's
+#   2a org layer           OPTIONAL, and skipped entirely unless the lockfile declares an
+#                           `org.upstream`. Fetch that layer at its pin and run ITS
+#                           installer. Before step 3 on purpose: layer order is
+#                           precedence, so the org installs first and this instance's own
+#                           declarations land on top of it
 #   3  rehydrate            hand the remaining upstreams, skills and hooks to Tier 1's own
 #                           rehydrate.sh -- one implementation, not two that drift
 #   4  PATH                 df-mission has to be reachable; installed-but-unreachable is
@@ -139,6 +144,115 @@ GEN
   say "ok    $(find "$ENGINE_DST" -maxdepth 1 -type f | wc -l | tr -d ' ') files"
 fi
 
+# ---- 2a. the org layer, if this instance declares one -------------------------
+# OPTIONAL, and absent by default. With no `org.upstream` in the lockfile nothing in this
+# section runs, which is the property that makes it safe to land in the generator without
+# re-minting the machines the generator already produced: their lockfiles have no `org`
+# block, so their install is the one they had.
+#
+# WHY DELEGATE RATHER THAN LIST. The org layer owns the org's skill and hook list.
+# Re-listing it in this lockfile would be the second copy the tier split exists to
+# prevent, and the copies drift in the direction nobody watches -- the machine's, where a
+# stale entry reads as a machine that was never set up rather than as a list that fell
+# behind. Vendoring the layer is not the same thing: a vendored layer is content this
+# instance then has to decide what to do with. Delegating is letting the layer decide.
+#
+# WHY IT RUNS BEFORE STEP 3. Layer order IS precedence. The org installs first and this
+# instance's declarations land on top, so a name declared in both resolves to the
+# instance's copy -- the more specific layer wins, which is the rule everywhere else in
+# this method. rehydrate.sh reports each one as it happens: a silent override is how tiers
+# rot, because the org can then fix a skill, install the fix successfully, and leave this
+# machine on the old copy with nothing anywhere reporting a difference.
+step "org layer"
+# Both spellings, because this kit's engine reads LOOM_LIVE and the org-layer templates
+# read CLAUDE_HOME. Resolving only one here would hand the delegated installer a default
+# of the real ~/.claude while a caller believed it had redirected the install -- a
+# divergence that is invisible until something writes to the wrong home.
+LIVE="${LOOM_LIVE:-${CLAUDE_HOME:-$HOME/.claude}}"
+ORG_NAME="$(jq -r '.org.upstream // empty' "$LOCK")"
+ORG_INSTALLER="$(jq -r '.org.installer // "install.sh"' "$LOCK")"
+if [ -z "$ORG_NAME" ]; then
+  say "none  no org layer declared — installing Tier 1 directly"
+else
+  # A name, not coordinates: the repo, the pin and the account are declared once, in
+  # `upstreams`, and lock-verify already checks that map in both directions. A block that
+  # named a repo of its own would be an upstream no verifier knows about.
+  jq -e --arg n "$ORG_NAME" '.upstreams[$n]' "$LOCK" >/dev/null 2>&1 \
+    || die "org.upstream names '$ORG_NAME', which is not a key of .upstreams — the layer has no coordinates here, so nothing can fetch it and nothing verifies it"
+  case "$ORG_INSTALLER" in
+    /*|*..*) die "org.installer '$ORG_INSTALLER' climbs out of the layer it names — refused, not normalised" ;;
+  esac
+
+  ORG_DIR="$VENDOR/$ORG_NAME"
+  ORG_REPO="$(jq -r --arg n "$ORG_NAME" '.upstreams[$n].repo // empty' "$LOCK")"
+  ORG_URL="$(jq -r --arg n "$ORG_NAME" '.upstreams[$n].url // empty' "$LOCK")"
+  ORG_COMMIT="$(jq -r --arg n "$ORG_NAME" '.upstreams[$n].commit // empty' "$LOCK")"
+  ORG_ACCT="$(jq -r --arg n "$ORG_NAME" '.upstreams[$n].account // empty' "$LOCK")"
+  say "layer $ORG_NAME ($ORG_REPO)"
+
+  if [ "$OFFLINE" -eq 1 ]; then
+    [ -d "$ORG_DIR" ] || die "--offline, and $ORG_DIR is not cached — the declared org layer cannot be installed from nothing"
+    say "offline  using the cached layer as-is"
+  elif [ "$DRY" -eq 0 ]; then
+    mkdir -p "$VENDOR"
+    # An org layer is usually PRIVATE, so gh comes first and plain git is the fallback --
+    # the reverse of step 1, where the public method must install with git alone.
+    #
+    # The identity switch is deliberately narrow. `gh` identity is ONE GLOBAL SCALAR with
+    # no per-process form, so this switches, fetches, and switches straight back; a
+    # process-local GH_TOKEN is the safer mechanism where you have one, and with it set
+    # `gh auth switch` warns, changes nothing and exits 0 -- it fails open, so a machine
+    # using GH_TOKEN is unaffected by these two lines either way.
+    PRIOR_ACCT=""
+    if command -v gh >/dev/null 2>&1 && [ -n "$ORG_ACCT" ]; then
+      PRIOR_ACCT="$(gh auth status 2>&1 | awk '/account /{if(!a)a=$NF} END{print a}')"
+      gh auth switch --user "$ORG_ACCT" >/dev/null 2>&1 || say "  WARN  could not switch to $ORG_ACCT — a private layer may 404, which reads as 'no such repo'"
+    fi
+    if [ -d "$ORG_DIR/.git" ]; then
+      say "fetch    $ORG_NAME"
+      git -C "$ORG_DIR" fetch --quiet origin || say "  WARN fetch failed — falling back to what is already here"
+    else
+      say "clone    $ORG_NAME <- $ORG_REPO"
+      if command -v gh >/dev/null 2>&1; then
+        gh repo clone "$ORG_REPO" "$ORG_DIR" -- --quiet 2>/dev/null \
+          || git clone --quiet "${ORG_URL:-https://github.com/$ORG_REPO.git}" "$ORG_DIR" 2>/dev/null \
+          || say "  WARN clone failed for $ORG_REPO — if the layer is private, check gh auth status"
+      else
+        git clone --quiet "${ORG_URL:-https://github.com/$ORG_REPO.git}" "$ORG_DIR" 2>/dev/null \
+          || say "  WARN clone failed for $ORG_REPO — gh is not installed, so a private layer cannot be cloned here"
+      fi
+    fi
+    [ -n "$PRIOR_ACCT" ] && gh auth switch --user "$PRIOR_ACCT" >/dev/null 2>&1
+    # The pin is re-asserted by rehydrate.sh in step 3 for every upstream. It is asserted
+    # HERE too because this step hands the layer CONTROL: an unpinned checkout would run
+    # whatever its default branch says today, and that is the one upstream whose code
+    # executes on this machine before anything has verified it.
+    if [ -d "$ORG_DIR/.git" ]; then
+      case "$ORG_COMMIT" in
+        ""|__*__) say "  WARN  no resolved pin for $ORG_NAME — its installer will run from whatever its default branch holds today" ;;
+        *) git -C "$ORG_DIR" checkout --quiet "$ORG_COMMIT" 2>/dev/null \
+             && say "  pinned ${ORG_COMMIT:0:8}" \
+             || die "commit ${ORG_COMMIT:0:8} is not in $ORG_REPO — the pin is wrong, or it was never pushed" ;;
+      esac
+    fi
+  fi
+
+  ORG_ENTRY="$ORG_DIR/$ORG_INSTALLER"
+  if [ "$DRY" -eq 1 ]; then
+    say "would  run $VENDOR_REL/$ORG_NAME/$ORG_INSTALLER"
+  else
+    # Not a warning. A lockfile that declares an org layer and cannot run it describes a
+    # machine this install is not producing, and everything after this point would be a
+    # true report about a false whole.
+    [ -f "$ORG_ENTRY" ] || die "the layer declares no $ORG_INSTALLER at $VENDOR_REL/$ORG_NAME — nothing here can install the org's skills, and this instance's own declarations would install on top of nothing"
+    OFLAGS=""
+    [ "$OFFLINE" -eq 1 ] && OFLAGS="--offline"
+    say "run      $VENDOR_REL/$ORG_NAME/$ORG_INSTALLER"
+    ( cd "$ORG_DIR" && CLAUDE_HOME="$LIVE" LOOM_LIVE="$LIVE" bash "$ORG_INSTALLER" $OFLAGS ) \
+      || say "WARN  the org layer's installer reported a problem — read its output above, it names each one"
+  fi
+fi
+
 # ---- 3. rehydrate the rest ---------------------------------------------------
 step "upstreams, skills, hooks"
 REHYDRATE="$ENGINE_DST/rehydrate.sh"
@@ -147,7 +261,11 @@ if [ "$DRY" -eq 1 ]; then
 elif [ -f "$REHYDRATE" ]; then
   RFLAGS=""
   [ "$OFFLINE" -eq 1 ] && RFLAGS="--offline"
-  ( cd "$ROOT" && bash "$REHYDRATE" $RFLAGS ) || say "WARN  rehydrate reported a problem — read its output above, it names each one"
+  # LOOM_LIVE is passed explicitly, not left to rehydrate's own default. Step 2a resolved
+  # ONE live directory from either spelling and handed it to the org layer; if this step
+  # then fell back to its own default, the two layers of a single install would write to
+  # two different homes and each would report success.
+  ( cd "$ROOT" && LOOM_LIVE="$LIVE" bash "$REHYDRATE" $RFLAGS ) || say "WARN  rehydrate reported a problem — read its output above, it names each one"
 else
   say "WARN  no rehydrate.sh in the pinned engine — skills and hooks were NOT installed"
 fi

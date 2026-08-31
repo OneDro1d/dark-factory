@@ -135,6 +135,16 @@ say ""
 # the whole reason this tier exists.
 say "== skills =="
 mkdir -p "$LIVE/skills"
+
+# OVERRIDES. This instance's declarations install LAST, on top of whatever an earlier
+# layer -- an org layer delegated to by install.sh, or simply a previous install from a
+# different source -- already put here. Instance wins, by design: the more specific layer
+# is the one that should. The point of counting them is that it is said out loud. A
+# SILENT override is how tiers rot: the org fixes a skill, installs the fix successfully,
+# and this machine keeps the old copy forever with nothing anywhere reporting a
+# difference. Reported in --dry-run too, where it is a prediction and writes nothing.
+OVERRIDE=0
+
 while read -r s; do
   [ -n "$s" ] || continue
   src="$(jq -r --arg s "$s" '.install.skillSources[$s] // empty' "$LOCK")"
@@ -142,6 +152,14 @@ while read -r s; do
   if src_escapes "$src"; then say "  REFUSED $s ($src climbs out of its tree)"; continue; fi
   abs="$(resolve_src "$src")"
   if [ ! -d "$abs" ]; then say "  MISS $s ($src not present)"; continue; fi
+  # Compared by TARGET, not by existence. A skill this same lockfile installed on the
+  # previous run is already a link to exactly this path, and reporting that as an
+  # override would fire on every re-install -- a warning that is wrong every second time
+  # is one people learn to skip, which costs more than it ever reports.
+  if [ -e "$LIVE/skills/$s" ] && [ "$(readlink "$LIVE/skills/$s" 2>/dev/null)" != "$abs" ]; then
+    say "  OVERRIDE $s replaces a copy installed here before this instance"
+    OVERRIDE=$((OVERRIDE+1))
+  fi
   act "  link $s -> $src"
   if [ "$DRY" -eq 0 ]; then
     rm -rf "$LIVE/skills/$s"
@@ -162,13 +180,29 @@ while read -r h; do
   if src_escapes "$src"; then say "  REFUSED $h ($src climbs out of its tree)"; continue; fi
   abs="$(resolve_src "$src")"
   if [ ! -f "$abs" ]; then say "  MISS $h ($src not present)"; continue; fi
+  # A hook is COPIED, so its mere presence proves nothing: this instance's own previous
+  # run left a file at exactly this path. Existence alone would therefore report an
+  # override on every re-install -- which is the shape of the check to avoid, because a
+  # warning that is wrong every second time trains the reader past the one that is right.
+  # Content is what distinguishes "we wrote this" from "another layer wrote this", and
+  # two layers installing byte-identical text override nothing in effect.
+  rendered="$(sed "s|__HOME__|$HOME|g" "$abs")"
+  if [ -f "$LIVE/hooks/$h" ] && [ "$rendered" != "$(cat "$LIVE/hooks/$h")" ]; then
+    say "  OVERRIDE $h replaces a different copy installed here before this instance"
+    OVERRIDE=$((OVERRIDE+1))
+  fi
   act "  copy $h <- $src"
   if [ "$DRY" -eq 0 ]; then
-    sed "s|__HOME__|$HOME|g" "$abs" > "$LIVE/hooks/$h"
+    printf '%s\n' "$rendered" > "$LIVE/hooks/$h"
     chmod +x "$LIVE/hooks/$h"
   fi
 done < <(jq -r '(.install.hooks // [])[]' "$LOCK")
 
+say ""
+say "== summary =="
+# Printed on every run, including zero. "No overrides" and "nobody looked" are different
+# facts, and a line that appears only when something is wrong cannot tell them apart.
+say "  $OVERRIDE override(s) — a declaration here replacing something an earlier layer installed"
 say ""
 say "NEXT: bash <vendor>/dark-factory/boot-kit/scripts/lock-verify.sh"
 say "Manual, not restorable from a lockfile: gh auth login · claude.ai MCP connectors · plugin marketplaces"
