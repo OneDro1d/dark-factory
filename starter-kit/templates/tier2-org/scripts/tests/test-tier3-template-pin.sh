@@ -157,6 +157,16 @@ if [ -f "$WF" ]; then
   else
     fail "W1 .github/workflows/gate.yml does not supply DF_T1_DIR — CI would run the local checks, print COMPARISON NOT RUN, and stay green while the comparison stopped happening"
   fi
+  # ⚠️ AND IT MUST LAND OUTSIDE THE WORKSPACE. run-tests.sh enrols a suite by EXISTENCE, so
+  # a Tier 1 tree checked out inside the repo is discovered as this repo's own tests.
+  # MEASURED once, in CI: 45 suites instead of 3, Tier 1's whole suite run as if it were
+  # the layer's — green, and a Tier 1 failure would have reddened this gate for something
+  # that is not this repo's.
+  if grep -q "runner.temp" "$WF"; then
+    pass "W2 the Tier 1 tree lands outside the workspace"
+  else
+    fail "W2 gate.yml does not fetch Tier 1 into RUNNER_TEMP — a tree inside the workspace is discovered by the suite runner as this repo's own tests"
+  fi
 fi
 
 if [ -z "$T1DIR" ]; then
