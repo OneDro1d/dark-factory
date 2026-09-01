@@ -39,6 +39,10 @@ command -v jq >/dev/null || { echo "FATAL: jq required"; exit 1; }
 ROOT="$(pwd)"
 VENDOR="$ROOT/$(jq -r '.vendorDir // "vendor"' "$LOCK")"
 LIVE="${LOOM_LIVE:-$HOME/.claude}"
+# One stamp for the whole run, so everything a single rehydrate moves aside lands in ONE
+# directory. Per-file stamps would scatter one event across several, and the operator
+# recovering from it is looking for "what did that run take", not "what happened at 14:03:07".
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 ORIG_ACCT=""
 command -v gh >/dev/null 2>&1 && ORIG_ACCT="$(gh auth status 2>&1 | awk '/Active account: true/{found=1} /account /{if(!a)a=$NF} END{print a}')"
 
@@ -156,13 +160,51 @@ while read -r s; do
   # previous run is already a link to exactly this path, and reporting that as an
   # override would fire on every re-install -- a warning that is wrong every second time
   # is one people learn to skip, which costs more than it ever reports.
-  if [ -e "$LIVE/skills/$s" ] && [ "$(readlink "$LIVE/skills/$s" 2>/dev/null)" != "$abs" ]; then
-    say "  OVERRIDE $s replaces a copy installed here before this instance"
-    OVERRIDE=$((OVERRIDE+1))
+  # TWO CASES, ONE `rm -rf`, AND THEY ARE NOT THE SAME RISK.
+  #
+  #   a symlink pointing somewhere else -> deleting it destroys NOTHING. The bytes live at
+  #     the other end of the link and re-linking undoes it completely.
+  #   a REAL directory -> deleting it destroys the only copy. If anyone had edited a skill
+  #     in place, that work is gone with no backup and no trace.
+  #
+  # Both used to print the same OVERRIDE line, so the destructive case was indistinguishable
+  # from the harmless one at a glance. Outside-installer feedback (24-27 Aug 2026, finding
+  # 09) reported exactly this: "the right end state, invisibly reached", on two machines.
+  # ⚠️ The SILENCE half of that report is already fixed — the OVERRIDE counter landed
+  # 2026-08-31 in 2474db0, AFTER their install window, so they ran a rehydrate that said
+  # nothing at all. What was still missing is that a printed line is not enough when the
+  # operation is unrecoverable: content nobody can get back must be MOVED, not described.
+  REPLACED=""
+  if [ -e "$LIVE/skills/$s" ] || [ -L "$LIVE/skills/$s" ]; then
+    if [ -L "$LIVE/skills/$s" ]; then
+      if [ "$(readlink "$LIVE/skills/$s" 2>/dev/null)" != "$abs" ]; then
+        say "  OVERRIDE $s repoints a symlink installed here before this instance (reversible — nothing deleted but a link)"
+        OVERRIDE=$((OVERRIDE+1))
+      fi
+    else
+      # Not a link. Whatever is here is the only copy of itself.
+      REPLACED="$LIVE/.skills-replaced/$STAMP/$s"
+      # KEEPS THE `OVERRIDE <name>` PREFIX. That token is the existing contract — the
+      # instance-kit suites assert the override is reported BY NAME, and anything grepping
+      # this output greps that word. The new information is appended, not substituted: a
+      # correctness fix that silently renames a machine-readable token is a second breaking
+      # change smuggled in beside the first.
+      say "  OVERRIDE $s is a REAL directory, not a link — its contents exist nowhere else"
+      say "           PRESERVED -> $REPLACED (deleted nothing)"
+      say "           if you had local edits to this skill, they are in there"
+      OVERRIDE=$((OVERRIDE+1))
+    fi
   fi
   act "  link $s -> $src"
   if [ "$DRY" -eq 0 ]; then
-    rm -rf "$LIVE/skills/$s"
+    if [ -n "$REPLACED" ]; then
+      # Kept OUTSIDE skills/ on purpose: a stray directory beside the real ones is a
+      # directory the skill loader will try to read.
+      mkdir -p "$(dirname "$REPLACED")"
+      mv "$LIVE/skills/$s" "$REPLACED"
+    else
+      rm -rf "$LIVE/skills/$s"
+    fi
     ln -s "$abs" "$LIVE/skills/$s"
   fi
 done < <(jq -r '(.install.skills // [])[]' "$LOCK")
