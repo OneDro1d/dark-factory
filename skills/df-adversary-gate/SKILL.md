@@ -20,6 +20,33 @@ Independence of the verifier is necessary but not sufficient: the **worker must 
 1. `evidence ⊢ promise P` — was the declared promise kept? (the verifier's job)
 2. `P = the needed promise` — was it the right promise? (guaranteed upstream by correct specification, not derivable from the evidence — a perfectly-kept *wrong* promise still fails the mission).
 
+## ⚠️ Gate the method too, not only the deliverable
+
+Both checks above ask about the WORK. Neither asks whether the work was done **the way the
+mission said to do it** — and that omission has its own silent failure mode, because a
+directive that was never followed leaves the same trace as one that was: none.
+
+When a mission record carries a **"What actually ran"** block (`Skill(vinculum-map)`), read it
+as evidence and challenge it like any other:
+
+- **Skills named by the binding but not loaded** — is the stated reason real, or is the block
+  a copy of the binding's list? A block that lists exactly what was prescribed, with no skips,
+  is *intent recorded as outcome* and should be trusted less than one admitting an omission.
+- **Everything inline, nothing delegated** — check that against the judgment ladder in
+  `Skill(df-dispatch-subagents)`. Pure enumeration or retrieval done at the top tier is a
+  right-sizing miss, and it is usually invisible because the output is *correct*: the result
+  looks the same, only the cost differs.
+- **No block at all** — that is a finding, not an absence. Say so rather than passing.
+
+⚠️ **Absence of evidence is not evidence of compliance.** Measured 2026-09-01: a session
+invoked a binding naming six skills, loaded two, dispatched zero workers, and produced correct
+work — green tests, green preflight, right files on disk. Nothing in any artefact recorded that
+four directives were skipped. **Every check that looked at the output passed.**
+
+⚠️ **And a declaration is not proof.** It shows a skill was *loaded*, never that it changed how
+the work was done. Same class as a doc-move check: it catches the mechanical case; a reader
+catches the rest. Do not let a filled-in block end the conversation.
+
 ## How to run a gate
 1. Restate the **promise** and the **pre-declared evidence standard** (acceptance criteria fixed with the task, not negotiated now).
 2. Demand the unforgeable evidence; if it's a self-report or self-produced artifact, mark **unverified**.

@@ -61,7 +61,43 @@ Loaded once per session. Open tickets are **not** listed here — they are found
 
 ## Out of scope
 <!-- consciously ruled beyond the mission. Never graduates. -->
+
+## What actually ran
+<!-- Written at the END of a working session, from what happened, never from the plan. -->
+Skills loaded: <the ones you actually invoked>
+Not loaded: <named by the binding and skipped — and why>
+Delegated: <role/tier per task> · Inline: <what you kept, and why it was irreducible>
 ```
+
+## ⚠️ "What actually ran" — a missing line is visible, a skipped instruction is not
+
+This block exists because two directives were found to fail **silently and identically**,
+one week apart, and neither had any signature a reviewer could see.
+
+**Skills.** A binding NAMES the skills a mission must invoke. Naming is not loading — skills
+lazy-load on invocation, and nothing forces one. Measured live on 2026-09-01: a binding named
+six, the orchestrator invoked two, and the four it skipped left **no trace whatsoever**. Green
+tests, green preflight, the right file on disk, and a mission that ran without its stance.
+
+**Delegation.** The same session dispatched **zero** sub-agents and **zero** headless workers,
+and did every task inline at the top tier — including a pure enumeration that the judgment
+ladder puts at the cheapest tier. It never chose wrong; **it never chose**, because
+`df-dispatch-subagents` was one of the four skills it did not load. The two failures were the
+same failure.
+
+⚠️ **Do NOT solve this by auto-loading.** Measured: those six skills total ~936 lines, so
+loading them unconditionally spends 12–15k tokens on *every* mission, including the ones that
+need none. Lazy loading is correct. **The fix is not compliance, it is EVIDENCE of
+compliance** — record what ran, and an omission becomes a line a reviewer can see.
+
+⚠️ **Write it from what happened, not from the plan.** A block copied from the binding's list
+records intent and re-creates the exact bug it exists to catch. If you skipped one, say which
+and why — *"skipped `df-adversary-gate`, nothing was delegated so there was no return to
+verify"* is a good entry. **An honest skip is information; a tidy list is noise.**
+
+⚠️ **This is a declaration, not a gate.** It cannot prove a skill changed how the work was
+done — only that it was loaded. Same class as a doc-move check: it catches the mechanical
+case, and a reader catches the rest.
 
 ## Working the map
 
