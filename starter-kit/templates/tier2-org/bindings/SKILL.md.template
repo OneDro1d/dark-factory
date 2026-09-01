@@ -1,0 +1,82 @@
+---
+name: __ORG__-dark-factory
+description: Run the autonomous vinculum loop on __ORG_DISPLAY__ — mission to shipped dev environment, tickets on __TRACKER__, work dispatched to right-sized workers, verified against __OBSERVABILITY__. The __ORG_DISPLAY__ entry point binding vinculum-loop, vinculum-map and the df-* stages to this estate's tracker, repos and deploy path. Triggers on "run the loop on __ORG_DISPLAY__", "__ORG_DISPLAY__ dark factory", "autonomous build on __ORG_DISPLAY__".
+---
+
+# __ORG_DISPLAY__ Dark Factory — the bound configuration
+
+Generic machinery lives in Tier 1 and is **invoked by name below**. This file supplies the
+__ORG_DISPLAY__ bindings only.
+
+⚠️ **Do not restate a generic contract here.** A sentence copied down from Tier 1 is one that
+gets fixed upstream and stays broken here, with no way for a reader to tell which copy is
+current. Describe only what this estate does differently.
+
+## Invoke these, every mission — not optional, and asserted by CI
+
+The order is the order you use them in.
+
+1. **`Skill(work-autonomously)`** — the stance. **Load it before you ask the operator
+   anything.** It carries the escalation gate: the moment your instinct is to ask, run the
+   instinct through `critical-thinking` first and decide whether the question is really theirs.
+   A question whose answer is obtainable — memory, the codebase, the internet, the docs — was
+   never the operator's.
+   __STRICTER_STANCE__
+2. **`Skill(critical-thinking)`** — the escalation gate itself, and the pass every synthesized
+   answer goes through: *what would prove this wrong?*
+3. **`Skill(vinculum-loop)`** — the contract: notify triggers, evidence gating, A/B/C decisions.
+4. **`Skill(vinculum-map)`** — durable state, so a context reset resumes instead of restarting.
+5. **`Skill(df-dispatch-subagents)`** — Promise Theory. State the promise AND the unforgeable
+   evidence; withhold the holdout; right-size by the judgment ladder, not by the verb.
+6. **`Skill(df-adversary-gate)`** — verify every return. A self-report is not an assessment.
+
+Also available and worth reaching for by name: `df-data-transform-lens` (model the system as
+data nodes and transforms tagged pure|effect, with an authority that resolves conflicts) and
+the `df-*` stage skills.
+
+**Before framing or launching anything:** `df-preflight --report --profile __PROFILE__`.
+Three verdicts and the third is not a synonym for the second — `ok`, `drift`, and `unknown`,
+which means *could not probe* and is never a fact about the world.
+
+## The bindings
+
+| Concern | __ORG_DISPLAY__ binding |
+|---|---|
+| **Tracker** | __TRACKER__ — board `__BOARD_ID__` |
+| **Frontier** | __FRONTIER_QUERY__ |
+| **Claim** | `__CLAIM_FIELD__` = `<role>/<session-id>`, set **before** any work |
+| **Repos** | **RESOLVE, never hardcode** — `codeLayout.__LANE__` in the instance lockfile, overridden by any `probed.repos.<name>.path` the preflight has confirmed |
+| **Deploy** | __DEPLOY_MODEL__ |
+| **Environments** | __ENVIRONMENTS__ |
+| **Forbidden** | __FORBIDDEN__ |
+| **Observability** | __OBSERVABILITY__ |
+| **Memory** | __MEMORY__ |
+| **Identities** | __IDENTITIES__ |
+
+⚠️ **The deploy gate is the binding that does NOT carry between estates.** Where a push
+auto-deploys, the branch carries the whole production boundary. Where a rollout is a separate
+explicit act, the **cluster** does and the branch carries nothing. Copying the wrong model
+gives a false safety story in both directions — permissive where you thought you were strict.
+
+## Model tiering — name today's models HERE, never in Tier 1
+
+Tier 1's `df-dispatch-subagents` ranks tiers by *irreducible judgment × verifiability* and
+says a lane binding MAY resolve them to real models. **This is that resolution, and it is the
+only correct home for a model name**: line-ups change on a far shorter timescale than a
+doctrine file, so a name committed upstream is a decaying fact that reads like a constant.
+
+| Role | Model | Why |
+|---|---|---|
+| __ROLE_TIERS__ |
+
+⚠️ **Re-check these names against the running environment before trusting them.** This table is
+dated the day it was written.
+
+## Hard stops — escalate, never proceed
+
+__HARD_STOPS__
+
+## Related
+
+`vinculum-loop` · `vinculum-map` · `work-autonomously` · `critical-thinking` ·
+`df-dispatch-subagents` · `df-adversary-gate` · `df-data-transform-lens`

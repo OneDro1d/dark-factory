@@ -41,6 +41,34 @@ Two pieces work together. Keep them distinct:
    estate treats as real-world, and which of its own skills implement them. Reference a
    binding by name only, never by path — it resolves on that lane and nowhere else.
 
+## The heartbeat tick — how an attended loop survives the orchestrator's attention
+
+The unattended shape has `df-supervisor.sh`, which is bash and has no context window, so it
+ticks by itself. **The attended shape has no such thing**: the orchestrator is a session, and a
+session that finishes a turn simply stops. Long authorised work then sits, done or not, until
+somebody happens to look.
+
+So when you are running attended and the work outlives one turn, **set a tick** — a scheduled
+prompt that re-enters this loop and asks *is there queued work I should be doing?* Point it at
+the mission's own state files, not at a summary you wrote, because the files are the state and
+the summary decays. End it with an instruction to **stop the tick** when the queue is empty.
+
+⚠️ **`CronList` — or your harness's equivalent listing — is the ONLY proof a tick is live.**
+Three failure modes, each observed:
+
+- **A job id written in a file is not evidence.** A tick never survives a session restart, so a
+  file naming one describes a job that may have died hours ago while reading as current.
+- **Never compose an id.** Copy it from the tool that minted it. A plausible-looking id typed
+  from memory produces a record of a tick that never existed — indistinguishable, on the page,
+  from one that did.
+- **A tick firing over an empty queue is worse than no tick.** It manufactures no-change
+  wake-ups, and an operator who sees seven of them learns to ignore the eighth. Delete it the
+  moment its scope is finished, and verify the deletion the same way you verified the creation.
+
+⚠️ **A tick is a reminder, not a mechanism.** It does not make work happen; it makes *you* look.
+If the work itself must survive the session, that is the unattended shape, and the supervisor
+is the answer.
+
 ## Maturity — be honest about what is wired
 
 - **Shipped & usable now (this package):** the autonomous loop itself — A/B/C autonomy gate, evidence gating, Promise-Theory sub-agent verification, stage docs + tickets. Runs via `dark-factory-build` + Workflow, **unsigned**, on any project today.
