@@ -75,9 +75,15 @@ got="$(jq -r '.scope.excludedRepos // [] | join(",")' "$LOCK")"
 report
 v2="$(jq -r '.findings[]|select(.check=="repo" and .target=="ghost-repo")|.verdict' "$TMP/pf.json")"
 [ "$v2" = "ok" ] && ok "B: the repo row is now ok" || bad "B: row is ok after curation" "got '$v2'"
-d2="$(jq -r '.summary.drift' "$TMP/pf.json")"
-[ "$d2" = "0" ] && ok "B: drift is now zero — a first install can be quiet" \
-                || bad "B: drift is zero" "got '$d2'"
+# ⚠️ SCOPED TO THE `repo` CHECK ON PURPOSE. An earlier version asserted `summary.drift == 0`
+# and passed on the author's laptop while failing in CI — because probe_binaries reports a
+# missing REQUIRED binary as drift, and a CI runner has no `claude` installed. That assertion
+# was measuring the runner's toolchain, not this change. Same mistake as asserting the RESULT
+# line in the L4 suite: a global outcome the fixture does not control is not evidence about
+# the thing under test.
+d2="$(jq -r '[.findings[]|select(.check=="repo" and .verdict=="drift")]|length' "$TMP/pf.json")"
+[ "$d2" = "0" ] && ok "B: no repo drift remains — a first install can be quiet" \
+                || bad "B: no repo drift remains" "got $d2 drifting repo row(s)"
 
 echo "=== C: a second curation must not erase the first ==="
 jq '.repos += [{name:"second-ghost", remote:"example-org/second-ghost", branch:"main"}]' \
