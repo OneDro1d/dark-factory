@@ -67,12 +67,22 @@ a lookalike checkout can exist at a plausible path and not be the repo you mean.
 Then load `vinculum-loop` for the contract you run under: A/B/C decisions, Promise-Theory
 evidence gating, and the two-trigger notify rule.
 
-## 2. Read state, in this order, and stop when you have enough
-1. `{mission_dir}/MISSION.md` — the frame and the hard-stops for THIS mission
-2. `MAP.md` — the mission map; its FRONTIER section is what is actually live
-3. the newest file in `handoffs/` — what the previous iteration was in the middle of
+## 2. Read state — the newest handoff FIRST, then only what it sends you to
+1. **the newest file in `handoffs/`** — THE ENTRY POINT. It states where the work stands,
+   the one next action, and links every artefact that matters. If it is doing its job you
+   need little else: follow its links rather than opening files speculatively.
+2. `{mission_dir}/MISSION.md` — the frame and the hard-stops for THIS mission. Read it even
+   when the handoff seems complete: a hard stop you did not read still binds you.
+3. `MAP.md` — the mission map; its FRONTIER section is what is actually live. The AUTHORITY
+   on decisions — the handoff only indexes it, so where they disagree, MAP.md wins.
 4. `NOTES.md` — working memory, blockers live here
 5. the tracker (via the skill's binding) — claim state and open tickets
+
+⚠️ Ordered this way deliberately (operator decision 2026-09-01). A cold iteration told to
+read five documents in sequence reads SOME of them; one that starts from a self-sufficient
+handoff starts oriented. ⚠️ If the newest handoff does NOT orient you — no next action, no
+links, or it describes a different ticket — that is a finding about the previous iteration.
+Say so in yours, then fall back to 2-5 rather than guessing.
 
 ## 3. Do exactly one thing
 Claim ONE ticket on the tracker BEFORE you touch anything, using the skill's claim
@@ -83,7 +93,12 @@ out, and verify their evidence yourself — a sub-agent's "done" is a claim, not
 ## 4. Close the loop before you exit — ALWAYS, even if you failed
 1. Update the ticket: status + a comment a cold reader could resume from.
 2. Update `MAP.md`: frontier, decisions taken, anything newly surfaced.
-3. Write a handoff into `handoffs/` (invoke `Skill(handoff)`).
+3. Write a handoff into `handoffs/` (invoke `Skill(handoff)`). ⚠️ THE NEXT ITERATION READS
+   IT FIRST AND MAY READ LITTLE ELSE, so it must stand alone: where the work stands, THE ONE
+   NEXT ACTION, a link to every artefact you touched (ticket, MAP.md, PRs, files), and what
+   is blocked and on whom. It POINTS, it does not RESTATE — MAP.md keeps the decisions, and
+   a handoff that copies them creates a second store that drifts. Test it by asking whether
+   somebody who was not in this session could continue from that file alone.
 4. Write ONE word to `{mission_dir}/state`:
    - `CONTINUE` — more to do; a fresh iteration should follow.
    - `DONE`     — the mission objective is met. Say why, with evidence, in the handoff.

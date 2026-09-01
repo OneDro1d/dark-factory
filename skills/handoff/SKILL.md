@@ -41,8 +41,42 @@ checkpoint someone else (or a fresh you) will read cold → publish a Handoff.
 - Explicit asks: "create a handoff", "hand this off", "checkpoint for next session",
   "prep for a fresh agent", "summarize the session for continuation".
 
-For *automatic* survival across auto-compaction, that is the Notes hooks' job — you do
-not run this skill for that.
+## ⚠️ The handoff is the SINGLE ENTRY POINT for a cold session
+
+Operator decision, 2026-09-01. **A handoff must be the only document a fresh session has to
+read to become oriented.** Not the first of five — the only one. Everything else it needs, it
+reaches *through* the handoff.
+
+That is a contract on what a handoff must contain:
+
+- **Where the work stands**, in a few sentences a cold reader can act on.
+- **The one next action.** Not a menu.
+- **A link to every artefact touched** — the mission map, the tickets, the PRs, the files, the
+  findings. By path or URL, in a list, so nothing has to be hunted for.
+- **What is blocked and on whom.**
+
+⚠️ **It POINTS. It does not RESTATE.** The Mission Map holds the decisions; the tracker holds
+ticket state; the repos hold the code. A handoff that copies those becomes a second store of
+the same facts, and two stores drift — which is the one-artifact-two-homes failure this whole
+model exists to remove. **Entry point, not authority.** If you find yourself explaining a
+decision rather than linking to where it was recorded, stop and link.
+
+⚠️ **Test it the only way that works: could someone who was NOT in this session pick up this
+file alone and continue?** If they would have to already know which mission, which ticket, or
+which repo — it is not a handoff yet, however complete it feels from inside the session.
+
+### Why this matters more after compaction than at a milestone
+
+Native compaction is lossy and unversioned. When it fires, the hooks re-inject what they have —
+so whatever the handoff does *not* carry is simply gone from the new window. A five-document
+read order degrades to whichever documents the compacted agent still remembers to open. One
+self-sufficient document does not have that failure mode.
+
+For *automatic* survival across auto-compaction, the Notes and PreCompact hooks do the
+mechanical capture — you do not run this skill for that. **But they capture session mechanics:
+files touched, recent intent.** They cannot know which ticket was claimed or what "done" means
+here. That judgement is this skill's, which is why the 85% context gate tells you to call it
+rather than trusting the hooks alone.
 
 ## How to run
 
