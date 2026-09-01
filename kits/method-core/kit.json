@@ -24,7 +24,7 @@
   "harnesses": ["claude-code", "codex"],
   "$harnessNote": "Skills are portable as-is — Codex CLI reads the same SKILL.md format. HOOK WIRING IS NOT: Claude Code uses settings.json, Codex uses hooks.json / [hooks] in config.toml, and Codex implements a superset of the events (11 vs 5). The hook SCRIPTS are shared; the wiring is rendered per harness by the consuming instance. ⚠️ UNVERIFIED: that these hook scripts run unchanged under Codex is inferred from its documentation, not measured. Do not claim Codex support on this line alone.",
   "$excluded": {
-    "develop-and-test": "Ships in this repo but is hardwired to one estate's stack — Supabase, RabbitMQ, DigitalOcean, pnpm, Zod, Fastify — and cites an internal table. It is a binding wearing the method's name and is scheduled to move to an org layer. Naming it here would put an estate's stack in every install.",
-    "requirements-discovery": "Same shape: the four-round interview is generic, its REQUIREMENTS-TEMPLATE.md is one estate's services and pipeline. The rounds belong here; the template does not."
+    "requirements-discovery": "The four-round interview is generic, its REQUIREMENTS-TEMPLATE.md is one estate's services and pipeline. The rounds belong here; the template does not.",
+    "$developAndTestNote": "develop-and-test was listed here until 2026-09-01 for the same reason, and was then REMOVED FROM THIS REPO rather than fixed. Measured before deleting: no kit named it, dark-factory-build / vinculum-loop / df-tdd-developer never referenced it, and no loop had ever invoked it -- the method's build stage is df-tdd-developer. A skill coupled to one estate that nothing in the method calls is a fork living in the wrong repo, and all three estates already carry their own copy. This note stays because an entry that simply vanishes reads as one nobody decided."
   }
 }
