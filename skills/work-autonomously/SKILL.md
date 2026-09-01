@@ -70,6 +70,33 @@ Then put the synthesized answer through `critical-thinking`: does it survive *"w
 prove this wrong?"* A claim that cannot be falsified by any check you are willing to run is
 not yet evidence.
 
+### ⚠️ Identity: never establish it from a call that takes the identity as an argument
+
+**Establish who someone is from message attribution, or from an authenticated whoami-style
+call that answers about the CALLER. Never from a lookup you pass an id to.**
+
+This is one line because it has to survive being skimmed, and it earned its place from five
+separate tools failing the same way in one week (outside-installer report, 24–27 Aug 2026,
+finding 07):
+
+- `slack_read_user_profile` **ignored its `user_id` argument and returned the caller every
+  time** — so two lookups "confirmed" each other, a correct attribution was corrected into a
+  wrong one, and the wrong one was written to memory. What settled it was attribution in the
+  thread itself.
+- A tool description hardcoded the wrong user id.
+- A duplicate Jira account swallowed every agent mention; a kubeconfig request sat unanswered
+  for ~31 hours.
+- `jira_create_issue_link` has parameters inverted from their names, so a whole dependency
+  graph can be wired backwards and still look plausible.
+- `df-preflight` inferred a GitHub identity from the **org name** in a remote, which holds
+  only while org == username — reporting a reachable repo as drift and blocking a lane.
+
+⚠️ **The shared failure is that they AGREE with you.** None of these returns an error. A
+plausible wrong answer, confirmed by a second call that fails the same way, is indistinguishable
+from a right one — so "I checked twice" is not evidence here, and neither is "it did not
+error". Prefer the record that DECLARES the identity (a manifest's `account` field, the
+thread's own attribution) over any value that merely looks like it.
+
 If the answer is still ambiguous after that pass, *then* ask — and ask narrowly: what you
 searched, what you found, the specific gap, and the decision to be made.
 
