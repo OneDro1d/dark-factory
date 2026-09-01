@@ -30,9 +30,17 @@ interactive `/df-mission` phase runs `--report`, shows you the drift and the pro
 you say which are right, and only then does the agent call `--apply`. A bash prompt
 cannot ask a good question; you can.
 
-The headless supervisor runs `--report` and REFUSES TO START on drift. It never applies.
-There is nobody there to confirm, and a loop that silently self-heals its own map is a
-loop that will confidently work in the wrong directory for six hours.
+The headless supervisor runs `--report` and NEVER applies. There is nobody there to
+confirm, and a loop that silently self-heals its own map is a loop that will confidently
+work in the wrong directory for six hours.
+
+⚠️ CORRECTED 2026-09-01: this paragraph used to say the supervisor "REFUSES TO START on
+drift". It no longer does — drift is INFORMATIONAL there (operator decision, after four
+outside installers found that a fresh machine drifts by construction and so could never
+reach the kit's own worked example). What has NOT changed is the half that matters here:
+the supervisor still never calls `--apply`. Curation is an install-time act performed by a
+human who confirmed it, which is why the not-cloned-here case carries a proposal rather
+than being fixed automatically.
 
 THREE-STATE VERDICTS — never collapse UNKNOWN into FALSE
 --------------------------------------------------------
@@ -381,7 +389,8 @@ def probe_github(manifest, scope):
             # for every org whose name is not also a username: `eso-development` is
             # reachable ONLY as `Michal-Bacia_eso`, so the probe reported a repo the machine
             # can reach perfectly well as DRIFT — and per df-supervisor.sh the supervisor
-            # refuses to start on drift, so one wrong guess here blocks every unattended
+            # treated drift as fatal when this was written, so one wrong guess here blocked
+            # every unattended
             # mission on that lane.
             #
             # The manifest already carries the answer, per-repo, in `account`. It was simply
@@ -612,11 +621,33 @@ def probe_repos(manifest, lock, probed, scope):
                 "ambiguous, will not guess: %s" % (len(hits), want, ", ".join(hits)),
                 expected=want, actual=hits))
         else:
+            # SELF-CURATION. A kit ships a manifest naming the repos its ESTATE drives; a
+            # fresh machine has cloned none of them yet. So on a first install every one of
+            # these was drift, drift blocked the supervisor, and the kit's own worked example
+            # — the one step that proves the loop — was unreachable. Two outside installers
+            # hit this independently and both reached the same repair by hand: curate the
+            # manifest to your own lane. A repair two strangers reach without talking is the
+            # shipped default (feedback 24-27 Aug 2026, finding 01; operator decision
+            # 2026-09-01: ship self-curating).
+            #
+            # THE VERDICT STAYS `drift`, DELIBERATELY. Zero worktrees found IS a probe that
+            # ran and returned a positive answer about the world, which is exactly what
+            # `drift` means here; `unknown` is for a probe that could not run. Relabelling it
+            # would also make it unappliable — apply_report refuses unknown findings on
+            # principle — so the honest verdict and the useful one are the same verdict.
+            #
+            # ⚠️ CURATION IS AN INSTALL-TIME ACT, NEVER A LOOP-TIME ONE. This only PROPOSES.
+            # `--apply` writes it, and the supervisor never calls `--apply`: a loop that
+            # rewrites its own map works confidently in the wrong directory for six hours.
             out.append(finding(
                 "repo", name, "drift",
-                "not found on this machine. Tried: %s. No worktree under %s has origin %s."
-                % ("; ".join(tried) or "none", code_root, want),
-                expected=want, actual=None))
+                "not on this machine — no worktree under %s has origin %s (tried: %s). "
+                "If this estate repo simply is not cloned here, curate it out of scope: "
+                "confirm the proposal and run --apply. Clone it later and remove the name "
+                "from scope.excludedRepos."
+                % (code_root, want, "; ".join(tried) or "none"),
+                expected=want, actual=None,
+                proposal={"path": "scope.excludedRepos", "value": name, "op": "append"}))
     return out
 
 
@@ -905,8 +936,23 @@ def apply_report(path):
         parts = prop["path"].split(".")
         for p in parts[:-1]:
             node = node.setdefault(p, {})
-        node[parts[-1]] = prop["value"]
-        written.append("%s = %s" % (prop["path"], prop["value"]))
+        # Two shapes, because a curation proposal names a MEMBER of a list, not the list.
+        # Without the append op, confirming "exclude repo B" would overwrite the list that
+        # already excludes repo A — the second curation silently un-curating the first, on
+        # a path whose whole purpose is to accumulate.
+        if prop.get("op") == "append":
+            cur = node.get(parts[-1])
+            if not isinstance(cur, list):
+                cur = [] if cur in (None, "") else [cur]
+            if prop["value"] in cur:
+                print("skip (already present): %s += %s" % (prop["path"], prop["value"]))
+                continue
+            cur.append(prop["value"])
+            node[parts[-1]] = cur
+            written.append("%s += %s" % (prop["path"], prop["value"]))
+        else:
+            node[parts[-1]] = prop["value"]
+            written.append("%s = %s" % (prop["path"], prop["value"]))
 
     if not written:
         print("apply: nothing confirmed — lockfile untouched")

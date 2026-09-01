@@ -91,9 +91,31 @@ fi
 echo $$ > "$PIDFILE"
 trap 'rm -f "$PIDFILE"' EXIT
 
-# ── preflight gate — refuse to start on drift, never self-heal ───────────────
+# ── preflight — INFORMATIONAL on drift, and still never self-heals ───────────
 # The headless loop has nobody to confirm a proposal with, and a loop that rewrites its
 # own map will work confidently in the wrong directory for six hours. Report only.
+#
+# DRIFT NO LONGER ABORTS. Operator decision, 2026-09-01, after four outside installers:
+# 4/4 reached LOCKED, 3/4 could not start a mission, and the reason was this gate. A kit
+# ships a manifest naming its estate's repos; a fresh machine has cloned none of them; so
+# drift was GUARANTEED on a first install and the kit's own worked example was unreachable.
+# The gate had one level, so a repo that simply is not cloned here blocked a mission exactly
+# as hard as a corrupted checkout would.
+#
+# ⚠️ WHAT THIS TRADES AWAY, SAID PLAINLY. A blocking gate turned "the map is wrong" into a
+# stop. Informational means an iteration can now start against a partly-wrong map and burn
+# budget in the wrong place. Two things bound that, and NEITHER is this gate:
+#   1. Curation is now proposed (df-preflight scope.excludedRepos) so the ordinary
+#      not-cloned-here case is recorded once, at install, and stops being reported at all.
+#      A drift line that fires on every run is one people learn to skip, which is how a
+#      real one gets skipped too.
+#   2. The drift is written to preflight.json and repeated in the log every single run, so
+#      it is never silently dropped.
+# If a mission must not start on drift, that belongs in the MISSION's hard-stops where a
+# human chose it — not as a fleet-wide default that made first runs impossible.
+#
+# ⚠️ STILL ABSOLUTE: an unrunnable preflight (rc>=3) aborts. That is not drift, it is the
+# check itself failing, and a check that could not run is never a pass.
 log "preflight (profile=$PROFILE)"
 # NOT `if ! cmd; then rc=$?` — inside a negated test $? is the status of the NEGATION (0),
 # so the drift branch could never be reached and the gate silently passed everything.
@@ -103,11 +125,12 @@ python3 "$SCRIPTS/df-preflight.py" --report --profile "$PROFILE" \
 rc=$?
 case "$rc" in
   0) log "preflight clean" ;;
-  1) log "ABORT — preflight found drift. Fix it interactively (/${PROFILE}-dark-factory"
-     log "        runs the same probe and can apply confirmed fixes), then restart."
-     log "        See $MISSION_DIR/preflight.json"
-     echo BLOCKED > "$STATE"
-     exit 1 ;;
+  1) log "preflight found DRIFT — informational, proceeding. This is not an all-clear."
+     log "        Every drift row is in $MISSION_DIR/preflight.json and repeated above."
+     log "        Iterations run against the map as it is, so a wrong map spends budget in"
+     log "        the wrong place. Settle it interactively (/${PROFILE}-dark-factory runs the"
+     log "        same probe and can apply confirmed fixes); a repo that is simply not cloned"
+     log "        here can be curated out once with scope.excludedRepos and stops recurring." ;;
   2) log "preflight returned unknowns only — proceeding, see preflight.json" ;;
   *) log "ABORT — preflight itself failed (rc=$rc). An unrunnable check is not a pass."
      echo BLOCKED > "$STATE"
