@@ -450,6 +450,92 @@ def probe_github(manifest, scope):
 # P3 — cloud / cluster
 # ---------------------------------------------------------------------------
 
+def probe_machine(lock, lock_path):
+    """Does this lockfile's `machine` block actually describe THIS machine?
+
+    WHY THIS PROBE EXISTS. The block is read by find_lock() to disambiguate several candidate
+    lockfiles — and ONLY then: `if len(cands) == 1` returns before the comparison. A personal
+    kit has exactly one lockfile, so on a kit the block is never consulted and a wrong value
+    sits there indefinitely, correct-looking.
+
+    Measured 2026-09-01 on the shipped ESO kit: `platform` is the literal string "Darwin",
+    baked in from the machine that generated the kit, and `home` is still the unsubstituted
+    placeholder `__HOME_DIR__`. The template's own comment says "anything still bearing one
+    after a bootstrap is a value nobody supplied, and the installer says so rather than
+    defaulting it" — nothing said so.
+
+    ⚠️ THE OUTSIDE REPORT CALLED THIS DORMANT AND IT IS NOT. Its words were "no tool reads
+    that field today, which is the only reason it went unnoticed". A tool does read it; the
+    single-candidate fast path is what hid it. The distinction matters because the failure is
+    LATENT, not absent: the moment a kit gains a second instance lockfile — which is exactly
+    what the Coder workspaces do, `instances/<name>/loom.lock.json` — the match runs, nothing
+    matches, and preflight cannot resolve a lockfile at all. Both fields are wrong, so the
+    block matches nothing on any machine, including the one that generated it.
+
+    Reported UNKNOWN, not drift: a machine block that disagrees with this machine may simply
+    describe a different machine, which is the whole point of having one. What is being said
+    is "this was never verified here", and an unsubstituted placeholder is said separately
+    because it is not a disagreement — it is a value nobody ever supplied.
+    """
+    out = []
+    m = (lock or {}).get("machine") or {}
+    if not m:
+        return [finding("machine", "block", "unknown",
+                        "no `machine` block in %s — nothing to check this lockfile against. "
+                        "Harmless while one lockfile exists here; the day a second appears, "
+                        "find_lock cannot tell them apart." % (lock_path or "the lockfile"))]
+
+    me = {"platform": platform.system(), "home": os.path.expanduser("~")}
+
+    # SCAN THE WHOLE LOCKFILE, not just the machine block. Limiting this to `machine` was the
+    # first draft and it missed the worst instance: the same ESO kit carries
+    # codeRoot="__CODE_ROOT__", so EVERY repo probe searches a directory that does not exist
+    # and reports every repo as not-on-this-machine. A check scoped to the block where the
+    # bug was first noticed finds that bug and no other one of the same kind.
+    def scan(node, path=""):
+        hits = []
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k.startswith("$"):      # commentary, and templates legitimately quote them
+                    continue
+                hits += scan(v, "%s.%s" % (path, k) if path else k)
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                hits += scan(v, "%s[%d]" % (path, i))
+        elif isinstance(node, str) and len(node) > 4 \
+                and node.startswith("__") and node.endswith("__"):
+            hits.append((path, node))
+        return hits
+
+    placeholders = sorted(scan(lock or {}))
+    if placeholders:
+        out.append(finding(
+            "lockfile", "placeholders", "unknown",
+            "%d value(s) still hold an unsubstituted bootstrap placeholder: %s. The template's "
+            "own comment says a value still bearing one is a value nobody supplied and the "
+            "installer says so rather than defaulting it — nothing said so. Each of these is "
+            "silently wrong rather than absent, which is why they survive a green install."
+            % (len(placeholders), "; ".join("%s=%s" % (p, v) for p, v in placeholders)),
+            actual=[p for p, _ in placeholders]))
+    ph_keys = {p.split(".")[-1] for p, _ in placeholders if p.startswith("machine.")}
+
+    mismatched = [(k, m.get(k), v) for k, v in me.items()
+                  if k in m and k not in ph_keys and m.get(k) != v]
+    if mismatched:
+        out.append(finding(
+            "machine", "identity", "unknown",
+            "this lockfile describes a different machine than the one running: %s. Not drift "
+            "— a machine block is allowed to describe another machine. But if this lockfile "
+            "is meant to be THIS machine's, the value was baked at generation time and never "
+            "corrected."
+            % "; ".join("%s recorded=%r actual=%r" % (k, rec, act)
+                        for k, rec, act in mismatched)))
+    if not out:
+        out.append(finding("machine", "identity", "ok",
+                           "%s:%s matches this machine" % (m.get("platform"), m.get("home"))))
+    return out
+
+
 def probe_cloud():
     out = []
     if shutil.which("az"):
@@ -457,7 +543,31 @@ def probe_cloud():
         if rc is None:
             out.append(finding("azure", "account", "unknown", "probe could not run: %s" % se))
         elif rc != 0:
-            out.append(finding("azure", "account", "drift", "not logged in (`az login` needed)"))
+            # UNKNOWN, NOT DRIFT — and the sibling probe fifteen lines below already had this
+            # right. `kubectl` with no current context is reported unknown, because a context
+            # nobody set is not a machine that has gone wrong. An unauthenticated `az` is the
+            # same shape: `az` is an OPTIONAL binary here (see BINARIES), so its presence says
+            # somebody installed the CLI, never that this mission needs Azure.
+            #
+            # Reported as drift, it was UNCLEARABLE on a machine with no Azure tenant to log
+            # into, and named nowhere in the kit's access rows — so the only way to make the
+            # gate green was to stop reading it. An outside installer hit exactly that
+            # (24-27 Aug 2026, finding 04: "our own doctrine, broken by our own tools").
+            # Never collapse unknown into drift is written into the kit; this file enforced it
+            # for kubectl and broke it for az, one function apart. The rule was understood and
+            # unenforced.
+            #
+            # ⚠️ WHAT THIS GIVES UP: a mission that really does deploy to AKS will now see
+            # `unknown` where it once saw `drift`. That is the correct verdict — nothing was
+            # probed about whether Azure is REQUIRED — and it stays visible in its own UNKNOWN
+            # section. A mission that must have Azure should assert it in that mission's
+            # hard-stops, where a human decided it, rather than relying on a fleet-wide probe
+            # inferring the requirement from a binary being on PATH.
+            out.append(finding("azure", "account", "unknown",
+                               "az is installed but not logged in. UNKNOWN, not drift: nothing "
+                               "here declares that this machine needs Azure, so this says only "
+                               "that the capability is unconfirmed. `az login` if a mission "
+                               "needs it."))
         else:
             try:
                 a = json.loads(so)
@@ -857,6 +967,7 @@ def build_report(profile):
                      % (profile, scope["estates"]))
 
     findings += probe_binaries()
+    findings += probe_machine(lock, lock_path)
     findings += probe_github(manifest, scope)
     findings += probe_cloud()
     findings += probe_repos(manifest, lock, probed, scope)
