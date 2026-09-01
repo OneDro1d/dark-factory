@@ -1,0 +1,16 @@
+{
+  "$comment": "Read by the agent-notepad push gate (skills/agent-notepad/plugin/hooks/push-gate.sh) when an AGENT runs `git push` from this repo. Paths are repo-relative globs against the push range @{u}..HEAD. Written 2026-09-01 by scope-init §6a from notepad-onedroid-dark-factory, operator-approved.",
+  "$whyTheseRulesAndNotTheFour": "docs/DOCS-MAP-POLICY.md in each Tier-2 layer names four documents — test scenarios, service map, data model, deployment runbook — and scopes them to APPLICATION CODE REPOS. This is not one. It is Tier 1, the generic method. Those four rules are deliberately absent here rather than adapted, because adapting a policy is how a policy nobody chose arrives in every install. The two rules below come from what this repo actually contains.",
+  "$whatItCatches": "A skill directory that gains or changes a file while its own SKILL.md does not move. That is the estate's stated `block` criterion — a skill with no SKILL.md is undiscoverable, and this repo is public, so an undocumented skill has the widest blast radius in the estate.",
+  "$passesToday": "Measured 2026-09-01: all 43 directories under skills/ already carry a SKILL.md, so this rule blocks nothing that exists. A rule naming a doc the repo does not contain blocks every push on day one; this one was checked against the tree before it was written.",
+  "$oneWhitespacePasses": "⚠️ A hook can only prove a doc MOVED, never that it is right. One whitespace character in SKILL.md satisfies every rule below. This catches the mechanical class; a reader catches the semantic one. NEVER read a green push as 'the docs are current'.",
+  "$agentPushesOnly": "⚠️ This is a PreToolUse(Bash) hook, so it governs an agent's `git push` and nothing else. A human pushing from a terminal is untouched. Arm this repo's own pre-push hook if you want that too — an operator who believes this covers their own pushes is worse off than one who knows it does not.",
+  "rules": [
+    {
+      "when": "skills/*/**",
+      "requires": ["skills/$1/SKILL.md"],
+      "level": "block",
+      "$captureNote": "⚠️ `$1` is load-bearing: it is the text the FIRST `*` of `when` matched, so this asks for the CHANGED skill's own SKILL.md. Without the capture, any SKILL.md anywhere in the push would satisfy it — and a rule that accepts an unrelated file is worse than no rule, because it reports as enforcement."
+    }
+  ]
+}
