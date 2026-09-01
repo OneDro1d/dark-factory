@@ -12,14 +12,20 @@ the property:
     canonical-home    does one skill name have two homes?
     ---               is Tier 1 actually generic?            NOBODY ASKED
 
-Measured 2026-08-30. `skills/develop-and-test/SKILL.md` — the public, generic method — lists
-as PREREQUISITES that a Supabase branch, a RabbitMQ instance and a DigitalOcean app are
-reachable, tells the reader to run `pnpm build:shared`, to write Zod schemas, and to wire
-Fastify. That is one estate's purchasing decisions published as the method. The Tier-2
+Measured 2026-08-30. `skills/develop-and-test/SKILL.md` — the public, generic method — listed
+as PREREQUISITES that a Supabase branch, a RabbitMQ instance and a DigitalOcean app be
+reachable, told the reader to run `pnpm build:shared`, to write Zod schemas, and to wire
+Fastify. That was one estate's purchasing decisions published as the method. The Tier-2
 "fork" everyone assumed was the derivative detects the project type across
 Go/.NET/Node/Python/Terraform instead — so the FORK WAS THE PORTABLE DOCUMENT, and
 "strip the Tier-2 copy back to a delta" would have deleted the generic text and kept the
 coupled one, confidently, in the name of tidying.
+
+Past tense because that file was REMOVED on 2026-09-01, not repaired: nothing in the method
+referenced it and no loop had invoked it, so the fork in each estate is now the only copy.
+The finding stands as this gate's reason for existing — ⚠️ and it is the reason it must keep
+running. The offender that motivated a gate leaving the repo is not evidence the class left
+with it.
 
 That inversion was found by reading. Reading does not scale and does not run in CI.
 

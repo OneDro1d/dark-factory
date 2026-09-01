@@ -59,18 +59,40 @@ somebody believes is contradictory is a rule they stop applying.
 
 ## ⚠️ What is deliberately NOT in any kit, and why
 
-`kit-check.py` reports skills that no kit names. Today it reports four, and each is a
-decision rather than an oversight:
+`kit-check.py` reports skills that no kit names. **It is the oracle; this list is commentary
+and can fall behind it** — ⚠️ and it did: this section said "four" while the checker reported
+**six**, because three skills promoted in #53 and #5653f5d arrived after the sentence was
+written. A count in prose is a second answer to a question something else already answers.
+Run the checker.
 
-- **`develop-and-test`** and **`requirements-discovery`** — they ship here but are hardwired
-  to one estate's stack (Supabase, RabbitMQ, DigitalOcean, pnpm, Zod, Fastify; and a
-  requirements template naming one estate's services). They are bindings wearing the
-  method's name, and are scheduled to move to an org layer. Naming them in a kit would put
-  an estate's stack into every install.
+Each of the six is a decision rather than an oversight:
+
+- **`requirements-discovery`** — it ships here but its `REQUIREMENTS-TEMPLATE.md` is one
+  estate's services and pipeline. The four-round interview is generic; the template is not.
+  Naming it in a kit would put an estate's stack into every install.
+  ⚠️ **Its sibling develop-and-test was REMOVED rather than fixed, 2026-09-01** — unbackticked
+  on purpose, because this repo no longer provides it and a backticked name here reads to
+  `tier-check.py` as a reference to a component that is missing. Measured
+  first: no kit named it, `dark-factory-build`, `vinculum-loop` and `df-tdd-developer` never
+  referenced it, and no loop had invoked it — the method's build stage is `df-tdd-developer`.
+  A skill that is coupled to one estate AND that nothing in the method calls is not a
+  promotion waiting to happen, it is a fork living in the wrong repo, and all three estates
+  already carry their own. **Deleting it was cheaper than genericising it, and the test was
+  whether anything would notice.**
 - **`handoff-auto`** — superseded by `agent-notepad`, which says so in its own description
   and whose installer unwires it. Still shipped so existing installs do not break.
 - **`coder-file-transfer`** — genuinely uncategorised. It is a real skill with no kit that
   fits, and inventing a one-skill `devops` kit to house it would be padding.
+- **`df-ui-verify`** — promoted in #53 as the auth kernel plus a de-landmarked SKILL.md. Same
+  shape as `coder-file-transfer`: a real skill whose kit does not exist yet.
+- **`sc-audit`** and **`sc-dev`** — promoted in `5653f5d`. ⚠️ **The DeFi kit they were meant
+  for does not exist, because its other ten members are somebody else's.** Those ten are
+  `Uniswap/uniswap-ai`'s, MIT, and Tier 1's own doctrine is fetch-at-a-pin rather than vendor
+  — so that kit here would name two skills and point at ten it does not ship. A kit is a
+  manifest over `skills/`, and it has no way to say "and these ten from upstream".
+  ⚠️ **Naming it in backticks is what the section above forbids, and the gate caught exactly
+  that on this bullet's first draft** — a kit that does not exist, backticked, beside skills
+  that do. The rule earns its keep on the writer who just read it.
 
 An unbundled skill is **reported, never failed**. It may be standalone, or new.
 
