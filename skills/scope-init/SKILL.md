@@ -124,6 +124,15 @@ Shape — globs against the push range `@{u}..HEAD`, each rule `block` or `warn`
 Propose the starter set from what the repo actually has — do not paste a template. A rule
 naming a doc the repo does not contain is a rule that blocks every push on day one.
 
+**Start from the estate's own answer, if it has one.** An org layer may carry a docs policy —
+look for `docs/DOCS-MAP-POLICY.md` in the Tier-2 layer this instance pins. That file says which
+documents THAT estate has decided an app repo must carry; this skill supplies the mechanism and
+the shape, never the list.
+⚠️ **Tier 1 ships no list, and that is deliberate.** A default set here would be a policy nobody
+chose, arriving in every install — the same objection as a gate that invents rules for a repo
+nobody configured. An estate's answer belongs in that estate's layer, where the people who
+answered it can change it.
+
 **Where to draw `block` vs `warn`:** block where a missing doc makes something
 **undiscoverable** (a service nobody indexed) or lets **two repos disagree** (a cross-repo
 message contract). Warn everywhere else. ⚠️ Do NOT block on files that carry sensitive detail
