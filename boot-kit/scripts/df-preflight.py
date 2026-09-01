@@ -458,11 +458,29 @@ def probe_machine(lock, lock_path):
     kit has exactly one lockfile, so on a kit the block is never consulted and a wrong value
     sits there indefinitely, correct-looking.
 
-    Measured 2026-09-01 on the shipped ESO kit: `platform` is the literal string "Darwin",
-    baked in from the machine that generated the kit, and `home` is still the unsubstituted
-    placeholder `__HOME_DIR__`. The template's own comment says "anything still bearing one
-    after a bootstrap is a value nobody supplied, and the installer says so rather than
-    defaulting it" — nothing said so.
+    Measured 2026-09-01 on the shipped ESO kit: `home` is `__HOME_DIR__` and `codeRoot` is
+    `__CODE_ROOT__`, while `platform` is the literal string "Darwin".
+
+    ⚠️ CORRECTED. AN EARLIER VERSION OF THIS DOCSTRING CALLED ALL THREE A DEFECT AND SAID
+    "nothing said so". THAT WAS WRONG, and the correction is kept rather than quietly
+    deleted. The kit ships `home` and `codeRoot` blank ON PURPOSE and documents it twice:
+    START-HERE has a titled step, "Fill in the two placeholders", with a script; and the
+    README's "What is deliberately absent" gives the reason — shipping the building machine's
+    real values "would make your instance quietly claim to be someone else's laptop — a wrong
+    value that reads exactly like a right one". That is the right instinct, well argued, and
+    this probe SERVES it: it says the step has not been done on THIS machine, rather than
+    leaving that to a document the reader may not have reached.
+
+    THE ACTUAL DEFECT IS NARROWER, AND THE KIT'S OWN PRINCIPLE CONVICTS IT. `machine.platform`
+    ships FILLED, with the building machine's value, while its two siblings ship loudly blank.
+    That is exactly the wrong-value-that-reads-right case the README warns about, and it is
+    the one field the docs never mention. On a Linux workspace, a kit built on a Mac claims to
+    be a Mac, silently.
+
+    The README also says "lock-verify reads neither, so the kit still installs LOCKED as
+    shipped — the honesty costs nothing." True of lock-verify. NOT true of this file:
+    find_lock() matches on platform+home. The cost is zero only while exactly one lockfile
+    exists, which is why it has been zero so far.
 
     ⚠️ THE OUTSIDE REPORT CALLED THIS DORMANT AND IT IS NOT. Its words were "no tool reads
     that field today, which is the only reason it went unnoticed". A tool does read it; the
@@ -511,10 +529,11 @@ def probe_machine(lock, lock_path):
     if placeholders:
         out.append(finding(
             "lockfile", "placeholders", "unknown",
-            "%d value(s) still hold an unsubstituted bootstrap placeholder: %s. The template's "
-            "own comment says a value still bearing one is a value nobody supplied and the "
-            "installer says so rather than defaulting it — nothing said so. Each of these is "
-            "silently wrong rather than absent, which is why they survive a green install."
+            "%d value(s) are still the shipped placeholder: %s. These are DELIBERATELY blank "
+            "in a kit — filling them from the building machine would make this instance "
+            "quietly claim to be someone else's laptop — so this is not a defect, it is the "
+            "setup step not done yet on THIS machine. See START-HERE, \"Fill in the two "
+            "placeholders\"."
             % (len(placeholders), "; ".join("%s=%s" % (p, v) for p, v in placeholders)),
             actual=[p for p, _ in placeholders]))
     ph_keys = {p.split(".")[-1] for p, _ in placeholders if p.startswith("machine.")}
@@ -525,9 +544,12 @@ def probe_machine(lock, lock_path):
         out.append(finding(
             "machine", "identity", "unknown",
             "this lockfile describes a different machine than the one running: %s. Not drift "
-            "— a machine block is allowed to describe another machine. But if this lockfile "
-            "is meant to be THIS machine's, the value was baked at generation time and never "
-            "corrected."
+            "— a machine block is allowed to describe another machine. But if this lockfile is "
+            "meant to be THIS machine's, the value was baked at generation time and never "
+            "corrected. ⚠️ `platform` is the field to look at: a kit ships `home` and codeRoot "
+            "loudly blank so you cannot inherit them by accident, and then ships `platform` "
+            "FILLED with the building machine's value — the wrong-value-that-reads-right case "
+            "the kit's own README warns about, in the one field it never mentions."
             % "; ".join("%s recorded=%r actual=%r" % (k, rec, act)
                         for k, rec, act in mismatched)))
     if not out:
