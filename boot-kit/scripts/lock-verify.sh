@@ -92,8 +92,17 @@ while [ "$_d" != "/" ] && [ -n "$_d" ]; do
 done
 LIVE="${LOOM_LIVE:-$HOME/.claude}"
 DRIFT=0
+# UNKNOWN is a THIRD verdict and it is not a synonym for DRIFT. `drift` means "probed, and
+# reality differs" — a positive negative. `unknown` means "could not probe at all", which is
+# a fact about this machine's tooling, not about the instance. Collapsing the two is how a
+# missing binary gets reported as a broken install: it fires on the most ordinary case there
+# is, on a first run, and a gate that fires wrong on day one is the gate people learn to
+# ignore. This file had the rule (see the `// empty` comment in L4) and applied it one level
+# in while the outer test still collapsed them — the rule was understood and unenforced.
+UNKNOWN=0
 pass() { printf 'PASS  %s\n' "$1"; }
 drift() { printf 'DRIFT %s\n' "$1"; DRIFT=1; }
+unknown() { printf 'UNKNOWN %s\n' "$1"; UNKNOWN=$((UNKNOWN + 1)); }
 note() { printf '        %s\n' "$1"; }
 
 echo "=== lock-verify ==="
@@ -164,19 +173,35 @@ fi
 # One account cannot resolve the other org's repos AT ALL (404, not 403), so a missing
 # identity is a hard rehydrate failure, not a permission warning.
 echo "[L4] required git identities are available"
-if command -v gh >/dev/null 2>&1; then
+# ORDER IS THE WHOLE FIX. Ask "which accounts does this lock actually REQUIRE" FIRST — that
+# question is answered by jq against the lockfile and needs no `gh` at all. The previous
+# version wrapped the entire check in `command -v gh`, so a machine without `gh` reported
+# DRIFT before anything had asked whether an identity was needed. The public starter
+# lockfile declares NO account, so the public kit could not reach exit 0 with its own four
+# documented prerequisites — `gh` appears nowhere in START-HERE, and install.sh's own
+# comments say the public method must install with git alone. Installing `gh` and nothing
+# else was the only thing between a correct install and success. Reported cold, on a clean
+# Debian container, first try (outside-installer feedback, 24-27 Aug 2026, finding 03).
+#
+# `// empty`, not a bare lookup: an upstream that needs NO identity (a public repo cloned
+# over https) has no `account`, and jq -r renders that absent value as the four-character
+# string "null" -- which is non-empty, so it was checked as though it were an account named
+# "null" and reported as missing. That is false drift on the most ordinary case there is.
+# ⚠️ That fix and this one are THE SAME BUG at two different depths: both report "no
+# identity required" as a missing identity. Fixing the inner one in isolation is why the
+# outer one survived to be found by a stranger instead of by us.
+REQ_ACCTS="$(jq -r '[.upstreams[].account // empty] | unique[]' "$LOCK")"
+if [ -z "$REQ_ACCTS" ]; then
+  pass "L4 no upstream declares an account — no git identity required, gh not consulted"
+elif command -v gh >/dev/null 2>&1; then
   HAVE="$(gh auth status 2>&1 | grep -oE 'account [A-Za-z0-9_-]+' | awk '{print $2}' | sort -u)"
   MISSID=""
   while read -r acct; do
     [ -n "$acct" ] || continue
     printf '%s\n' "$HAVE" | grep -qx "$acct" || MISSID="$MISSID$acct"$'\n'
-    # `// empty`, not a bare lookup: an upstream that needs NO identity (a public repo
-    # cloned over https) has no `account`, and jq -r renders that absent value as the
-    # four-character string "null" -- which is non-empty, so it was checked as though it
-    # were an account named "null" and reported as missing. That is false drift on the
-    # most ordinary case there is, and it fired on the FIRST run of a fresh public
-    # install, where a spurious DRIFT is exactly what teaches someone to ignore the gate.
-  done < <(jq -r '[.upstreams[].account // empty] | unique[]' "$LOCK")
+  done <<EOF
+$REQ_ACCTS
+EOF
   if [ -n "$MISSID" ]; then
     drift "L4 not logged in as:"
     printf '%s' "$MISSID" | while read -r a; do [ -n "$a" ] && note "$a (gh auth login)"; done
@@ -184,7 +209,11 @@ if command -v gh >/dev/null 2>&1; then
     pass "L4 all required identities present"
   fi
 else
-  drift "L4 gh not installed — cannot verify identities"
+  # Identities ARE required here and we cannot check them. That is not drift — nothing has
+  # been shown to differ. Say UNKNOWN, name the accounts, and let the RESULT line carry it.
+  unknown "L4 gh not installed — required identities NOT verified (this is unknown, not drift)"
+  printf '%s\n' "$REQ_ACCTS" | while read -r a; do [ -n "$a" ] && note "$a — declared by an upstream in this lock"; done
+  note "Install gh and re-run, or accept that L4 was not checked on this machine."
 fi
 
 # ---- L5: installed on the machine, AND pointing where this lock says --------
@@ -787,13 +816,29 @@ fi
 
 echo ""
 if [ "$DRIFT" -eq 0 ]; then
-  if [ "$UNVERIFIED" -gt 0 ]; then
-    # Not the same claim as LOCKED: everything checkable passed, but $UNVERIFIED pin(s)
-    # were never compared against the remote. Say so, or offline becomes false assurance.
-    echo "=== RESULT: LOCKED (locally) — $UNVERIFIED pin(s) UNVERIFIED against the remote (offline?) ==="
+  if [ "$UNVERIFIED" -gt 0 ] || [ "$UNKNOWN" -gt 0 ]; then
+    # Not the same claim as LOCKED: everything checkable passed, but something was never
+    # actually checked. Say so, or offline becomes false assurance. The two classes are
+    # named separately because they have different remedies: a pin needs the network, an
+    # unknown check needs a binary.
+    qual=""
+    [ "$UNVERIFIED" -gt 0 ] && qual="$UNVERIFIED pin(s) UNVERIFIED against the remote (offline?)"
+    [ "$UNKNOWN" -gt 0 ] && qual="${qual:+$qual; }$UNKNOWN check(s) UNKNOWN — could not be probed on this machine"
+    echo "=== RESULT: LOCKED (locally) — $qual ==="
   else
     echo "=== RESULT: LOCKED — this instance matches its lockfile ==="
   fi
+  # EXIT 0, DELIBERATELY, AND THIS IS THE JUDGEMENT CALL WORTH ARGUING WITH.
+  # An unknown is not a failure: nothing has been shown to differ, so blocking here would
+  # re-create the exact bug this change removes, one layer up. It stays 0 rather than
+  # borrowing df-preflight's rc=2-means-unknowns convention because callers here
+  # (rehydrate.sh, install.sh, CI) test `-eq 0`, and silently turning a passing install
+  # into a non-zero exit is a breaking change dressed as a correctness fix.
+  # ⚠️ THE COST: a caller that reads only the exit code cannot tell LOCKED from
+  # LOCKED-with-unknowns. The RESULT line is the only place that distinction lives. Any
+  # caller that must not proceed on an unverified identity has to read the text, or this
+  # script needs a --strict flag. Aligning the two tools on 0/1/2 is the right long-term
+  # answer and it is a deliberate follow-up, not an oversight.
   exit 0
 else
   echo "=== RESULT: DRIFT ==="
