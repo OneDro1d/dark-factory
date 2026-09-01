@@ -373,8 +373,28 @@ def probe_github(manifest, scope):
             #      owner's credentials can.
             # So: retry as the owning identity, borrowing its token through the environment.
             # NOT `gh auth switch` — that mutates global state, and --report is pure.
+            # WHICH IDENTITY OWNS THIS REPO? Ask the MANIFEST first, and only then guess.
+            #
+            # This used to be `owner = remote.split("/")[0]` alone — the identity was
+            # inferred from the ORG NAME and matched against logged-in account names. That
+            # holds only while org == account. It is true for `Michal-Bacia_eso` and false
+            # for every org whose name is not also a username: `eso-development` is
+            # reachable ONLY as `Michal-Bacia_eso`, so the probe reported a repo the machine
+            # can reach perfectly well as DRIFT — and per df-supervisor.sh the supervisor
+            # refuses to start on drift, so one wrong guess here blocks every unattended
+            # mission on that lane.
+            #
+            # The manifest already carries the answer, per-repo, in `account`. It was simply
+            # never read. ⚠️ THIS IS THE SAME CLASS AS THE IDENTITY FINDING IN THE
+            # OUTSIDE-INSTALLER REPORT (24-27 Aug 2026, finding 07): establish identity from
+            # the record that declares it, never from a value that merely looks like it.
+            # There the offender was a Slack lookup returning the caller; here it is an org
+            # name doubling as a username. Both fail by AGREEING with a plausible guess.
             owner = remote.split("/")[0]
-            owner_acct = next((a for a in accounts if a.lower() == owner.lower()), None)
+            declared = (repo.get("account") or "").strip()
+            owner_acct = next((a for a in accounts if a.lower() == declared.lower()), None) if declared else None
+            if owner_acct is None:
+                owner_acct = next((a for a in accounts if a.lower() == owner.lower()), None)
             resolved_as = None
             if owner_acct and owner_acct != active_name:
                 trc, tso, _ = run(["gh", "auth", "token", "--user", owner_acct], timeout=15)
@@ -395,8 +415,19 @@ def probe_github(manifest, scope):
             else:
                 hint = ""
                 if not owner_acct:
-                    hint = (" — `%s` is not among the logged-in gh accounts, so this 404 "
-                            "most likely means WRONG IDENTITY, not missing repo" % owner)
+                    # Name the account the MANIFEST asked for when there is one. "`eso-development`
+                    # is not among the logged-in accounts" sends the reader to look for an account
+                    # by that name, which will never exist — the org is not a user. The actionable
+                    # sentence is which declared identity is missing.
+                    if declared:
+                        hint = (" — this repo declares account `%s`, which is not among the "
+                                "logged-in gh accounts, so this 404 means WRONG IDENTITY, not "
+                                "missing repo (`gh auth login` as %s)" % (declared, declared))
+                    else:
+                        hint = (" — `%s` is not among the logged-in gh accounts and the manifest "
+                                "declares no `account` for this repo, so this 404 most likely "
+                                "means WRONG IDENTITY, not missing repo. Declaring the account "
+                                "in the manifest entry is what makes this checkable" % owner)
                 elif owner_acct != active_name:
                     hint = (" — nor as `%s`, which IS logged in, so this is not merely an "
                             "identity mix-up" % owner_acct)
