@@ -96,8 +96,22 @@ case "$first" in *"READ THIS FIRST"*) ok "C: pointer survives into the injection
 case "$first" in *2026-09-01-newest.md*) ok "C: the filename reaches the new window" ;;
   *) bad "C: filename reaches the new window" "absent" ;; esac
 second="$(run_load "$SID")"
-[ -z "$second" ] && ok "C: consume-once — a second read is empty" \
-                 || bad "C: consume-once" "re-injected twice"
+# CONSUME-ONCE IS ABOUT THE SNAPSHOT, NOT ABOUT SILENCE.
+#
+# This assertion used to be [ -z "$second" ] -- "a second read is empty". That encoded the
+# loader's OLD shape, in which a consumed snapshot left the hook with nothing else to say.
+# Since 2026-09-02 the loader has a second, snapshot-independent source: it points at the
+# newest <notepad>/handoffs/*.md so that /clear -- which fires no PreCompact and therefore
+# writes no snapshot at all -- still orients the new window. A second read is CORRECTLY
+# non-empty now: the snapshot is gone, the pointer remains.
+#
+# The property worth testing is that the SNAPSHOT is not delivered twice. "Files written" is
+# snapshot-only; the deliberate-handoff filename appears on BOTH paths and is useless as a
+# discriminator -- which is exactly why the old assertion looked right while testing a proxy.
+case "$second" in *"Files written"*) bad "C: consume-once" "the snapshot was re-injected" ;;
+  *) ok "C: consume-once -- the snapshot is not re-injected" ;; esac
+case "$second" in *"READ THIS FIRST"*) ok "C: a consumed snapshot falls through to the pointer" ;;
+  *) bad "C: fall-through to the pointer" "emitted nothing -- /clear would be blind" ;; esac
 
 echo "=== D: never blocks compaction, whatever it is handed ==="
 # A hook that raises would block compaction and lose the whole window. Both must exit 0 on
