@@ -21,6 +21,16 @@ PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s -- %s\n' "$1" "$2"; }
 
+# ⚠️ HERMETIC OR IT IS NOT A TEST. The hook remembers, per session, that it has already fired
+# — via a marker under TMPDIR. Without an isolated TMPDIR that marker OUTLIVES THE TEST RUN,
+# so the second execution of this suite reads the brief form where it expects the full one and
+# cases C/D/E fail for a reason that has nothing to do with the code. Caught on the first
+# re-run; it is the same ambient-state defect this repo hit twice today, once in a suite that
+# resolved its subject from cwd and once in a discovery pass that counted only tracked files.
+TMPDIR="$(mktemp -d)"
+export TMPDIR
+trap 'rm -rf "$TMPDIR"' EXIT
+
 echo "=== A: present, and safe on the critical path ==="
 if [ -f "$HOOK" ]; then ok "A: hook exists"; else bad "A: hook exists" "not found"; fi
 
@@ -32,7 +42,10 @@ if printf 'not json' | python3 "$HOOK" >/dev/null 2>&1; then
   ok "A: exits 0 on malformed stdin"
 else bad "A: exits 0 on malformed stdin" "a Stop hook that errors blocks the turn"; fi
 
-OUT="$(printf '{"session_id":"t"}' | python3 "$HOOK" 2>/dev/null)"
+# ⚠️ A FRESH SESSION ID, because case A above already spent session "t"'s first firing and
+# the hook is quiet on repeats. Reusing an id across cases makes every later assertion read
+# the brief form and fail for a reason unrelated to what it is testing.
+OUT="$(printf '{"session_id":"full-form-case"}' | python3 "$HOOK" 2>/dev/null)"
 
 echo "=== B: stdout is a single valid JSON object the harness can read ==="
 if printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
@@ -75,6 +88,38 @@ echo "=== E: a fully-blocked mission has a clean ending ==="
 case "$OUT" in *"That is a complete report"*) ok "E: names the legitimate stop" ;;
   *) bad "E: names the legitimate stop" "a gate with no exit teaches people to ignore it" ;;
 esac
+
+echo "=== F: full text once per session, brief reminder after ==="
+# ⚠️ A gate that repeats a full screen of rules over an unchanged answer is the
+# seven-no-change-tick failure arriving through a Stop hook. Measured on the day it shipped:
+# five firings, the last three re-deriving an identical settled list. The guard must survive;
+# the wall of text must not.
+SID="gatetest-$$"
+F1="$(printf '{"session_id":"%s"}' "$SID" | python3 "$HOOK" 2>/dev/null)"
+F2="$(printf '{"session_id":"%s"}' "$SID" | python3 "$HOOK" 2>/dev/null)"
+
+case "$F1" in *"OPERATOR-ONLY"*) ok "F: first firing carries the full gate" ;;
+  *) bad "F: first firing carries the full gate" "the full rules must appear once" ;; esac
+
+if [ "${#F2}" -lt "${#F1}" ]; then ok "F: second firing is shorter"
+else bad "F: second firing is shorter" "repeating the wall of text trains skimming"; fi
+
+# ...but it must still DEMAND the check, or going quiet becomes going away.
+case "$F2" in *"OPERATOR-ONLY"*) ok "F: the brief form still demands a blocker" ;;
+  *) bad "F: the brief form still demands a blocker" "quiet must not mean silent" ;; esac
+case "$F2" in *"yours"*) ok "F: the brief form keeps the ownership rule" ;;
+  *) bad "F: the brief form keeps the ownership rule" "the one sentence that decides" ;; esac
+
+# A DIFFERENT session is a different mission and gets the full text again.
+F3="$(printf '{"session_id":"other-%s"}' "$SID" | python3 "$HOOK" 2>/dev/null)"
+case "$F3" in *"OPERATOR-ONLY blocker"*) ok "F: a new session gets the full gate" ;;
+  *) bad "F: a new session gets the full gate" "the marker leaked across sessions" ;; esac
+
+# ⚠️ FAIL TOWARD PROMPTING. A missing session_id means the hook cannot tell whether it has
+# fired, and a missed reminder is worse than a repeated one.
+F5="$(printf '{}' | python3 "$HOOK" 2>/dev/null)"
+case "$F5" in *"OPERATOR-ONLY blocker"*) ok "F: no session_id still gets the full gate" ;;
+  *) bad "F: no session_id still gets the full gate" "an absent id must not mean already-fired" ;; esac
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

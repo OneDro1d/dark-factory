@@ -33,10 +33,27 @@ This hook cannot know what was deferred -- no hook can. It forces the ENUMERATIO
 the step that was skipped: each item was individually plausible and none was ever listed
 beside the others, where the pattern is obvious.
 
+⚠️ IT GOES QUIET AFTER THE FIRST FIRING IN A SESSION, and that is a correctness property
+rather than a politeness. Measured on the day it shipped: five consecutive firings, the last
+three re-deriving an identical settled list. A gate that repeats a full screen of rules over
+an unchanged answer is the seven-no-change-tick failure arriving through a Stop hook instead
+of a cron — and an operator who skims the fifth learns to skim the first.
+
+So the FULL text fires once per session; later firings carry a two-line reminder that still
+demands a re-run if the list changed. The guard survives; the wall of text does not.
+
+⚠️ The marker is keyed by session_id under a temp dir, so it dies with the machine's temp
+state and a genuinely new session always gets the full gate. A missing or unwritable marker
+falls back to the FULL text: if the hook cannot tell whether it has fired, the safe answer is
+to prompt, not to stay silent.
+
 Pure-Python, reads stdin, never raises. A Stop hook that errors would block the turn.
 """
 import json
+import os
+import re
 import sys
+import tempfile
 
 GATE = """⛔ BEFORE YOU STOP — the completeness gate.
 
@@ -62,15 +79,41 @@ If every remaining item has a named operator-only blocker: say so plainly, one l
 and stop. That is a complete report, not an unfinished one."""
 
 
-def main():
+BRIEF = """⛔ Completeness gate (already run this session). If anything is still
+deferred, name its OPERATOR-ONLY blocker — a decision, an irreversible act, a credential, a
+merge you are blocked from, a real dead end. Anything without one is yours: do it now.
+If the list is unchanged and every item has a named blocker, say so in one line and stop."""
+
+
+def already_fired(session_id):
+    """True if the full gate has fired for this session. Falls back to False on any error:
+    if we cannot tell, prompt — a missed reminder is worse than a repeated one."""
+    if not session_id:
+        return False
     try:
-        json.load(sys.stdin)
+        d = os.path.join(tempfile.gettempdir(), "claude-completeness-gate")
+        os.makedirs(d, exist_ok=True)
+        marker = os.path.join(d, re.sub(r"[^A-Za-z0-9_.-]", "_", session_id))
+        if os.path.exists(marker):
+            return True
+        with open(marker, "w") as f:
+            f.write("1")
+        return False
+    except Exception:
+        return False
+
+
+def main():
+    sid = ""
+    try:
+        sid = (json.load(sys.stdin) or {}).get("session_id") or ""
     except Exception:
         pass  # a malformed event must not block the turn
+    text = BRIEF if already_fired(sid) else GATE
     try:
         print(json.dumps({
-            "systemMessage": GATE,
-            "hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": GATE},
+            "systemMessage": text,
+            "hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": text},
         }))
     except Exception:
         pass
