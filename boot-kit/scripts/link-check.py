@@ -124,8 +124,17 @@ def matches(rules, relfile, target):
     return None
 
 
-def scan(root):
+def scan(root, bound=None):
     """Yield (relfile, lineno, target, kind, reason_or_None)."""
+    # ⚠️ ROOT DID TWO JOBS AND THEY ARE NOT THE SAME JOB. `root` says WHAT TO SCAN;
+    # `bound` says WHAT COUNTS AS INSIDE THE REPO. Conflating them made every caller
+    # that scans a SUBDIRECTORY report its own correct cross-directory references as
+    # broken: verify-kit.sh passes boot-kit/, so `../working-repos.md` -- a file that
+    # exists at the repo root -- resolved outside the given root and was rejected.
+    # ⚠️ THE CHECKER WAS RIGHT AND THE CALLER WAS WRONG, which is the worst shape for a
+    # gate: three real, resolvable references reported broken on every run. A false
+    # alarm is worse than no alarm, because it teaches the reader to skip the output.
+    bound = bound or root
     rules = load_ignores(root)
     for md in sorted(root.rglob('*.md')):
         if '/.git/' in str(md):
@@ -153,7 +162,7 @@ def scan(root):
                 if resolved.exists():
                     continue
                 try:
-                    resolved.relative_to(root)
+                    resolved.relative_to(bound)
                     kind = 'IN-REPO'
                 except ValueError:
                     kind = 'ESCAPES'
@@ -164,13 +173,19 @@ def scan(root):
                 if not prose_candidate(target):
                     continue
                 clean = target.split('#')[0]
-                if resolves(md, root, clean):
+                if resolves(md, bound, clean):
                     continue
                 yield relfile, lineno, target, 'PROSE-REF', matches(rules, relfile, target)
 
 
 def main(argv):
     list_ignored = '--list-ignored' in argv
+    # --resolve-root=PATH separates the RESOLUTION BOUNDARY from the SCAN SCOPE. Scan a
+    # subdirectory, still resolve against the repo that contains it. Without it, every caller
+    # that scans a subtree gets false breakage on references that legitimately point up.
+    bound_arg = next((a.split('=', 1)[1] for a in argv
+                      if a.startswith('--resolve-root=')), None)
+    bound = pathlib.Path(bound_arg).resolve() if bound_arg else None
     roots = [pathlib.Path(a).resolve() for a in argv if not a.startswith('--')]
     if not roots:
         sys.stderr.write(__doc__)
@@ -178,7 +193,7 @@ def main(argv):
 
     broken, ignored = [], []
     for root in roots:
-        for relfile, lineno, target, kind, reason in scan(root):
+        for relfile, lineno, target, kind, reason in scan(root, bound):
             row = (root, relfile, lineno, target, kind, reason)
             (ignored if reason else broken).append(row)
 
