@@ -1,4 +1,7 @@
 #!/bin/bash
+# Engram is the memory store this message names. What it is and how to reach it
+# is documented in exactly one place:
+# [Engram](../starter-kit/instance/AUTHENTICATION.md#engram)
 # engram-pre-compact.sh — TIER 1. Promoted 2026-09-02 from two instance repos that each kept their own copy.
 #
 # WHY THIS IS GENERIC, and it is measured rather than argued: `token-boss/loom-storage` and

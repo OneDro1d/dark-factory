@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # test-memory-hooks.sh — the promoted memory hooks must be safe to wire on ANY machine.
 #
-# WHY THIS EXISTS. These three were `local:` content in two separate instance repos until
+# WHY THIS EXISTS. These two were `local:` content in two separate instance repos until
 # 2026-09-02, installed by hand on four machines and declared by no lockfile on three of
 # them. Nothing tested them, because a hook that lives in one instance is nobody's to test.
-# Promoting them to Tier 1 makes them everyone's — so they get a contract.
+# Promoting them makes them everyone's — so they get a contract.
 #
 # ⚠️ THE FAILURE MODE A HOOK HAS THAT A SKILL DOES NOT: it runs on every session, inside the
 # harness's critical path, and a malformed line of stdout is not a bad answer — it is a
@@ -13,6 +13,13 @@
 #
 # ⚠️ AND THE ONE THAT PUT THEM HERE: these live in a PUBLIC repo now. An endpoint, a token or
 # a hub name added later would be published. Case D fails the suite if one appears.
+#
+# Engram is the memory store these hooks name. What it is and how to reach it is documented
+# in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
+#
+# ⚠️ That pointer is not decoration — test-engram-references.sh R2 requires every tracked file
+# naming Engram to carry it, and R3 requires it to resolve at the right relative depth. This
+# suite failed that rule on its first run, which is the rule working.
 set -uo pipefail
 
 SELF="$(cd "$(dirname "$0")" && pwd)"
@@ -23,7 +30,7 @@ PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s -- %s\n' "$1" "$2"; }
 
-SUBJECTS="engram-stop.sh engram-pre-compact.sh loom-recall-pretool.sh"
+SUBJECTS="engram-stop.sh engram-pre-compact.sh"
 
 echo "=== A: present and executable ==="
 for h in $SUBJECTS; do
