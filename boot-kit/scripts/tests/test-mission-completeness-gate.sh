@@ -121,6 +121,35 @@ F5="$(printf '{}' | python3 "$HOOK" 2>/dev/null)"
 case "$F5" in *"OPERATOR-ONLY blocker"*) ok "F: no session_id still gets the full gate" ;;
   *) bad "F: no session_id still gets the full gate" "an absent id must not mean already-fired" ;; esac
 
+echo "=== G: it RELEASES the turn on re-entry ==="
+# ⛔ THE DEFECT THIS HOOK SHIPPED WITH. Emitting anything from a Stop hook tells the harness
+# the turn is not finished, so the model runs again -- and fires this hook again. Unbounded,
+# until Claude Code force-ends it: "A hook blocked the turn from ending 9 consecutive times".
+# It happened to this hook on the day it shipped.
+#
+# ⚠️ AND THE EARLIER "GO QUIET" CHANGE DID NOT FIX IT. That made the message SHORTER while it
+# still BLOCKED. Verbosity was the symptom; never releasing the turn was the cause. Fixing the
+# visible half of a defect is how the real half survives a fix that looks like it worked.
+G1="$(printf '{"session_id":"reentry","stop_hook_active":true}' | python3 "$HOOK" 2>/dev/null)"
+if [ -z "$G1" ]; then ok "G: emits NOTHING when stop_hook_active is true"
+else bad "G: emits NOTHING when stop_hook_active is true" \
+        "any output re-blocks the turn and loops to the harness cap"; fi
+
+if printf '{"session_id":"reentry","stop_hook_active":true}' | python3 "$HOOK" >/dev/null 2>&1
+then ok "G: still exits 0 on re-entry"
+else bad "G: still exits 0 on re-entry" "a non-zero Stop hook blocks the turn"; fi
+
+# ...and a normal firing must be unaffected, or the release swallowed the gate.
+G2="$(printf '{"session_id":"normal-fire"}' | python3 "$HOOK" 2>/dev/null)"
+case "$G2" in *"OPERATOR-ONLY"*) ok "G: a normal firing still carries the gate" ;;
+  *) bad "G: a normal firing still carries the gate" "the release silenced the hook entirely" ;; esac
+
+# an explicit false must behave like a normal firing, not like re-entry
+G3="$(printf '{"session_id":"explicit-false","stop_hook_active":false}' \
+        | python3 "$HOOK" 2>/dev/null)"
+case "$G3" in *"OPERATOR-ONLY"*) ok "G: stop_hook_active=false fires normally" ;;
+  *) bad "G: stop_hook_active=false fires normally" "treated an explicit false as re-entry" ;; esac
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"

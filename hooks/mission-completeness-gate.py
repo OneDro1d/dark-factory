@@ -47,6 +47,11 @@ state and a genuinely new session always gets the full gate. A missing or unwrit
 falls back to the FULL text: if the hook cannot tell whether it has fired, the safe answer is
 to prompt, not to stay silent.
 
+⛔ It RELEASES THE TURN when `stop_hook_active` is true -- i.e. when it is firing because a
+previous Stop hook blocked. Emitting anything from a Stop hook means 'not finished yet',
+so without that check the hook re-triggers itself until the harness force-ends the turn
+after 9 consecutive blocks. Measured on this hook, the day it shipped.
+
 Pure-Python, reads stdin, never raises. A Stop hook that errors would block the turn.
 """
 import json
@@ -105,10 +110,30 @@ def already_fired(session_id):
 
 def main():
     sid = ""
+    stop_hook_active = False
     try:
-        sid = (json.load(sys.stdin) or {}).get("session_id") or ""
+        event = json.load(sys.stdin) or {}
+        sid = event.get("session_id") or ""
+        stop_hook_active = bool(event.get("stop_hook_active"))
     except Exception:
         pass  # a malformed event must not block the turn
+
+    # ⛔ RELEASE THE TURN ON RE-ENTRY. Emitting anything from a Stop hook tells the harness the
+    # turn is not finished, so it runs the model again -- which fires this hook again. Without
+    # this check that is an unbounded loop, and Claude Code force-ends it after 9 consecutive
+    # blocks with "A hook blocked the turn from ending 9 consecutive times".
+    #
+    # ⚠️ MEASURED THE DAY THIS HOOK SHIPPED. It happened, to this hook, and the earlier
+    # "go quiet after the first firing" change did NOT fix it -- that made the message SHORTER
+    # while it still BLOCKED. Verbosity was the symptom; never releasing the turn was the
+    # cause. A brief block is still a block, and fixing the visible half of a defect is how
+    # the real half survives a fix that looks like it worked.
+    #
+    # `stop_hook_active` is true exactly when this hook is firing BECAUSE a previous Stop hook
+    # blocked. The contract is: return success, emit nothing, let the turn end.
+    if stop_hook_active:
+        return
+
     text = BRIEF if already_fired(sid) else GATE
     try:
         print(json.dumps({
