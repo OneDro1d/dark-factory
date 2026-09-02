@@ -56,7 +56,15 @@ printf 'THE-DELIBERATE-HANDOFF-BODY\n' > "$NP/handoffs/2026-09-01-newest.md"
 run_pre() {  # $1 = session id, $2 = cwd
   printf '{"session_id":"%s","cwd":"%s","transcript_path":""}' "$1" "$2" | python3 "$PRE" >/dev/null
 }
-run_load() { printf '{"session_id":"%s","source":"compact"}' "$1" | python3 "$LOAD"; }
+# ⚠️ cwd IS AN ARGUMENT NOW, and leaving it out is why CI caught what the laptop did not.
+# This helper used to send no cwd at all. That was harmless while the loader only ever
+# read a snapshot -- but since 2026-09-02 it also falls back to the newest
+# <notepad>/handoffs/*.md resolved by walking up from cwd, and with no cwd in the payload
+# the hook falls back to os.getcwd(). Run from a notepad (a laptop) that resolves and the
+# suite passes; run from the repo root (CI, which has no NOTES.md) and it does not.
+# A test whose result depends on the directory it was launched from is not a test.
+run_load() { printf '{"session_id":"%s","source":"%s","cwd":"%s"}' \
+               "$1" "${3:-compact}" "${2:-$NP}" | python3 "$LOAD"; }
 
 echo "=== A: inside a notepad — the snapshot points at the NEWEST deliberate handoff ==="
 SID=a1; run_pre "$SID" "$NP"

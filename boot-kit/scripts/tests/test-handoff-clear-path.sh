@@ -7,7 +7,12 @@
 # against that version and pass against the snapshot-independent one.
 set -uo pipefail
 
-HOOK="${HOOK:-$(dirname "$0")/../hooks/handoff-sessionstart-load.py}"
+# ⚠️ THREE levels up, not one. This suite lives in boot-kit/scripts/tests/ and the hook
+# lives at the REPO ROOT in hooks/. The first version said ../hooks, which resolves to
+# boot-kit/hooks -- a directory that does not exist -- so every case failed in CI while
+# passing locally, because locally HOOK= was always passed explicitly.
+SELF="$(cd "$(dirname "$0")" && pwd)"
+HOOK="${HOOK:-$SELF/../../../hooks/handoff-sessionstart-load.py}"
 PASS=0
 FAIL=0
 
@@ -148,4 +153,5 @@ else
 fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
+printf 'ASSERTIONS: %s\n' "$((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]
