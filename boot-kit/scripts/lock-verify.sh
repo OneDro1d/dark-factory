@@ -32,6 +32,14 @@
 # Exit:  0 ok · 1 drift · 2 bad arguments
 set -uo pipefail
 
+# Where THIS script lives. rehydrate.sh is its sibling, and the repair lines below
+# must name a path the reader can actually run: lock-verify is invoked from a Tier-3
+# repo root or from vendor/dark-factory/boot-kit/scripts/, never from a directory
+# where a bare `rehydrate.sh` resolves. Measured 2026-09-02 -- an ESO install report
+# searched its whole repo, found none, and recorded the repair as a dead pointer.
+# ⚠️ A gate that names a repair the reader cannot run teaches them to ignore the gate.
+SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 LOCK="loom.lock.json"
 # ARG LOOP, ADDED 2026-08-26. This was one positional line — `[ "${1:-}" = "--lock" ] &&
 # LOCK="${2:?...}"` — which read only $1, only the space form, and had no else-branch. Every
@@ -121,7 +129,7 @@ done < <(jq -r '.upstreams | keys[]' "$LOCK")
 if [ -n "$MISSING" ]; then
   drift "L1 locked upstream(s) not vendored:"
   printf '%s' "$MISSING" | while read -r n; do [ -n "$n" ] && note "$n"; done
-  note "run: bash rehydrate.sh"
+  note "run: bash \"$SELFDIR/rehydrate.sh\""
 else
   pass "L1 all locked upstreams present"
 fi
@@ -842,7 +850,7 @@ if [ "$DRIFT" -eq 0 ]; then
   exit 0
 else
   echo "=== RESULT: DRIFT ==="
-  echo "Rehydrate:  bash rehydrate.sh          (lock -> machine)"
+  echo "Rehydrate:  bash \"$SELFDIR/rehydrate.sh\"   (lock -> machine)"
   echo "Re-pin:     edit loom.lock.json        (deliberate; never automatic)"
   exit 1
 fi
