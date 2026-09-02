@@ -291,6 +291,28 @@ because absence has no shared path.
   waiting to be told what it already knows. Stalling is the same attention failure as
   over-asking, pointing the other way, and it is the more expensive of the two because
   nobody can see it. The queue is only empty once you have looked at it.
+- 🔴 **Handing back authorised work with a TRUE statement attached.** This is the sharpest
+  form of stalling and the hardest to catch, because the sentence you stop on is *correct*.
+  Measured on one estate, 2026-09-02: four stop-shorts in a single session, defended with
+  *"it's a separate repo, it wants its own PR"* · *"that's a deliberate decision"* ·
+  *"it's pre-existing"* · *"it's a false positive"*. Every one was accurate. Not one was a
+  reason the work was somebody else's.
+
+  ⚠️ **A true observation about scope is not a scope boundary.** The test is narrow, and it
+  is the only test: **name the OPERATOR-ONLY thing this item needs.** A decision they have
+  not made · an irreversible or outward-facing act · a credential only they hold · a merge
+  or permission you are blocked from · their attention on a genuine dead end. **If you
+  cannot name one, the item was yours.**
+
+  ⚠️ Note the symmetry with the escalation gate above, and that it runs the other way. There,
+  a more capable pass argues *more* persuasively for crossing a hard stop. Here it invents
+  *more* plausible reasons to stop early. Same asymmetry, opposite failure — and this one
+  leaves no visible question behind, only a confident summary with a list the operator must
+  audit to discover half of it was never theirs.
+
+  **Enumerate before you stop.** Each deferral is individually plausible; the pattern is only
+  visible when they are listed beside each other. Instances that ship
+  `hooks/mission-completeness-gate.py` get this prompt automatically at Stop.
 - **Asking too vaguely to be actionable.** "Should I proceed?" without context is not an
   ask, it is a poke. The format above exists for that reason.
 - **Treating "blocked" as terminal.** When the reply arrives, resume from exactly where the
