@@ -1,10 +1,25 @@
 #!/usr/bin/env python3
-"""Fleet audit for the three gap CLASSES found by the 2026-09-02 install reports.
+"""Fleet audit for the gap CLASSES found by the 2026-09-02/03 install reports.
 
 class 1  DECLARED BUT NOT RUNNABLE -- a declared hook sources a file no lockfile declares.
 class 2  DECLARED BUT NO WIRING RECIPE -- declared, absent from the settings template, and
          absent from install.hooksUnwired.
 class 3  DANGLING REFERENCE -- a doc names a Skill() the lockfile does not install.
+class 4  DECLARED SOURCE DOES NOT RESOLVE -- the lockfile names a path that is not there,
+         so the installer prints `missing` and then `install complete`.
+
+⚠️ CLASS 4 EXISTS BECAUSE THIS AUDIT MISSED THE DEFECT IT WAS WRITTEN TO FIND. On
+2026-09-03 the Poland Coder installed with `2 missing`: its lockfile still declared
+`local:boot-kit/hooks/engram-{pre-compact,stop}.sh`, deleted when those hooks were promoted
+to Tier 1 and the SIBLING root lockfile in the same repo was repointed to `upstream:`. The
+audit reported 0 findings on that kit, because class 1's first act on a source is
+`if not os.path.exists(f): continue` -- it skipped the dead source in order to go looking
+for a subtler one. The installer caught it; the gap detector did not.
+
+⚠️ THE SHAPE IS THIS FILE'S OWN, FOR THE THIRD TIME. Its class-2 comments already record a
+vacuous template lookup and a substring match that both answered "fine" by not looking.
+A silent `continue` is the same bug wearing control flow: **every skip is a claim, and an
+unlogged claim cannot be wrong out loud.**
 
 Reads the LOCKFILE, never the local ~/.claude
 
@@ -16,6 +31,7 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 
 # ⚠️ NO HARDCODED PATHS. The first version of this file carried the author's own absolute
@@ -52,11 +68,76 @@ def resolve(root, vendordir, src):
     return os.path.join(root, vendordir, s)
 
 
+def _git(cwd, *args):
+    try:
+        return subprocess.call(["git", "-C", cwd] + list(args),
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        return 127
+
+
+def classify_source(root, vendordir, src, pins):
+    """Return (verdict, detail). verdict is ok | dead | unknown.
+
+    ⚠️ `unknown` IS NOT A SYNONYM FOR `dead`, AND THE FIRST VERSION OF THIS FUNCTION
+    COLLAPSED THEM TWICE. Measured 2026-09-03: it resolved every `upstream:` source against
+    the LOCAL vendor checkout and called a miss "does not exist" -- producing 18 findings
+    against loom_storage-ESO whose vendor/dark-factory sat at 22e7064 while its lockfiles
+    pinned 6ebfbdc0. This laptop never installs those instances, so its checkout is simply
+    old. Every one of the 18 files exists at the pin.
+
+    **The installer FETCHES AT THE PIN; it does not read whatever happens to be checked
+    out.** So the question is never "is the file in this working tree" but "is it in the
+    tree AT THE PINNED COMMIT" -- and `git cat-file -e <pin>:<path>` answers exactly that,
+    regardless of what HEAD points to. Only when the pinned commit itself is not present
+    locally is the honest answer `unknown`.
+
+    A `local:` source is never unknown. The repo is right here, so a missing local file is
+    always a real finding -- which is precisely the Poland case that produced class 4.
+    """
+    if src.startswith("local:"):
+        p = os.path.join(root, src[len("local:"):])
+        return ("ok" if os.path.exists(p) else "dead", p)
+    s = src[len("upstream:"):] if src.startswith("upstream:") else src
+    top = s.split("/")[0]
+    rel = "/".join(s.split("/")[1:])
+    vdir = os.path.join(root, vendordir, top)
+    if not os.path.isdir(vdir):
+        return ("unknown", "upstream `%s` is not vendored in this checkout" % top)
+
+    pin = pins.get(top)
+    if pin and os.path.isdir(os.path.join(vdir, ".git")):
+        if _git(vdir, "cat-file", "-e", "%s^{commit}" % pin) != 0:
+            return ("unknown", "upstream `%s` pin %s is not present in this checkout "
+                               "(fetch it, or audit a machine that has it)"
+                               % (top, pin[:8]))
+        if _git(vdir, "cat-file", "-e", "%s:%s" % (pin, rel)) == 0:
+            return ("ok", rel)
+        return ("dead", "%s (absent from %s at pin %s)" % (rel, top, pin[:8]))
+
+    # No pin recorded, or the vendored copy is not a git checkout: fall back to the working
+    # tree. Weaker, and it is the weaker answer precisely because there is no pin to ask.
+    p = os.path.join(root, vendordir, s)
+    return ("ok" if os.path.exists(p) else "dead", p)
+
+
 for repo, root in REPOS:
+    # ⚠️ MATCH A PATH SEGMENT, NOT A SUBSTRING. This filter was `if "vendor/" not in p`
+    # against the ABSOLUTE path, so any kit living under a directory whose name merely
+    # CONTAINS "vendor" was dropped from the audit entirely -- scanned nothing, printed
+    # TOTAL: 0, exited clean. Found 2026-09-03 by a fixture directory called
+    # `stale-vendor/`, which the suite had named for an unrelated reason.
+    # Third time in this file: the class-2 basename match and the class-4 silent skip are
+    # the same mistake in different clothes -- **a cheap test standing in for the real one,
+    # answering "fine" by not looking.**
+    def _vendored(p):
+        rel = os.path.relpath(p, root)
+        return "vendor" in rel.split(os.sep)[:-1]
+
     locks = [p for p in
              glob.glob(os.path.join(root, "*.lock.json"))
              + glob.glob(os.path.join(root, "instances", "*", "loom.lock.json"))
-             if "vendor/" not in p]
+             if not _vendored(p)]
     for lp in sorted(locks):
         d = json.loads(open(lp, encoding="utf-8").read())
         inst = d.get("instance")
@@ -74,6 +155,39 @@ for repo, root in REPOS:
         if isinstance(skills, dict):
             skills = list(skills.keys())
         declared_hooks = set(hooks if isinstance(hooks, list) else hooks.keys())
+        ssrc = d.get("install", {}).get("skillSources") or {}
+        bins = d.get("install", {}).get("bin") or []
+        if isinstance(bins, dict):
+            bins = list(bins.keys())
+        bsrc = d.get("install", {}).get("binSources") or {}
+        # the pinned commit for each upstream -- the ONLY authority on what an install
+        # will actually place. What is checked out locally is a convenience, not a fact.
+        pins = {k: (v or {}).get("commit")
+                for k, v in (d.get("upstreams") or {}).items()
+                if isinstance(v, dict)}
+
+        # ---- class 4: a DECLARED SOURCE DOES NOT RESOLVE ----
+        # Every declaration family, not only hooks: the failure is a lockfile naming a path
+        # that is not there, and nothing about it is specific to hooks.
+        unvendored = set()
+        for kind, names, srcs in (("hook", declared_hooks, hsrc),
+                                  ("skill", set(skills), ssrc),
+                                  ("bin", set(bins), bsrc)):
+            for n in sorted(names):
+                src = srcs.get(n)
+                if not src:
+                    continue
+                verdict, detail = classify_source(inst_root, vendordir, src, pins)
+                if verdict == "dead":
+                    findings.append((label, 4, "%s %s -> %s DOES NOT EXIST -- the installer "
+                                               "prints `missing` and then `install complete`"
+                                               % (kind, n, src)))
+                elif verdict == "unknown":
+                    unvendored.add(detail)
+        for u in sorted(unvendored):
+            findings.append((label, 0, "%s -- so no upstream: source in it could be "
+                                       "checked. NOT a finding about the sources: a "
+                                       "failure to probe." % u))
 
         # ---- class 1: declared hook sources an undeclared file ----
         for h in sorted(declared_hooks):
@@ -113,9 +227,24 @@ for repo, root in REPOS:
         ]
         tmpl = next((c for c in CANDS if os.path.exists(c)), None)
         wired_text = ""
+        # ⚠️ CLASS 2 IS A TIER-3 QUESTION AND DOES NOT APPLY TO A TIER-2 LAYER. A layer is
+        # never installed to a machine -- it is composed by an instance lockfile, and the
+        # settings template belongs to that instance (measured: the ESO layer's recipe lives
+        # in its minted kit at loom-dev-eso/boot-kit/settings.template.json, not in
+        # catalyst.lock.json). Reporting a layer for shipping no wiring recipe demands a file
+        # the tier model says must not be there.
+        # The discriminator is `instance`: an instance lockfile names one machine, a layer
+        # names none. ⚠️ AND THIS EXEMPTION IS PRINTED, NEVER SILENT -- an unannounced skip
+        # is the class-4 defect, and this file has now committed that three times.
+        is_instance = inst is not None
+        if not is_instance and declared_hooks:
+            findings.append((label, 0, "TIER-2 LAYER (no `instance`): class 2 not applied. "
+                                       "A layer is composed by an instance lockfile and is "
+                                       "never installed to a machine, so the wiring recipe "
+                                       "belongs to the instance, not here."))
         if tmpl:
             wired_text = open(tmpl, encoding="utf-8", errors="replace").read()
-        elif declared_hooks:
+        elif declared_hooks and is_instance:
             # NOT a pass. A kit that declares hooks and ships no wiring recipe leaves every
             # one of them to be wired from memory.
             findings.append((label, 2, "NO settings template found in this kit, yet it "
@@ -178,14 +307,26 @@ for f in findings:
     seen.add(f)
     out.append(f)
 
-for cls in (1, 2, 3):
+for cls in (1, 2, 3, 4):
     rows = [f for f in out if f[1] == cls]
     name = {1: "DECLARED BUT NOT RUNNABLE", 2: "NO WIRING RECIPE",
-            3: "DANGLING Skill() REFERENCE"}[cls]
+            3: "DANGLING Skill() REFERENCE",
+            4: "DECLARED SOURCE DOES NOT RESOLVE"}[cls]
     print("=== class %d — %s: %d finding(s)" % (cls, name, len(rows)))
     for label, _, msg in rows:
         print("   %-42s %s" % (label, msg))
     print()
 
-print("TOTAL:", len(out))
+# ⚠️ UNKNOWNS ARE PRINTED, NEVER COUNTED. An unvendored checkout is a limit on what this
+# run could see, not a defect in the kit -- and folding it into the total is how a network
+# blip or a fresh clone gets written down as drift. Printed because a silent unknown is the
+# very failure class 4 exists for: the audit must say what it could not check.
+unknowns = [f for f in out if f[1] == 0]
+if unknowns:
+    print("=== NOT PROBED / NOT APPLICABLE (NOT counted as findings): %d" % len(unknowns))
+    for label, _, msg in unknowns:
+        print("   %-42s %s" % (label, msg))
+    print()
+
+print("TOTAL:", len([f for f in out if f[1] != 0]))
 sys.exit(0)
