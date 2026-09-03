@@ -122,6 +122,44 @@ ENGINE_SRC="$T1/boot-kit/scripts"
 step "engine"
 ENGINE_DST="$ROOT/boot-kit/scripts"
 act "copy     boot-kit/scripts/ <- $VENDOR_REL/$T1_NAME/boot-kit/scripts/"
+
+# ⛔ REFUSE TO REPLACE THE ENGINE UNDER A LIVE SUPERVISOR.
+# The block below does `rm -rf "$ENGINE_DST"`, and df-supervisor.sh runs FROM that directory.
+# Bash reads a script lazily by byte offset, so replacing it mid-run does not crash the loop
+# where you can see it — the loop later reads bytes from a different file at the old offset.
+#
+# ⚠️ This guard used to be a SENTENCE IN ANOTHER REPO telling a human to run
+# `pgrep -f df-supervisor` first. Measured 2026-09-03: that command matches the command line of
+# the shell RUNNING it, so it always reported LIVE, and a guard that always fires is skipped
+# within two uses. Nothing executable implemented it anywhere.
+#
+# ⚠️ MATCHED BY PATH, NOT BY NAME. A supervisor running from a DIFFERENT kit root on this machine
+# is none of this install's business, and blocking on it is a false positive that strands a safe
+# install. The `[d]` bracket is what stops the check from finding itself.
+# ⚠️ `ps`, NOT `pgrep`. Measured on Darwin against Linux: BSD pgrep rejects -a outright, and
+# `pgrep -af` prints the PID with NO command line and exits 0 — so a path filter over its output
+# is always empty and the guard can never fire. `pgrep -fl` prints full args on macOS and only
+# the process NAME on Linux. `ps -eo pid=,args=` prints the full argument list on both.
+# The first version of this guard used `pgrep -af` and was inert on macOS: a guard that never
+# fires looks exactly like a machine that is safe, which is the worse of the two failures.
+if [ "$DRY" -eq 0 ] && [ "${FORCE_ENGINE:-0}" -eq 0 ]; then
+  LIVE_SUP="$(ps -eo pid=,args= 2>/dev/null | grep "[d]f-supervisor" | grep -F "$ENGINE_DST" || true)"
+  if [ -n "$LIVE_SUP" ]; then
+    say ""
+    say "  REFUSING to replace the engine: a supervisor is running FROM this directory."
+    say "    $ENGINE_DST"
+    printf '      %s\n' "$LIVE_SUP"
+    say ""
+    say "  Replacing these files under a running loop corrupts it silently — bash reads a script"
+    say "  lazily by byte offset, so the loop keeps going and later reads the wrong bytes."
+    say ""
+    say "  Stop the mission first:   df-mission stop <id>"
+    say "  Or, if you know the loop is dead and the process is a leftover:"
+    say "                            FORCE_ENGINE=1 bash install.sh ..."
+    die "live supervisor in $ENGINE_DST"
+  fi
+fi
+
 if [ "$DRY" -eq 0 ]; then
   mkdir -p "$ENGINE_DST"
   # Copy, not symlink. The engine's own root is derived from where the FILE sits, so a
