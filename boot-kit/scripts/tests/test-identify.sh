@@ -63,6 +63,23 @@ O="$(CODER=true CODER_AGENT_URL=https://coder.aks-dev-scus.esosuite.net/ CODER_W
 contains "D: confirms the match" "matches this machine" "$O"
 if [ "$rc" -eq 0 ]; then ok "D: exits 0"; else bad "D: exits 0" "exit was $rc"; fi
 
+echo "=== D2: CROSS-KIND — a Coder record on a laptop, and a laptop record on a Coder ==="
+# ⛔ THE CASE THE FIRST VERSION GOT WRONG, and the suite did not catch because C and D both had
+# a Coder machine on BOTH sides. On a laptop it compared only `hostname`; a Coder record has
+# none, so there was nothing to compare and "no mismatch" was returned as AGREEMENT.
+# Found by running the real thing against a real record, not by reading the code.
+#
+# ⚠️ **A check that can only disagree with things of its own type agrees with everything else.**
+HOSTLOCK="$(mklock host '{"instance":"a-laptop","install":{"identity":{"hostname":"some-laptop.local"}}}')"
+
+O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --lock "$L_AWS" 2>&1)"; rc=$?
+contains "D2: a Coder record is refused on a laptop" "DIFFERENT MACHINE" "$O"
+if [ "$rc" -eq 3 ]; then ok "D2: and exits 3"; else bad "D2: and exits 3" "exit was $rc"; fi
+
+O="$(CODER=true CODER_AGENT_URL=https://coder-dev02.aws.esosuite.net/ CODER_WORKSPACE_NAME=Loom bash "$ID" --lock "$HOSTLOCK" 2>&1)"; rc=$?
+contains "D2: a laptop record is refused on a Coder box" "DIFFERENT MACHINE" "$O"
+if [ "$rc" -eq 3 ]; then ok "D2: and exits 3 there too"; else bad "D2: and exits 3 there too" "exit was $rc"; fi
+
 echo "=== E: a lockfile with NO identity is UNKNOWN, never agreement ==="
 # ⚠️ Every record on the fleet predates this field. Treating silence as a match would make the
 # check vacuous everywhere at once — the exact shape of defect this repo keeps finding.

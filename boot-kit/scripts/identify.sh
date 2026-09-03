@@ -113,10 +113,20 @@ check_one() {
     return 2
   fi
 
+  # ⚠️ THE KIND IS PART OF THE IDENTITY, and the first version ignored it. A record declaring
+  # `deployment`/`workspace` describes a CODER workspace; one declaring only `hostname`
+  # describes a bare host. Comparing only the fields that match the CURRENT kind meant a Coder
+  # record checked on a laptop found nothing to compare and returned AGREEMENT.
+  #
+  # Caught by running it, not by the suite: cases C and D both had a Coder machine on both
+  # sides, so the cross-kind case — the one that actually bites — was never exercised.
+  # **A check that can only disagree with things of its own type agrees with everything else.**
   if [ "$KIND" = "coder" ]; then
+    [ -z "$d$w" ] && return 1      # a host-only record, on a workspace
     [ -n "$d" ] && [ "$d" != "$DEPLOY" ] && return 1
     [ -n "$w" ] && [ "$w" != "$WORKSPACE" ] && return 1
   else
+    [ -n "$d$w" ] && return 1      # a workspace record, on a bare host
     [ -n "$h" ] && [ "$h" != "$HOSTID" ] && return 1
   fi
   return 0
