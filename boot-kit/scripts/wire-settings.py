@@ -271,7 +271,11 @@ def main():
 
     if added or pruned:
         if not a.dry_run:
-            stamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            # ⚠️ NOT `utcnow()`. It is deprecated and PRINTS A WARNING mid-run on Python 3.12+,
+            # which landed in the middle of this tool's output on the Poland Coder — noise from
+            # the one tool whose entire job is to say clearly what it changed. A warning nobody
+            # can distinguish from a finding trains the reader to skim both.
+            stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             backup = "%s.bak.%s" % (a.live, stamp)
             shutil.copy2(a.live, backup)
             open(a.live, "w", encoding="utf-8").write(json.dumps(live, indent=2) + "\n")
