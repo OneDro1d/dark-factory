@@ -94,6 +94,25 @@ if [ "${CODER:-}" = "true" ] || [ -n "${CODER_WORKSPACE_NAME:-}" ]; then
   # VALUE; the name itself is the thing that must be excluded).
   HOSTID="(pod name — not stable, not used)"
 fi
+# ⚠️ THE DEPLOYMENT URL IS NOT DEPLOYMENT-UNIQUE. Measured on a live Coder workspace: its
+# CODER_AGENT_URL is the IN-CLUSTER service address, which ANY workspace co-located with its
+# control plane reports, on ANY deployment. Two workspaces on DIFFERENT deployments can
+# therefore declare the same url+name and be indistinguishable -- the exact collision this
+# guard exists to catch.
+#
+# `deployment_id` from an unauthenticated GET /api/v2/buildinfo is the real discriminator: it
+# is per-CONTROL-PLANE, so the in-cluster and public spellings of one deployment return the
+# SAME id while two different deployments never do.
+#
+# ⚠️ NEVER LET THIS HANG OR REFUSE. It runs at install step 0b before anything else: a short
+# timeout, and a failure is UNKNOWN rather than a mismatch. A guard that blocks because the
+# network blipped is a false refusal, and a false refusal gets the whole guard disabled.
+DEPLOY_ID=""
+if [ "$KIND" = "coder" ] && [ -n "$DEPLOY" ] && [ "$DEPLOY" != "<unset>" ] \
+   && command -v curl >/dev/null 2>&1; then
+  DEPLOY_ID="$(curl -fsS -k --max-time 5 "${DEPLOY%/}/api/v2/buildinfo" 2>/dev/null \
+    | sed -n 's/.*"deployment_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+fi
 ARCH="$(uname -m 2>/dev/null || echo unknown)"
 OS="$(uname -s 2>/dev/null || echo unknown)"
 
@@ -108,6 +127,13 @@ if [ "$KIND" = "coder" ]; then
   # wrong signal here: it returns the Kubernetes pod name and changes on every restart. A
   # reader who does not know that will build a fingerprint on it and be wrong tomorrow.
   say "   hostname   : NOT USED — it is the k8s pod name and is not stable across restarts"
+  if [ -n "$DEPLOY_ID" ]; then
+    say "   deploymentId: $DEPLOY_ID   (from /api/v2/buildinfo — the real discriminator)"
+  else
+    # ⚠️ UNKNOWN, said out loud. The URL alone cannot separate two deployments whose
+    # workspaces both report an in-cluster address.
+    say "   deploymentId: <could not probe>  — the URL alone may not be deployment-unique"
+  fi
 else
   say "   kind       : laptop / bare host"
   if command -v scutil >/dev/null 2>&1 && [ -n "$(scutil --get LocalHostName 2>/dev/null || true)" ]; then
@@ -139,7 +165,11 @@ check_one() {
       say "   ⚠️ this lockfile declares no install.identity — CANNOT be checked."
       say "      Add one so the next person cannot install the wrong machine:"
       if [ "$KIND" = "coder" ]; then
-        say "        \"identity\": { \"deployment\": \"$DEPLOY\", \"workspace\": \"$WORKSPACE\" }"
+        if [ -n "$DEPLOY_ID" ]; then
+          say "        \"identity\": { \"deployment\": \"$DEPLOY\", \"workspace\": \"$WORKSPACE\", \"deploymentId\": \"$DEPLOY_ID\" }"
+        else
+          say "        \"identity\": { \"deployment\": \"$DEPLOY\", \"workspace\": \"$WORKSPACE\" }"
+        fi
       else
         say "        \"identity\": { \"hostname\": \"$HOSTID\" }"
       fi
@@ -155,9 +185,20 @@ check_one() {
   # Caught by running it, not by the suite: cases C and D both had a Coder machine on both
   # sides, so the cross-kind case — the one that actually bites — was never exercised.
   # **A check that can only disagree with things of its own type agrees with everything else.**
+  local did
+  did="$(jq -r '.install.identity.deploymentId // empty' "$lf" 2>/dev/null)"
+
   if [ "$KIND" = "coder" ]; then
-    [ -z "$d$w" ] && return 1      # a host-only record, on a workspace
-    [ -n "$d" ] && [ "$d" != "$DEPLOY" ] && return 1
+    [ -z "$d$w$did" ] && return 1  # a host-only record, on a workspace
+    # ⚠️ deploymentId WINS OVER THE URL when both sides have one: the URL can be an in-cluster
+    # address that any co-located workspace would report, while the id names one control plane.
+    if [ -n "$did" ] && [ -n "$DEPLOY_ID" ]; then
+      [ "$did" != "$DEPLOY_ID" ] && return 1
+    elif [ -n "$d" ] && [ "$d" != "$DEPLOY" ]; then
+      # nothing to compare on one side -- fall back to the URL, which is what every record
+      # written before this change declares.
+      return 1
+    fi
     [ -n "$w" ] && [ "$w" != "$WORKSPACE" ] && return 1
   else
     [ -n "$d$w" ] && return 1      # a workspace record, on a bare host
@@ -200,8 +241,10 @@ if [ "$MODE" = "declare" ]; then
     exit 3
   fi
   if [ "$KIND" = "coder" ]; then
-    NEWID="$(jq -n --arg d "$DEPLOY" --arg w "$WORKSPACE" \
-      '{deployment:$d, workspace:$w, "$note":"MEASURED on the machine by identify.sh --declare. hostname is deliberately absent: on Coder it is the k8s pod name and changes on every restart."}')"
+    NEWID="$(jq -n --arg d "$DEPLOY" --arg w "$WORKSPACE" --arg i "$DEPLOY_ID" \
+      '{deployment:$d, workspace:$w}
+       + (if $i == "" then {} else {deploymentId:$i} end)
+       + {"$note":"MEASURED on the machine by identify.sh --declare. deploymentId comes from GET /api/v2/buildinfo and is the REAL discriminator: CODER_AGENT_URL may be an in-cluster address that any co-located workspace reports, on any deployment. hostname is deliberately absent -- on Coder it is the k8s pod name and changes on every restart."}')"
   else
     NEWID="$(jq -n --arg h "$HOSTID" \
       '{hostname:$h, "$note":"MEASURED on the machine by identify.sh --declare, from scutil LocalHostName where available (stable) rather than hostname (which follows the network on macOS)."}')"
