@@ -6,7 +6,12 @@
 # can resolve NOW, and stops. It installs nothing: install.sh does that, and keeping the
 # two apart is what makes install.sh re-runnable.
 #
-#   bash starter-kit/instance/bootstrap.sh <instance-name> [target-dir]
+#   bash starter-kit/instance/bootstrap.sh <instance-name> [target-dir] [--kit <name>]...
+#
+# --kit selects a bundle from kits/ and writes its skills and hooks into the lockfile.
+# Repeat it to compose. Without it the instance ships with an EMPTY skill list, which stays
+# a valid choice: an empty list is honest, and a default set nobody chose is the thing this
+# repo refuses to ship elsewhere. `--kit list` prints what is available.
 #
 # Defaults target-dir to ../<instance-name>, i.e. a sibling of this repo, so that the
 # generated instance is never inside the checkout it was generated from. An instance
@@ -27,8 +32,39 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 die() { printf 'FATAL: %s\n' "$1" >&2; exit 1; }
 say() { printf '%s\n' "$1"; }
 
+# ⚠️ --kit is parsed OUT of the positional arguments before they are read, so that it may
+# appear anywhere on the command line. A flag that only works in one position is a flag people
+# report as broken.
+KITS=""
+POS=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --kit)
+      shift
+      [ $# -gt 0 ] || die "--kit needs a kit name (try: --kit list)"
+      KITS="$KITS $1"
+      ;;
+    --kit=*) KITS="$KITS ${1#--kit=}" ;;
+    --) shift; while [ $# -gt 0 ]; do POS="$POS $1"; shift; done; break ;;
+    -*) die "unknown option: $1" ;;
+    *)  POS="$POS $1" ;;
+  esac
+  shift
+done
+# shellcheck disable=SC2086
+set -- $POS
+
+# `--kit list` before anything is validated or created: it is a query, not a bootstrap.
+case " $KITS " in
+  *" list "*)
+    python3 "$SELF/../../boot-kit/scripts/kit-resolve.py" --list \
+      --root "$(cd "$SELF/../.." && pwd)"
+    exit 0
+    ;;
+esac
+
 NAME="${1:-}"
-[ -n "$NAME" ] || die "usage: bash bootstrap.sh <instance-name> [target-dir]"
+[ -n "$NAME" ] || die "usage: bash bootstrap.sh <instance-name> [target-dir] [--kit <name>]..."
 case "$NAME" in
   *[!a-zA-Z0-9._-]*) die "instance name may hold only letters, digits, dot, underscore, hyphen" ;;
 esac
@@ -38,6 +74,22 @@ mkdir -p "$(dirname "$TARGET")" 2>/dev/null || true
 TARGET="$(cd "$(dirname "$TARGET")" && pwd)/$(basename "$TARGET")"
 
 [ -e "$TARGET" ] && die "$TARGET already exists — refusing to write over an existing instance"
+
+# ---- resolve the requested kits, BEFORE creating anything --------------------
+# ⚠️ RESOLVED FIRST ON PURPOSE. A kit that names a missing skill must fail while the only thing
+# at stake is an error message. Resolving after mkdir leaves a half-built instance directory
+# behind on failure, and a half-built instance is worse than none: it exists, so the next run
+# refuses to overwrite it, and the user is stuck with a directory that looks finished.
+KIT_JSON=""
+if [ -n "${KITS// /}" ]; then
+  command -v python3 >/dev/null 2>&1 || die "--kit needs python3 on PATH"
+  RESOLVER="$SELF/../../boot-kit/scripts/kit-resolve.py"
+  [ -f "$RESOLVER" ] || die "kit resolver missing: $RESOLVER"
+  # shellcheck disable=SC2086
+  KIT_JSON="$(python3 "$RESOLVER" $KITS --root "$(cd "$SELF/../.." && pwd)")" \
+    || die "could not resolve kit(s):$KITS"
+  say "kits      resolved:$KITS"
+fi
 
 for b in git jq; do
   command -v "$b" >/dev/null 2>&1 || die "$b is required and is not on PATH"
@@ -91,6 +143,30 @@ jq \
  | .upstreams["dark-factory"].commit     = $commit
  | .upstreams["dark-factory"]["$refSource"] = $src
   ' "$TPL" > "$TARGET/loom.lock.json" || die "could not render the lockfile"
+
+# ⚠️ MERGED, NOT OVERWRITTEN. The template's `hooks` already names df-instance-start.sh with a
+# matching hookSources entry, and that pairing is what the installer requires: a name with no
+# source is a declaration the installer cannot resolve. So the kit's lists are UNIONED onto the
+# template's and the source maps are merged, with the template's own entries kept — the template
+# knows something about its own hook that a generic kit does not.
+if [ -n "$KIT_JSON" ]; then
+  printf '%s' "$KIT_JSON" > "$TARGET/.kit-resolution.json"
+  jq -s '
+      .[0] as $lock | .[1] as $kit
+    | $lock
+    | .install.skills       = (($lock.install.skills // []) + $kit.skills       | unique_by(.))
+    | .install.hooks        = (($lock.install.hooks  // []) + $kit.hooks        | unique_by(.))
+    | .install.skillSources = ($kit.skillSources + ($lock.install.skillSources // {}))
+    | .install.hookSources  = ($kit.hookSources  + ($lock.install.hookSources  // {}))
+    | .install["$kitResolution"] = ("bootstrapped from kits/: " + ($kit.resolvedFrom | join(" -> "))
+        + ". Regenerate with boot-kit/scripts/kit-resolve.py. This line records WHICH bundle these"
+        + " names came from -- without it a later reader cannot tell a curated set from a hand-edited"
+        + " one, and the two need different treatment when the kit changes upstream.")
+    ' "$TARGET/loom.lock.json" "$TARGET/.kit-resolution.json" > "$TARGET/loom.lock.json.tmp" \
+    && mv "$TARGET/loom.lock.json.tmp" "$TARGET/loom.lock.json" \
+    || die "could not merge the kit resolution into the lockfile"
+  rm -f "$TARGET/.kit-resolution.json" "$TARGET/loom.lock.json.tmp"
+fi
 
 cp "$SELF/install.sh" "$TARGET/install.sh"
 chmod +x "$TARGET/install.sh"
@@ -154,7 +230,14 @@ say ""
 say "NEXT"
 say "  read starter-kit/instance/START-HERE.md — the ten-minute path, with the checkpoints"
 say "  cd $TARGET"
-say "  \$EDITOR loom.lock.json     # set codeRoot / codeLayout, then list the skills and hooks you want"
+if [ -n "$KIT_JSON" ]; then
+  say "  \$EDITOR loom.lock.json     # set codeRoot / codeLayout. Skills and hooks are already"
+  say "                             # filled in from the kit(s) you selected -- prune, do not retype."
+else
+  say "  \$EDITOR loom.lock.json     # set codeRoot / codeLayout, then list the skills and hooks you want"
+  say "                             # or re-run with --kit <name> to fill them from a curated bundle"
+  say "                             # (bash bootstrap.sh --kit list)"
+fi
 say "  bash install.sh"
 say "  df-mission start $EXAMPLE_ID --profile default --max-iter 5 --max-usd 5"
 say "                             # the worked example: proves the loop, writes only inside"

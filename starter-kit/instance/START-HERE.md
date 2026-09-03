@@ -33,8 +33,20 @@ separating them is most of the debugging.
 ```sh
 git clone https://github.com/OneDro1d/dark-factory.git
 cd dark-factory
-bash starter-kit/instance/bootstrap.sh my-instance
+bash starter-kit/instance/bootstrap.sh --kit list          # what kinds of work are bundled
+bash starter-kit/instance/bootstrap.sh my-instance --kit dev
 ```
+
+**Pick the kit that matches the work, not the person.** `kits/dev` for writing and shipping
+code; `kits/knowledge-worker` if what you produce is documents rather than code;
+`kits/code-review`, `kits/frontend`, `kits/distributed-systems` for the narrower jobs. Repeat
+`--kit` to compose. Each one pulls in `kits/method-core` — the method itself — through its own
+`extends`, so you never name the floor by hand.
+
+⚠️ **`--kit` is optional, and omitting it is a real choice rather than a mistake.** Without it
+your instance ships an **empty** skill list and you fill it in at step 2. That is honest: a
+default set nobody chose would arrive in every install, and this repo declines to ship one
+anywhere else either.
 
 `bootstrap.sh` runs **once**. It creates `../my-instance` — deliberately a sibling of this
 checkout, never inside it, because an instance nested in its own upstream gets committed to
@@ -66,16 +78,55 @@ Three things to set, and one to leave alone:
   have lanes yet: the preflight then reports `unknown` for that probe, which is the honest
   answer. A guessed lane reports as a fact.
 - **`install.skills` / `install.skillSources`** — the skills you want, and where each comes
-  from. Every name must have a matching source entry and every source entry must have a
-  name; `lock-verify` (L7) checks both directions, because either half alone installs
-  nothing while still reading like a declaration. `../../skills/` in this repo lists what is
-  available, e.g. `"vinculum-loop": "dark-factory/skills/vinculum-loop"`. A source is
-  resolved under your vendor directory unless it begins with `local:`, which resolves inside
-  your own instance — that is how you declare a skill or hook you wrote yourself.
+  from. **If you passed `--kit`, these are already filled in and paired** — read them, prune
+  what you will not use, and move on; `install.$kitResolution` records which bundle they came
+  from. If you did not, list them by hand: `../../skills/` lists what is available, e.g.
+  `"vinculum-loop": "dark-factory/skills/vinculum-loop"`.
+
+  Every name must have a matching source entry and every source entry must have a name;
+  `lock-verify` (L7) checks both directions, because either half alone installs nothing while
+  still reading like a declaration. A source resolves under your vendor directory unless it
+  begins with `local:`, which resolves inside your own instance — that is how you declare a
+  skill or hook you wrote yourself.
+
+  ⚠️ **Adding a name here is not the same as adding a skill.** The lockfile is the authority;
+  a directory nothing declares is installed by nothing and reported by nothing, so it does not
+  exist as far as any check is concerned.
 - **Leave `probed` alone.** Tools write it; you do not.
 
 Anything still holding a `__PLACEHOLDER__` is a value nobody supplied, and step 3 names it
 rather than defaulting it.
+
+### ⚠️ Is this instance yours yet? — `instance.kind`
+
+There are two kinds of kit and they need opposite handling.
+
+| | **instance** | **template** |
+|---|---|---|
+| describes | one real machine | nobody's machine yet |
+| you should | install and re-install from it | clone it somewhere you own, THEN customise |
+| identity | declared, and the guard is armed | not declared, correctly |
+
+`bootstrap.sh` gives you an **instance**: you named it, so it is about your machine. A kit
+somebody hands you — a shared team kit — is a **template**, and its installer says so on every
+run until you flip the marker.
+
+**Making a template yours, once:**
+
+1. put it somewhere **you** own — a fork, or your own branch
+2. customise the lockfile: `codeRoot`, `codeLayout`, `instance.name`
+3. declare the machine: `bash boot-kit/scripts/identify.sh --declare loom.lock.json`
+4. flip the marker: `"instance": { "kind": "instance", ... }`
+5. commit and push to **your** copy — that is what you re-install from ever after
+
+⚠️ **Step 4 is not bookkeeping.** It is you saying this repo now describes a real machine, which
+is what makes the identity guard meaningful here. Until then the guard is present, passing, and
+checking nothing — and a check that cannot disagree with anything agrees with everything.
+
+⚠️ **Step 1 is not optional, and skipping it is the failure people actually hit.** If you
+customise a shared template in place, your setup lives where the maintainer also pushes, and the
+next upstream change overwrites it. Installing an uncustomised template still *works* — it
+installs the defaults — so nothing breaks loudly. It just silently is not yours.
 
 ## 3 · Install
 

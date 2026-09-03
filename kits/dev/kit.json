@@ -1,0 +1,19 @@
+{
+  "name": "dev",
+  "description": "Writing and shipping code in somebody else's codebase — reviewing your own diff before anyone else sees it, keeping tests honest, weighing a new dependency, and verifying a UI actually renders.",
+  "$note": "The generic developer kit. It assumes a build and a test command exist and assumes nothing else — no stack, no framework, no deploy target. Anything stack-shaped lives in kits/frontend or kits/distributed-systems, which extend this one rather than repeat it.",
+  "extends": ["method-core", "agent-ops"],
+  "$extendsNote": "kits/README.md already said method-core is 'the floor' and that 'the others assume it is installed alongside'. That was a dependency recorded in prose and enforced by nobody: a kit bootstrapped on its own got its own skills and none of the method they depend on, silently. `extends` makes the sentence executable. agent-ops is here because a developer working through an agent needs the notepad, the handoff and the context store to survive a context reset — without them the second session starts from nothing, which is not a code problem and is the one that actually bites.",
+  "skills": [
+    "code-reviewer",
+    "test-quality-gatekeeper",
+    "dependency-risk-auditor",
+    "df-ui-verify",
+    "coder-file-transfer"
+  ],
+  "$whyTheseFive": "Each is a check a developer applies to their OWN work before it reaches anyone else — the review, the tests, the dependency, the rendered page — plus the one that moves files to and from a remote workspace. Nothing here duplicates method-core: the method decides WHAT to build and gates the evidence; these are the tools of the build itself.",
+  "$thisKitIsNotPadding": "⚠️ kits/README.md names df-ui-verify and coder-file-transfer as skills that ship with no kit that fits — 'a real skill whose kit does not exist yet' and 'genuinely uncategorised', with the note that inventing a one-skill kit to house the latter would be padding. It would. A GENERIC DEVELOPER kit is where both actually belong, and housing them is a reason this kit exists rather than a bonus. Re-run kit-check.py after this lands: it is the oracle for what is unbundled, and the README's prose list is commentary that has already fallen behind it once.",
+  "hooks": [],
+  "$hooksNote": "None of its own. The hooks a developer wants — the compound-bash guard, the context budget — come from agent-ops through `extends`, installed once rather than declared twice.",
+  "harnesses": ["claude-code", "codex"]
+}
