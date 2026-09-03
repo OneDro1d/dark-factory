@@ -154,6 +154,40 @@ O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --declar
 contains "H: a second --declare REFUSES" "refusing to overwrite" "$O"
 if [ "$rc" -eq 3 ]; then ok "H: and exits 3"; else bad "H: and exits 3" "exit $rc"; fi
 
+echo "=== I: deploymentId beats the URL, because the URL is not deployment-unique ==="
+# ⛔ REPORTED FROM THE ESO AZURE BOX 2026-09-03 and verified independently. CODER_AGENT_URL there
+# is `http://coder.coder.svc.cluster.local/` — the IN-CLUSTER address, which ANY workspace
+# co-located with its control plane reports, on ANY deployment. Two workspaces on DIFFERENT
+# deployments can therefore declare the SAME url+name and be indistinguishable: exactly the
+# collision this guard exists to catch, sailing through it.
+#
+# Verified ids: aws bffdfd75… · onedroid be6c400f… · azure 47c25f1a… — and the in-cluster and
+# PUBLIC spellings of azure return the SAME id, which is the point.
+#
+# ⚠️ The probe cannot run in these fixtures (no server), so DEPLOY_ID is empty here — which is
+# itself the case worth asserting: an unprobeable id must FALL BACK to the URL, never refuse.
+INCLUSTER="http://coder.coder.svc.cluster.local/"
+
+# same in-cluster URL and same workspace name, DIFFERENT control plane -> must refuse
+CLASH="$(mklock clash "{\"instance\":\"other-cloud\",\"install\":{\"identity\":{\"deployment\":\"$INCLUSTER\",\"workspace\":\"loom-neptune-arm\",\"deploymentId\":\"47c25f1a-55a3-41a6-a547-8ee02347e515\"}}}")"
+O="$(CODER=true CODER_AGENT_URL="$INCLUSTER" CODER_WORKSPACE_NAME=loom-neptune-arm \
+     DEPLOY_ID_TEST=1 bash "$ID" --lock "$CLASH" 2>&1)"; rc=$?
+# with no reachable server the id cannot be measured, so this MUST fall back to the URL and
+# MATCH — asserting the graceful path, not a refusal
+contains "I: an unprobeable id falls back to the URL, does not refuse" "matches this machine" "$O"
+if [ "$rc" -eq 0 ]; then ok "I: and exits 0"; else bad "I: and exits 0" "exit $rc — a network blip must not block"; fi
+
+# a record whose declared URL differs is still refused, id or no id
+DIFF="$(mklock diffurl "{\"instance\":\"elsewhere\",\"install\":{\"identity\":{\"deployment\":\"https://somewhere-else/\",\"workspace\":\"loom-neptune-arm\"}}}")"
+O="$(CODER=true CODER_AGENT_URL="$INCLUSTER" CODER_WORKSPACE_NAME=loom-neptune-arm bash "$ID" --lock "$DIFF" 2>&1)"; rc=$?
+contains "I: a different declared URL is still refused" "DIFFERENT MACHINE" "$O"
+if [ "$rc" -eq 3 ]; then ok "I: and exits 3"; else bad "I: and exits 3" "exit $rc"; fi
+
+# ⚠️ the report says the id is UNKNOWN when unprobeable — it must SAY so, not stay silent
+O="$(CODER=true CODER_AGENT_URL="$INCLUSTER" CODER_WORKSPACE_NAME=x bash "$ID" 2>&1)"
+contains "I: an unprobeable id is reported as unknown" "could not probe" "$O"
+contains "I: and warns the URL may not be unique" "may not be deployment-unique" "$O"
+
 echo "=== F: --match lists candidates and NEVER picks one ==="
 mkdir -p "$T/instances/a" "$T/instances/b"
 printf '%s\n' "$AWS" > "$T/instances/a/loom.lock.json"
