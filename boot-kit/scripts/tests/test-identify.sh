@@ -80,6 +80,36 @@ O="$(CODER=true CODER_AGENT_URL=https://coder-dev02.aws.esosuite.net/ CODER_WORK
 contains "D2: a laptop record is refused on a Coder box" "DIFFERENT MACHINE" "$O"
 if [ "$rc" -eq 3 ]; then ok "D2: and exits 3 there too"; else bad "D2: and exits 3 there too" "exit was $rc"; fi
 
+echo "=== D3: a host record survives the .local suffix and a case change ==="
+# ⛔ THIS REFUSED THE AUTHOR'S OWN LAPTOP, LIVE. `hostname` on macOS follows the NETWORK: it
+# returned `MacBook-Air-3.local` when the record was written and `Mac` an hour later, so the
+# check blocked the CORRECT install — worse than the gap it closes.
+#
+# The fix reads `scutil --get LocalHostName` (the Bonjour name, unchanged by joining a network)
+# and NORMALISES both sides: `.local` is the mDNS suffix, not part of the name. Without that
+# normalisation the fix would have invalidated every record it was meant to protect.
+#
+# ⚠️ The lesson had already been written FOR CODER and applied to only half the problem.
+# **A rule learned on one platform is not a fact about the other.**
+#
+# The fixture is built from THIS machine's own id, uppercased and suffixed, so the case is
+# meaningful on any host rather than only on the author's.
+MYHOST="$(env -u CODER bash "$ID" | sed -n 's/^   host       : \([^ ]*\).*/\1/p')"
+if [ -n "$MYHOST" ]; then
+  UP="$(printf '%s' "$MYHOST" | tr '[:lower:]' '[:upper:]')"
+  SUF="$(mklock suffixed "{\"instance\":\"a-laptop\",\"install\":{\"identity\":{\"hostname\":\"${UP}.local\"}}}")"
+  O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --lock "$SUF" 2>&1)"
+  contains "D3: .local suffix + case change still matches" "matches this machine" "$O"
+else
+  bad "D3: could not read this machine's host id" "the print path changed shape"
+fi
+
+# ...and a genuinely different host must STILL be refused — normalisation must not blur names
+OTHER="$(mklock other '{"instance":"elsewhere","install":{"identity":{"hostname":"some-other-box.local"}}}')"
+O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --lock "$OTHER" 2>&1)"; rc=$?
+contains "D3: a different host is still refused" "DIFFERENT MACHINE" "$O"
+if [ "$rc" -eq 3 ]; then ok "D3: and still exits 3"; else bad "D3: and still exits 3" "exit $rc"; fi
+
 echo "=== E: a lockfile with NO identity is UNKNOWN, never agreement ==="
 # ⚠️ Every record on the fleet predates this field. Treating silence as a match would make the
 # check vacuous everywhere at once — the exact shape of defect this repo keeps finding.

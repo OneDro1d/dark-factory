@@ -54,7 +54,34 @@ while [ $# -gt 0 ]; do
 done
 
 # ---- the fingerprint -------------------------------------------------------
-KIND="laptop"; DEPLOY=""; WORKSPACE=""; HOSTID="$(hostname 2>/dev/null || echo unknown)"
+# ⛔ `hostname` IS NOT STABLE ON macOS EITHER, and the first version of this file said it was.
+# Measured 2026-09-03, hours apart on ONE machine: `hostname` returned `MacBook-Air-3.local`,
+# then `Mac`. macOS takes a DHCP-supplied name when a network offers one, so a record keyed on
+# it REFUSES THE CORRECT INSTALL after the laptop changes Wi-Fi. That happened live — this
+# file's own author's laptop was refused by its own record, minutes after the record was written.
+#
+# ⚠️ THE LESSON WAS ALREADY WRITTEN AND APPLIED TO ONLY HALF THE PROBLEM. The Coder branch
+# below says in capitals that `hostname` is unstable there. The laptop branch said "on a laptop
+# it is stable and is the right signal." **A rule learned on one platform is not a fact about
+# the other**, and the confident sentence was the one that was wrong.
+#
+# `scutil --get LocalHostName` is the stable macOS name — the Bonjour/mDNS name, set once and
+# unchanged by joining a network. `ComputerName` is a freely-edited user-facing label with
+# spaces in it, so it is NOT used.
+host_id() {
+  if command -v scutil >/dev/null 2>&1; then
+    n="$(scutil --get LocalHostName 2>/dev/null || true)"
+    [ -n "$n" ] && { printf '%s' "$n"; return; }
+  fi
+  hostname 2>/dev/null || echo unknown
+}
+
+# ⚠️ NORMALISE BEFORE COMPARING. `.local` is the mDNS suffix, not part of the name: a record
+# written from `hostname` yesterday must still match `LocalHostName` today, or this fix would
+# invalidate every record it is meant to protect. Case-folded for the same reason.
+norm_host() { printf '%s' "$1" | sed 's/\.local$//' | tr '[:upper:]' '[:lower:]'; }
+
+KIND="laptop"; DEPLOY=""; WORKSPACE=""; HOSTID="$(host_id)"
 if [ "${CODER:-}" = "true" ] || [ -n "${CODER_WORKSPACE_NAME:-}" ]; then
   KIND="coder"
   DEPLOY="${CODER_AGENT_URL:-<unset>}"
@@ -80,7 +107,11 @@ if [ "$KIND" = "coder" ]; then
   say "   hostname   : NOT USED — it is the k8s pod name and is not stable across restarts"
 else
   say "   kind       : laptop / bare host"
-  say "   hostname   : $HOSTID"
+  if command -v scutil >/dev/null 2>&1 && [ -n "$(scutil --get LocalHostName 2>/dev/null || true)" ]; then
+    say "   host       : $HOSTID   (scutil LocalHostName — stable; \`hostname\` follows the network)"
+  else
+    say "   host       : $HOSTID   (hostname)"
+  fi
 fi
 say "   platform   : $OS $ARCH"
 
@@ -127,7 +158,7 @@ check_one() {
     [ -n "$w" ] && [ "$w" != "$WORKSPACE" ] && return 1
   else
     [ -n "$d$w" ] && return 1      # a workspace record, on a bare host
-    [ -n "$h" ] && [ "$h" != "$HOSTID" ] && return 1
+    [ -n "$h" ] && [ "$(norm_host "$h")" != "$(norm_host "$HOSTID")" ] && return 1
   fi
   return 0
 }
