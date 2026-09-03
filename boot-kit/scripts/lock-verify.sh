@@ -17,6 +17,11 @@
 #   L9  every declared hook is WIRED in the live settings, and every wired path exists
 #   L10 every skill ON THE MACHINE is declared here    (the reverse direction, for skills)
 #
+# The L9 comments below name this estate's engram hooks as their worked example, because a
+# caveat that swaps the real filename for a placeholder stops being evidence. Engram is the
+# memory store those hooks serve; what it is and how to reach it is documented in exactly one
+# place: [Engram](../../starter-kit/instance/AUTHENTICATION.md#engram)
+#
 # L8/L9 added 2026-08-29. L1..L7 could all pass on a machine that boots with no identity and
 # no memory, because the hooks supplying those were in no lockfile (L8) or in one and wired
 # nowhere (L9). "LOCKED" meant the cache agreed with the lock; it did not mean the machine
@@ -650,6 +655,33 @@ else
   L9UNWIRED=""
   L9EXCUSED=""
   L9BADEXCUSE=""
+  L9STALESETTINGS=""
+
+  # ⚠️ A FOURTH ANSWER EXISTS AND L9 USED TO SEND THE OPERATOR PAST IT. "declared, installed,
+  # wired nowhere" has two completely different causes, and the remedy for one is WRONG for
+  # the other:
+  #
+  #   (a) nothing wires it anywhere       -> hand-wire it, or record a reason.
+  #   (b) THE KIT'S OWN SETTINGS TEMPLATE WIRES IT, and this machine has not applied the
+  #       template -> copy the template. Nothing is missing from the kit at all.
+  #
+  # Measured 2026-09-03 on the Poland Coder: L9 reported mission-completeness-gate.py inert
+  # and offered only (a). But boot-kit/config/settings.json.template already wired it — the
+  # box's live settings.json simply predated the declaration. Recording an exception there
+  # would have been an active lie: hooksUnwired asserts a hook is DELIBERATELY inert, and
+  # this one is wired by the very recipe the installer tells you to copy in its MANUAL
+  # section. **A remedy that resolves the symptom by writing down something false is worse
+  # than the drift it clears.**
+  L9TMPL=""
+  for _c in "$REPO/boot-kit/config/settings.json.template" \
+            "$REPO/boot-kit/settings.template.json" \
+            "$REPO/boot-kit/config/settings.template.json" \
+            "$REPO/settings.json.template"; do
+    [ -f "$_c" ] && { L9TMPL="$_c"; break; }
+  done
+  L9TMPLTEXT=""
+  [ -n "$L9TMPL" ] && L9TMPLTEXT="$(cat "$L9TMPL" 2>/dev/null)"
+
   while read -r h; do
     [ -n "$h" ] || continue
     if printf '%s' "$L9CMDS" | grep -qF -- "$h"; then
@@ -660,6 +692,12 @@ else
       L9EXCUSED="$L9EXCUSED $h — $reason"$'\n'
     elif jq -e --arg h "$h" '.install.hooksUnwired | has($h)' "$LOCK" >/dev/null 2>&1; then
       L9BADEXCUSE="$L9BADEXCUSE $h"$'\n'
+    elif [ -n "$L9TMPLTEXT" ] && printf '%s' "$L9TMPLTEXT" | grep -qF -- "/$h"; then
+      # ⚠️ MATCH "/$h", NOT "$h". A bare basename match is a substring: `pre-compact.sh`
+      # would be swallowed by a template line naming `engram-pre-compact.sh`, which ends
+      # with the same characters. Every command in a settings chain is a PATH, so the
+      # separator is always there and requiring it costs nothing.
+      L9STALESETTINGS="$L9STALESETTINGS $h"$'\n'
     else
       L9UNWIRED="$L9UNWIRED $h"$'\n'
     fi
@@ -678,12 +716,27 @@ else
     [ -e "$p" ] || L9GHOST="$L9GHOST $p"$'\n'
   done <<< "$L9CMDS"
 
-  if [ -n "$L9UNWIRED" ] || [ -n "$L9BADEXCUSE" ] || [ -n "$L9GHOST" ]; then
+  if [ -n "$L9UNWIRED" ] || [ -n "$L9BADEXCUSE" ] || [ -n "$L9GHOST" ] \
+     || [ -n "$L9STALESETTINGS" ]; then
     [ -n "$L9UNWIRED" ] && {
       drift "L9 declared and installed but WIRED NOWHERE — inert:"
       printf '%s' "$L9UNWIRED" | while read -r l; do [ -n "$l" ] && note "$l"; done
-      note "add it to a settings.json event chain, or record the exception with a reason"
-      note "in install.hooksUnwired. install.sh does not wire hooks — a human does."
+      note "nothing in this kit wires these — not the live settings, not the settings"
+      note "template. Add them to a settings.json event chain, or record the exception"
+      note "with a reason in install.hooksUnwired. install.sh does not wire hooks."
+    }
+    [ -n "$L9STALESETTINGS" ] && {
+      drift "L9 inert HERE, but the kit's settings template DOES wire it — this machine's"
+      drift "   live settings.json is older than the declaration:"
+      printf '%s' "$L9STALESETTINGS" | while read -r l; do [ -n "$l" ] && note "$l"; done
+      note "the kit is not missing anything. Apply the template on THIS machine:"
+      note "   $L9TMPL"
+      note "   -> $LIVE/settings.json   (replace __HOME__), then start a NEW session."
+      note "⚠️ DIFF IT FIRST if this machine has local settings edits — a straight copy"
+      note "   drops them silently."
+      note "⚠️ DO NOT record these in install.hooksUnwired. That key asserts a hook is"
+      note "   DELIBERATELY inert, and the template says the opposite. It would clear the"
+      note "   drift by writing down something false."
     }
     [ -n "$L9BADEXCUSE" ] && {
       drift "L9 listed in install.hooksUnwired with NO reason:"

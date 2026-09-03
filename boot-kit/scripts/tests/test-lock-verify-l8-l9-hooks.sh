@@ -2,6 +2,11 @@
 # test-lock-verify-l8-l9-hooks.sh — the hook directory must be checked in BOTH directions,
 # and a declared hook must be on duty, not merely on disk.
 #
+# Case D15 names this estate's engram hooks as its substring fixture, because a trap fixture
+# built from a placeholder proves nothing about the collision that actually happened. Engram
+# is the memory store those hooks serve; what it is and how to reach it is documented in
+# exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
+#
 # WHY THIS EXISTS. L2 asks "is every vendored dir declared?" and catches unprovenanced
 # content. Nothing asked the same question of $LIVE/hooks. So a hook could be hand-copied
 # onto a machine, hand-wired into settings.json, work perfectly for months, and appear in no
@@ -205,6 +210,53 @@ hook d12 a.sh
 settings d12 settings.json '{"hooks": THIS IS NOT JSON'
 O="$(run d12 L9)"
 contains "D12 unparseable settings is DRIFT" "DRIFT" "$O"
+
+echo ""
+echo "=== L9: 'wired nowhere' has TWO causes and only one of them is a kit defect ==="
+
+# ⚠️ MEASURED ON THE POLAND CODER, 2026-09-03. L9 reported mission-completeness-gate.py inert
+# and offered exactly two remedies: hand-wire it, or record it in install.hooksUnwired. But
+# boot-kit/config/settings.json.template ALREADY wired it — the box's live settings.json was
+# simply older than the declaration. Nothing was missing from the kit.
+#
+# Recording an exception there would have been an active lie: hooksUnwired asserts a hook is
+# DELIBERATELY inert, and the template says the opposite. **A remedy that clears the drift by
+# writing down something false is worse than the drift.**
+tmpl() { mkdir -p "$WORK/$1/boot-kit/config"; printf '%s\n' "$2" \
+         > "$WORK/$1/boot-kit/config/settings.json.template"; }
+
+# D13 — the template wires it, the live settings do not. A STALE MACHINE, not a broken kit.
+mk d13 '{"skills":[],"skillSources":{},"hooks":["a.sh"],"hookSources":{"a.sh":"upstream:x/hooks/a.sh"}}'
+hook d13 a.sh
+settings d13 settings.json '{"hooks":{}}'
+tmpl d13 '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"__HOME__/.claude/hooks/a.sh"}]}]}}'
+O="$(run d13 L9)"
+contains "D13 a stale live settings.json is still DRIFT"      "DRIFT"           "$O"
+contains "D13 the report names the template as the remedy"    "settings template" "$O"
+contains "D13 it points at the template path"                 "settings.json.template" "$O"
+# ⚠️ and it must STEER AWAY from the wrong remedy, not merely omit it
+contains "D13 it forbids recording a false exception"         "DO NOT record"   "$O"
+absent   "D13 it does not offer the hand-wire remedy here"    "WIRED NOWHERE"   "$O"
+
+# D14 — control: a template exists and does NOT wire it. Still the plain inert case.
+mk d14 '{"skills":[],"skillSources":{},"hooks":["a.sh"],"hookSources":{"a.sh":"upstream:x/hooks/a.sh"}}'
+hook d14 a.sh
+settings d14 settings.json '{"hooks":{}}'
+tmpl d14 '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"__HOME__/.claude/hooks/other.sh"}]}]}}'
+O="$(run d14 L9)"
+contains "D14 a template that omits it is still WIRED NOWHERE" "WIRED NOWHERE"  "$O"
+absent   "D14 and is not excused as a stale machine"           "settings template" "$O"
+
+# D15 — ⚠️ THE SUBSTRING TRAP, THIRD APPEARANCE IN THIS ESTATE. A template naming
+# `engram-pre-compact.sh` must NOT excuse a declared `pre-compact.sh`: it ends with the same
+# characters. Every command in a settings chain is a PATH, so requiring the `/` costs nothing
+# and closes it. The audit's class-2 check was bitten by exactly this.
+mk d15 '{"skills":[],"skillSources":{},"hooks":["pre-compact.sh"],"hookSources":{"pre-compact.sh":"upstream:x/hooks/pre-compact.sh"}}'
+hook d15 pre-compact.sh
+settings d15 settings.json '{"hooks":{}}'
+tmpl d15 '{"hooks":{"PreCompact":[{"hooks":[{"type":"command","command":"__HOME__/.claude/hooks/engram-pre-compact.sh"}]}]}}'
+O="$(run d15 L9)"
+contains "D15 a same-ending template entry does NOT excuse it" "WIRED NOWHERE" "$O"
 
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
