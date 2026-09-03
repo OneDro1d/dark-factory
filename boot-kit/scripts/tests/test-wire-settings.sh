@@ -55,6 +55,16 @@ if [ -f "$L" ]; then ok "A: the file exists"; else bad "A: the file exists" "not
 absent   "A: __HOME__ was substituted"    "__HOME__"                      "$(cat "$L")"
 contains "A: the real home is in the path" "$H/.claude/hooks/gate.py"     "$(cat "$L")"
 
+# ⚠️ AND --dry-run MUST NOT CLAIM A WRITE IT DID NOT MAKE. This branch said "writing the
+# rendered template whole" under --dry-run and wrote nothing. Caught by the rehydrate suite,
+# not by this one — a dry run that reports a write it never performed is the same lie as an
+# install reporting a wiring it never did, smaller and in the same direction.
+L="$T/a-dry.json"
+O="$(run "$L" --dry-run)"
+contains "A: --dry-run says so on the no-live-file path" "dry run" "$O"
+if [ -f "$L" ]; then bad "A: --dry-run creates no file" "it wrote one"
+else ok "A: --dry-run creates no file"; fi
+
 echo "=== B: an existing file is MERGED, never clobbered ==="
 L="$T/b.json"
 cat > "$L" <<JSON

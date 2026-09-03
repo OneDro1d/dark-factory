@@ -98,11 +98,17 @@ def main():
     live_exists = os.path.isfile(a.live) and os.path.getsize(a.live) > 0
     if not live_exists:
         # Nothing to preserve, so the whole rendered template is the right content.
-        print("   no live settings.json — writing the rendered template whole")
+        # ⚠️ THIS BRANCH USED TO SAY "writing" UNDER --dry-run AND WRITE NOTHING. Caught by
+        # test-rehydrate-wires-hooks case D, which is the whole reason the assertion matches
+        # the wiring phrase rather than a hook name. A dry run that reports a write it did not
+        # perform is the same lie as an install that reports a wiring it did not do -- smaller,
+        # and in the same direction.
+        suffix = " (dry run — nothing written)" if a.dry_run else ""
+        print("   no live settings.json — writing the rendered template whole%s" % suffix)
         if not a.dry_run:
             os.makedirs(os.path.dirname(a.live) or ".", exist_ok=True)
             open(a.live, "w", encoding="utf-8").write(json.dumps(tmpl, indent=2) + "\n")
-        print("   wired %d event chain(s)" % len(tmpl.get("hooks") or {}))
+        print("   wired %d event chain(s)%s" % (len(tmpl.get("hooks") or {}), suffix))
         return 0
 
     try:

@@ -23,6 +23,9 @@
 #   - claude.ai-hosted MCP connectors (e.g. the ESO hub) are ACCOUNT-level, not in
 #     ~/.claude.json. Sign in on the machine; no lockfile can restore them.
 #   - `gh auth login` itself, plugin marketplaces, and any compiled binary.
+#   - anything in settings.json that is NOT a hook chain: `permissions` is a security
+#     posture and `outputStyle` is the operator's UI. Section 4 reports a difference in
+#     those and never applies it.
 set -uo pipefail
 
 LOCK="loom.lock.json"
@@ -36,6 +39,7 @@ done
 [ -f "$LOCK" ] || { echo "FATAL: no $LOCK here"; exit 1; }
 command -v jq >/dev/null || { echo "FATAL: jq required"; exit 1; }
 
+SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(pwd)"
 VENDOR="$ROOT/$(jq -r '.vendorDir // "vendor"' "$LOCK")"
 LIVE="${LOOM_LIVE:-$HOME/.claude}"
@@ -239,6 +243,46 @@ while read -r h; do
     chmod +x "$LIVE/hooks/$h"
   fi
 done < <(jq -r '(.install.hooks // [])[]' "$LOCK")
+
+# ---- 4. wire the declared hooks into the live settings -------------------------
+# ⛔ SECTION 3 COPIES HOOK FILES. NOTHING RUNS THEM until $LIVE/settings.json names each one
+# in an event chain -- and until now no part of this estate's restore path did that. The
+# instruction was prose in an installer's MANUAL section, so a machine restored by this
+# script came back with every declared hook present, executable, hash-clean and INERT.
+#
+# ⚠️ THAT IS THE WORST OF THE FOUR STATES, because L1-L8 all pass on it. Measured on
+# coder-eso-aws--loom-neptune-arm after a workspace reset wiped ~/.claude: 15 hooks
+# declared, 8 wired. The restore leg is exactly where that gap gets created.
+#
+# The tool MERGES rather than copies: settings.json is the operator's file. It adds missing
+# hook entries only, backs up first, never removes or reorders, never writes `permissions`
+# or any other top-level key, and refuses on unparseable JSON. See wire-settings.py.
+#
+# ⚠️ THE TEMPLATE LIVES AT DIFFERENT PATHS ON DIFFERENT KITS and a single hardcoded path
+# would skip silently on the others -- the defect this whole section removes, one level up.
+# So the candidates are enumerated, and finding none is REPORTED, never assumed benign.
+say ""
+say "== 4. wire declared hooks into $LIVE/settings.json =="
+WS="$SELFDIR/wire-settings.py"
+TPL=""
+for c in "$ROOT/boot-kit/config/settings.json.template" \
+         "$ROOT/boot-kit/settings.template.json" \
+         "$ROOT/boot-kit/config/settings.template.json" \
+         "$ROOT/settings.json.template"; do
+  [ -f "$c" ] && { TPL="$c"; break; }
+done
+if [ ! -f "$WS" ]; then
+  say "  WARN  wire-settings.py not beside this script — hooks are INSTALLED but NOT WIRED"
+elif [ -z "$TPL" ]; then
+  say "  WARN  no settings template in this kit — nothing declares HOW to wire these hooks."
+  say "        Every hook section 3 just installed is inert until a human wires it."
+elif [ "$DRY" -eq 1 ]; then
+  python3 "$WS" --template "$TPL" --live "$LIVE/settings.json" --home "$HOME" --dry-run \
+    || say "  WARN  wire-settings refused — see above"
+else
+  python3 "$WS" --template "$TPL" --live "$LIVE/settings.json" --home "$HOME" \
+    || say "  WARN  wire-settings refused — see above"
+fi
 
 say ""
 say "== summary =="
