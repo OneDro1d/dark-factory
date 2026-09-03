@@ -277,10 +277,15 @@ elif [ -z "$TPL" ]; then
   say "  WARN  no settings template in this kit — nothing declares HOW to wire these hooks."
   say "        Every hook section 3 just installed is inert until a human wires it."
 elif [ "$DRY" -eq 1 ]; then
-  python3 "$WS" --template "$TPL" --live "$LIVE/settings.json" --home "$HOME" --dry-run \
+  python3 "$WS" --template "$TPL" --live "$LIVE/settings.json" --home "$HOME" \
+          --lock "$LOCK" --dry-run \
     || say "  WARN  wire-settings refused — see above"
 else
+  # ⚠️ --lock IS NOT OPTIONAL. The template is shared across instances; without
+  # the lockfile this wires hooks THIS machine never installs, and the chain
+  # then errors on every event. Measured on the Poland Coder, 2026-09-03.
   python3 "$WS" --template "$TPL" --live "$LIVE/settings.json" --home "$HOME" \
+          --lock "$LOCK" \
     || say "  WARN  wire-settings refused — see above"
 fi
 

@@ -150,6 +150,63 @@ if [ -n "$BK" ]; then ok "H: the backup exists"; else bad "H: the backup exists"
 contains "H: the backup holds the PRE-write content" "keep-me" "$(cat "$BK")"
 absent   "H: and not the new wiring"                 "gate.py" "$(cat "$BK")"
 
+echo "=== I: the LOCKFILE is the authority, not the shared template ==="
+# ⛔ MEASURED ON THE POLAND CODER 2026-09-03, the day the wiring step shipped. The settings
+# template is SHARED across instances; the lockfile is PER-INSTANCE. Wiring the whole template
+# put three hooks into that box that its lockfile declares nowhere — it has no catalyst lane,
+# and its own $hookBumpNote records removing the catalyst hooks on 2026-08-31. lock-verify L9
+# caught it from the other side: "wired in settings but NOT PRESENT on disk — the chain breaks
+# every session."
+#
+# **Lockfiles are the authority; installers are only mechanism.** This was a mechanism that
+# ignored the lockfile.
+LOCK="$T/lock.json"
+cat > "$LOCK" <<'JSON'
+{ "instance": "t-declares-one", "install": { "hooks": ["gate.py"] } }
+JSON
+
+L="$T/i.json"
+cat > "$L" <<'JSON'
+{ "hooks": {} }
+JSON
+O="$(python3 "$W8" --template "$TMPL" --live "$L" --home "$H" --lock "$LOCK" 2>&1)"
+contains "I: a declared hook is still wired"           "gate.py"   "$O"
+absent   "I: an UNDECLARED template hook is not wired" "+ SessionStart" "$O"
+absent   "I: and it is not in the live file"           "boot.sh"   "$(cat "$L")"
+# ⚠️ REPORTED, NEVER SILENT. A skip nobody can see is indistinguishable from a check that
+# never ran — the defect class this whole session was spent removing.
+contains "I: the skip is reported"                     "NOT wired" "$O"
+contains "I: and names the reason"                     "not declared by THIS lockfile" "$O"
+
+# the fresh-machine path must filter too — it is where the damage is greatest, because
+# nothing is wired yet so every undeclared entry lands at once
+L2="$T/i-fresh.json"
+O="$(python3 "$W8" --template "$TMPL" --live "$L2" --home "$H" --lock "$LOCK" 2>&1)"
+contains "I: the no-live-file path filters too"        "does not declare" "$O"
+absent   "I: undeclared hook absent from a fresh file" "boot.sh"   "$(cat "$L2")"
+
+echo "=== J: --prune-broken repairs a chain that names a missing file ==="
+# ⚠️ THE ONLY REMOVAL THIS TOOL WILL EVER MAKE, gated three ways: wired, file ABSENT, and the
+# flag passed. Such an entry is not the operator's working config — it errors on every event,
+# and nothing is lost because the file it names is not there to run. Removing anything whose
+# file EXISTS would be clobbering; the last assertion here guards exactly that.
+mkdir -p "$H/.claude/hooks"
+printf '#!/bin/sh\n' > "$H/.claude/hooks/gate.py"
+L3="$T/j.json"
+cat > "$L3" <<JSON
+{ "hooks": { "Stop": [ { "matcher": "", "hooks": [
+  { "type": "command", "command": "$H/.claude/hooks/ghost-that-is-absent.sh" },
+  { "type": "command", "command": "$H/.claude/hooks/gate.py" } ] } ] } }
+JSON
+O="$(python3 "$W8" --template "$TMPL" --live "$L3" --home "$H" --lock "$LOCK" 2>&1)"
+contains "J: a broken chain is reported by default" "breaks every session" "$O"
+contains "J: the live file is untouched by default" "ghost-that-is-absent" "$(cat "$L3")"
+contains "J: and it names the opt-in remedy"        "--prune-broken"       "$O"
+O="$(python3 "$W8" --template "$TMPL" --live "$L3" --home "$H" --lock "$LOCK" --prune-broken 2>&1)"
+contains "J: --prune-broken says what it removed"   "PRUNED"               "$O"
+absent   "J: the broken entry is gone"              "ghost-that-is-absent" "$(cat "$L3")"
+contains "J: the entry whose file EXISTS survives"  "gate.py"              "$(cat "$L3")"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
