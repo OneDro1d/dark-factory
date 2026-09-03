@@ -122,6 +122,38 @@ else bad "E: does not block the install" "exit $rc — an unknown that blocks fi
 # ...and it must hand over the exact line to paste
 contains "E: offers the identity block to add" '"deployment"' "$O"
 
+echo "=== H: --declare writes a MEASURED identity, and never overwrites one ==="
+# ⛔ WHY THIS EXISTS, and it is structural rather than an oversight: a kit is minted BEFORE the
+# machine it will run on exists. loom-annabel's record was created with an empty agentName and
+# the note "the agent names itself, on first run" — there was no machine to measure. So a fresh
+# kit CANNOT ship with install.identity, and the guard stays inert on it until somebody stands
+# at the machine. Measured 2026-09-03: 4 of 10 records declared — the 4 anyone has run.
+#
+# ⚠️ WRITING IT STAYS AN EXPLICIT ACT. It records THE MACHINE YOU ARE ON into THE RECORD YOU
+# NAMED — not an inference, since naming the record IS the assertion. But a WRONG assertion gets
+# cemented here: a recoverable mistake becomes a probed-looking record. Hence: print before
+# write, refuse to overwrite, never implied by a plain install.
+FRESH="$(mklock fresh '{"instance":"fresh-kit","install":{"hooks":[]}}')"
+O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --declare "$FRESH" 2>&1)"
+contains "H: prints what it will write BEFORE writing" "will write into" "$O"
+contains "H: says to commit and push it"               "COMMIT AND PUSH" "$O"
+if [ -n "$(jq -r '.install.identity.hostname // empty' "$FRESH")" ]; then
+  ok "H: an identity was written"
+else bad "H: an identity was written" "nothing landed in the lockfile"; fi
+# the note must say it was MEASURED — a record that cannot say where its value came from is the
+# looks-probed-and-is-not failure this whole feature exists to prevent
+contains "H: the written note says MEASURED" "MEASURED" "$(cat "$FRESH")"
+
+# ...and the record must now satisfy the check it was written for
+O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --lock "$FRESH" 2>&1)"
+contains "H: the new identity matches this machine" "matches this machine" "$O"
+
+# ⚠️ NEVER OVERWRITE. An existing identity was written by someone standing at a machine;
+# replacing it silently would let one box quietly claim another's record.
+O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --declare "$FRESH" 2>&1)"; rc=$?
+contains "H: a second --declare REFUSES" "refusing to overwrite" "$O"
+if [ "$rc" -eq 3 ]; then ok "H: and exits 3"; else bad "H: and exits 3" "exit $rc"; fi
+
 echo "=== F: --match lists candidates and NEVER picks one ==="
 mkdir -p "$T/instances/a" "$T/instances/b"
 printf '%s\n' "$AWS" > "$T/instances/a/loom.lock.json"
