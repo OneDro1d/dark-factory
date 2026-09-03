@@ -35,6 +35,7 @@
 #   identify.sh                          print the fingerprint
 #   identify.sh --lock <lockfile>        also CHECK it against that lockfile's install.identity
 #   identify.sh --match <instances-dir>  list which declared instances match this machine
+#   identify.sh --declare <lockfile>     WRITE this machine's measured identity into it
 #
 # exit: 0 = agrees, or nothing to disagree with   3 = the lockfile describes another machine
 set -uo pipefail
@@ -48,6 +49,8 @@ while [ $# -gt 0 ]; do
     --lock=*) MODE=check; LOCK="${1#--lock=}"; shift ;;
     --match) MODE=match; DIR="${2:-}"; shift 2 ;;
     --match=*) MODE=match; DIR="${1#--match=}"; shift ;;
+    --declare)  MODE=declare; LOCK="${2:-}"; shift 2 ;;
+    --declare=*) MODE=declare; LOCK="${1#--declare=}"; shift ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) printf 'FATAL unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -184,6 +187,37 @@ if [ "$MODE" = "check" ]; then
       say "   Pick the right --lock, or mint a record for THIS machine."
       exit 3 ;;
   esac
+fi
+
+if [ "$MODE" = "declare" ]; then
+  [ -f "$LOCK" ] || { say "FATAL: no lockfile at $LOCK"; exit 2; }
+  existing="$(jq -r '.install.identity // empty' "$LOCK" 2>/dev/null)"
+  if [ -n "$existing" ]; then
+    # ⚠️ NEVER OVERWRITE. An existing identity was written by somebody who was standing at a
+    # machine; silently replacing it would let one box quietly claim another's record.
+    say "   this lockfile ALREADY declares an identity — refusing to overwrite it."
+    say "   If it is wrong, edit it by hand so the change is visible in the diff."
+    exit 3
+  fi
+  if [ "$KIND" = "coder" ]; then
+    NEWID="$(jq -n --arg d "$DEPLOY" --arg w "$WORKSPACE" \
+      '{deployment:$d, workspace:$w, "$note":"MEASURED on the machine by identify.sh --declare. hostname is deliberately absent: on Coder it is the k8s pod name and changes on every restart."}')"
+  else
+    NEWID="$(jq -n --arg h "$HOSTID" \
+      '{hostname:$h, "$note":"MEASURED on the machine by identify.sh --declare, from scutil LocalHostName where available (stable) rather than hostname (which follows the network on macOS)."}')"
+  fi
+  say ""
+  say "   will write into $LOCK:"
+  printf '%s\n' "$NEWID" | sed 's/^/     /'
+  say ""
+  # ⚠️ IT WRITES WHAT WAS MEASURED, and the human already asserted this record is this machine
+  # by naming it. But a wrong assertion becomes a recorded fact here -- READ THE BLOCK ABOVE
+  # before committing, because the next person will treat it as probed.
+  tmp="$(mktemp)"
+  jq --argjson id "$NEWID" '.install.identity = $id' "$LOCK" > "$tmp" && mv "$tmp" "$LOCK"
+  say "   written. ⚠️ COMMIT AND PUSH IT — a record that exists only on the machine it"
+  say "   describes is one rebuild away from gone."
+  exit 0
 fi
 
 if [ "$MODE" = "match" ]; then
