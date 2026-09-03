@@ -2,6 +2,8 @@
   "name": "knowledge-worker",
   "description": "Turning work into documents other people can act on — repo documentation, walkthrough recordings, video and meeting intake, and handoffs that survive a context reset.",
   "$note": "The kit for someone whose output is understanding rather than code — a product owner, an analyst, a technical writer. It is the one kit that assumes the least about the target repo: none of these skills needs a build, a stack, or a deploy target.",
+  "extends": ["method-core"],
+  "$extendsNote": "kits/README.md already said method-core is 'the floor' and that 'the others assume it is installed alongside'. That was a dependency recorded in prose and enforced by nobody — an instance bootstrapped from this kit alone got six skills and none of the method they sit on, silently. `extends` makes the sentence executable.\n\n⚠️ AND THE FLOOR IS A LESS OBVIOUS FIT HERE THAN ANYWHERE ELSE, which is worth saying rather than smoothing over: method-core ships df-tdd-developer and dark-factory-build, and a technical writer will not run either. They are carried anyway because the floor is the estate's stated design and a kit is not the place to quietly renegotiate it. What this kit DOES need from the floor is the part nobody notices until it is missing — critical-thinking, work-autonomously, df-adversary-gate, vinculum-loop: the stance and the evidence gate. A document written by an agent that never asks 'what would prove this wrong?' is the failure mode of this whole kit.",
   "skills": [
     "agent-notepad",
     "df-app-walkthrough",
