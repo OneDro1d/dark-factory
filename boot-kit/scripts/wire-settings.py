@@ -57,9 +57,16 @@ def hook_path(command):
     template's arguments differ from what a human typed -- and a hook that fires twice is a
     worse outcome than one that does not fire, because it looks like it is working.
 
-    ⚠️ AND EXPAND $HOME FIRST. A template renders to `/home/coder/.claude/hooks/x.sh` while a
-    hand-wired live entry may say `$HOME/.claude/hooks/x.sh`. Those are one file. lock-verify
-    L9 already normalises both spellings for exactly this reason.
+    ⚠️ AND EXPAND $HOME FIRST. A rendered template gives an ABSOLUTE path under the viewer's
+    home; a hand-wired live entry may give the same file as `$HOME/.claude/hooks/...`. Those
+    are one file, and lock-verify L9 already normalises both spellings for this same reason.
+
+    ⚠️ THIS PARAGRAPH ONCE SPELLED THAT ABSOLUTE PATH OUT and the publish gate rejected it
+    (P6, machine-local identifiers). It was right, and `audit-kit-gaps.py` already carries the
+    identical lesson from earlier the same day: **a rule against machine-local absolute paths
+    does not carve out the prose explaining the rule.** An example is not an exemption, and
+    Tier 1 is the public repo -- the illustration would have shipped a real machine's layout
+    to every reader.
     """
     home = os.environ.get("HOME", "")
     c = command.replace("${HOME}", home).replace("$HOME", home)
