@@ -83,6 +83,50 @@ test_digest_absent_still_injects() {
   rm -rf "$(dirname "$np")"
 }
 
+# ⛔ THE REGRESSION TEST THIS SUITE DID NOT HAVE, AND THE REASON THE BUG SHIPPED.
+#
+# Every case above uses a sentinel notepad of a few hundred bytes. The hook encoded its
+# payload with `jq -n --arg ctx "$combined"` — an ARGV element — and Linux caps one argv
+# element at 128 KB (MAX_ARG_STRLEN). So on every Coder box in the fleet jq died with
+# "Argument list too long", the hook still exited 0, and ZERO context was injected while
+# the suite stayed green: the fixture was three orders of magnitude below the ceiling.
+#
+# ⚠️ The defect was in a DIMENSION the tests never varied. Correctness was asserted; SIZE
+# was not, so the one property that mattered had no coverage at any point in the suite.
+#
+# 1.5 MB is chosen to exceed BOTH ceilings — Linux's 128 KB per-argument cap and macOS's
+# ~1 MB total execve limit — so this test fails against the old code on the maintainer's
+# own laptop, not only on the machine that happened to report the bug. A test that can
+# only fail on a platform nobody develops on is not a regression test.
+test_payload_larger_than_argv_limit_still_restores() {
+  local np out big
+  np="$(_scaffold)"
+  # ~1.5 MB of filler, then the sentinel LAST so a truncating encoder cannot pass.
+  big="$(mktemp)"
+  awk 'BEGIN{ for(i=0;i<24000;i++) print "notes filler line to exceed the argv ceiling ......" }' > "$big"
+  cat "$big" >> "$np/NOTES.md"
+  printf '\nBIG_NOTES_TAIL_SENTINEL\n' >> "$np/NOTES.md"
+  rm -f "$big"
+
+  out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+
+  # The tail proves the WHOLE payload survived, not merely that something was emitted.
+  assert_contains "$out" "BIG_NOTES_TAIL_SENTINEL" \
+    "a NOTES.md past the argv ceiling is injected whole (tail present)"
+  assert_contains "$out" "NOTES_SENTINEL_ARBBOT" \
+    "the head of an oversized NOTES.md survives too"
+  assert_eq "SessionStart" "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName')" \
+    "oversized payload is still valid dual-field JSON"
+
+  # ⚠️ And it must not have degraded to the encode-failure branch. That branch is correct
+  # behaviour for a genuine failure and a FALSE PASS here: it emits valid JSON carrying a
+  # warning, so every assertion above except the sentinels would still hold.
+  assert_not_contains "$out" "FAILED TO ENCODE" \
+    "the oversized payload took the real path, not the encode-failure fallback"
+
+  rm -rf "$(dirname "$np")"
+}
+
 test_outside_notepad_emits_empty_object() {
   local sb out; sb="$(mktemp -d)"
   out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$sb")"

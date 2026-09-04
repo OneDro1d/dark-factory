@@ -165,6 +165,54 @@ Next: wire the router."
   unset AGENT_NOTEPAD_PUSH_LOG AGENT_NOTEPAD_DATE
 }
 
+# ── (2b) the POINTER commits with the DOCUMENT ─────────────────────────────
+# ⛔ Measured twice on 2026-09-04 — the laptop and then the Poland Coder — where
+# `git status` showed ` M NOTES.md` after this helper had exited 0. It staged only the
+# handoff, so the refreshed NOTES.md stayed in the working tree and the commit reported
+# success over a handoff nothing pointed at.
+#
+# ⚠️ Why that is the whole failure and not a tidiness issue: the SessionStart restore
+# injects NOTES.md and only a POINTER to the newest handoff. A cold reader told the Notes
+# are current has no reason to open the handoff at all. Publishing the document without
+# the pointer keeps the artifact and loses the only route to it — which is precisely what
+# the handoff tier exists to prevent.
+test_publish_commits_notes_pointer_with_handoff() {
+  local pair np remote out
+  pair="$(_mk_notepad_with_remote)"
+  np="${pair%%$'\t'*}"; remote="${pair##*$'\t'}"
+  export AGENT_NOTEPAD_DATE="2026-07-11"
+
+  # the caller refreshed NOTES.md and DIGEST.md, as skills/handoff step 7 requires
+  printf '# NOTES\nNEXT: read the 2026-07-11 handoff\nNOTES_POINTER_SENTINEL\n' > "$np/NOTES.md"
+  printf '# DIGEST\nDIGEST_POINTER_SENTINEL\n' > "$np/DIGEST.md"
+
+  out="$(printf 'body' | "$LIB" "$np" "Pointer Case")"
+  assert_eq "0" "$?" "publish exits 0 with a refreshed NOTES.md"
+  assert_contains "$out" "2026-07-11-pointer-case.md" "helper printed the handoff path"
+
+  # ⚠️ The assertion is on the WORKING TREE being clean for these files, not merely on
+  # them being tracked — NOTES.md was already tracked by the fixture's seed commit, so a
+  # tracked-ness check would have passed against the broken code and proved nothing.
+  local dirty; dirty="$(git -C "$np" status --porcelain -- NOTES.md DIGEST.md)"
+  assert_eq "" "$dirty" "NOTES.md and DIGEST.md are committed, not left modified"
+
+  # and the content actually landed in the handoff commit itself
+  local files; files="$(git -C "$np" show --name-only --pretty=format: HEAD | tr '\n' ' ')"
+  assert_contains "$files" "NOTES.md" "NOTES.md is in the SAME commit as the handoff"
+  assert_contains "$(git -C "$np" show HEAD:NOTES.md)" "NOTES_POINTER_SENTINEL" \
+    "the committed NOTES.md is the refreshed one"
+
+  # ⚠️ Nothing ELSE may be swept in. `add -A` would also publish a half-written journal
+  # or manifest from machinery on a different schedule, under this tier's commit message.
+  printf 'unrelated\n' > "$np/scratch-not-ours.txt"
+  printf 'body2' | "$LIB" "$np" "Second Case" >/dev/null
+  assert_contains "$(git -C "$np" status --porcelain)" "scratch-not-ours.txt" \
+    "an unrelated file is NOT swept into the handoff commit"
+
+  unset AGENT_NOTEPAD_DATE
+  rm -rf "$(dirname "$np")"
+}
+
 # ── (3) best-effort: no remote → still writes+commits, exits 0 ─────────────
 test_publish_best_effort_without_remote() {
   local np plog out hf
