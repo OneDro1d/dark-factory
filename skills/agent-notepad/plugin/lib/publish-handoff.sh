@@ -4,7 +4,8 @@
 #
 # Writes the structured handoff to <notepad>/handoffs/<date>-<topic>.md — INSIDE
 # the notepad, NOT a temp/OS dir — redacts secrets, then FORCES a git push of the
-# notepad (git add/commit/push, all best-effort so a flaky remote never blocks
+# notepad. ⚠️ The COMMIT is NOT best-effort (a blocked commit is reported and returns
+# non-zero — see below); only the PUSH is, so a flaky remote never blocks
 # the caller). The continuous tier is Notes (NOTES.md + journal); a Handoff is
 # the deliberate, structured summary this helper publishes.
 #
@@ -74,7 +75,32 @@ publish_handoff() { # NOTEPAD_ROOT TOPIC [BODY_FILE]
   # --- FORCE a git push of the notepad (best-effort at each step) -------------
   local plog="${AGENT_NOTEPAD_PUSH_LOG:-}"
   git -C "$root" add "handoffs/${date_stamp}-${slug}.md" >/dev/null 2>&1 || true
-  git -C "$root" commit -qm "handoff: ${topic} (${date_stamp})" >/dev/null 2>&1 || true
+
+  # ⛔ THE COMMIT IS NOT BEST-EFFORT. Measured 2026-09-04: this function printed the path and
+  # exited 0 having committed NOTHING — a pre-commit gate had refused, and `>/dev/null 2>&1 ||
+  # true` swallowed both the message and the exit code. The handoff sat staged, NOTES.md sat
+  # unstaged, and the caller was told it was published.
+  #
+  # ⚠️ Best-effort is CORRECT for the push (a flaky remote must not block a local checkpoint) and
+  # WRONG for the commit, because it turns a REJECTION into a reported success. The handoff tier
+  # exists so a checkpoint survives; a publisher that reports success over an uncommitted file
+  # loses precisely what it promised to keep.
+  _commit_out="$(git -C "$root" commit -qm "handoff: ${topic} (${date_stamp})" 2>&1)"
+  _commit_rc=$?
+  if [ "$_commit_rc" -ne 0 ]; then
+    case "$_commit_out" in
+      *"nothing to commit"*|*"no changes added"*)
+        # Genuinely nothing to record — the file was already committed. Not a failure.
+        printf 'note: nothing new to commit in %s\n' "$root" >&2
+        ;;
+      *)
+        printf 'ERROR: the handoff was WRITTEN but NOT COMMITTED in %s\n' "$root" >&2
+        printf '%s\n' "$_commit_out" >&2
+        printf 'The file exists on disk and is staged. It is NOT a checkpoint until it commits.\n' >&2
+        return 1 2>/dev/null || exit 1
+        ;;
+    esac
+  fi
   # record that a push was attempted (observability), then attempt it.
   [ -n "$plog" ] && printf 'PUSH %s %s\n' "$root" "$hf" >> "$plog" 2>/dev/null || true
   git -C "$root" push >/dev/null 2>&1 || true

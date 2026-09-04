@@ -231,6 +231,27 @@ claude -p 'List your available MCP tool namespaces. If you have none, reply exac
   --setting-sources project --output-format json 2>&1 | tail -5
 ```
 
+⛔ **THAT ANSWER IS NOT YET EVIDENCE. Enumeration is not capability.** Measured 2026-09-04: asked
+to *describe* its tools, a worker returned a confident, accurate-looking namespace inventory
+**having called nothing** — exactly what a dispatcher would trust. Asked to *use* one, the
+capability evaporated. **So make it CALL something:**
+
+```sh
+# pick any READ-ONLY tool from the namespaces it just claimed, and make it call that tool and
+# paste the RAW result. A list is a claim; a result is evidence.
+claude -p 'Call <one read-only tool> once and paste its raw result verbatim. Make no other tool calls. Then stop.' \
+  --setting-sources project --permission-mode bypassPermissions --output-format json 2>&1 | tail -5
+```
+
+⚠️ **`--permission-mode bypassPermissions` IS LOAD-BEARING AND IS THE FLAG PEOPLE OMIT.** The same
+probe, same prompt: without it every call was DENIED and the tools looked present-but-uncallable;
+with it the call executed and returned real data. **Measuring without the mode a real worker runs
+in measures a shape nothing uses, and reports the wrong verdict confidently.** Check what your
+kit's supervisor actually passes and match it.
+
+⚠️ Report `permission_denials` from the JSON as well as `result`. An empty denial list next to an
+empty tool list means the worker *called nothing* — not that everything worked.
+
 **NO MCP IN WORKER is a correct and important finding, not a failed test.** It means every worker
 here must be handed **file-based inputs**, and any promise that depends on those tools has to be
 verified *inside* the worker before it is dispatched.
@@ -245,10 +266,11 @@ willingness to report absence, not the kit.** Find the real one and name it in y
 Report whether a prompt renders, and whether the hard stops appear in it. **Do not dispatch for
 real** unless the render looks right.
 
-⚠️ **Bound this by BUDGET, not by count.** A previous run needed five workers where this document
-said "at most one" — the first two were contaminated (see the flags above) and the scoping
-question needed a control pair. Captured spend was about **$2.20**. The count is only knowable
-after you know whether the harness returns clean output; the budget is knowable up front.
+⚠️ **Bound this by BUDGET, not by count.** Two runs needed five and three workers where this
+document once said "at most one": probes get contaminated, and the scoping question needs control
+pairs. Captured spend was **$2.20** and **$3.12**. ⚠️ In the second run **the most expensive probe
+was the one that produced the correct verdict** — a budget set too low pressures the reader to
+stop before the measurement that matters. **Allow about $5**, and report what you actually spent.
 
 ## 7 · Subagents
 
