@@ -28,8 +28,13 @@
 # Some MCP hub entries in ~/.claude.json authenticate with `Bearer ${SOME_TOKEN_VAR}` —
 # env references expanded at launch, not literal tokens. A supervisor started from a
 # stripped environment spawns children that boot cleanly, fail every ticket write, and
-# keep looping. df-preflight checks those variables; this script refuses to start if it
-# reports drift.
+# keep looping. df-preflight checks those variables.
+#
+# ⚠️ CORRECTED 2026-09-04 (ESO validation run, P-4). This header used to claim the script
+# "refuses to start if it reports drift". IT DOES NOT — the preflight call below is
+# INFORMATIONAL on drift. The code is deliberate; the header was stale, and it is the half a
+# reader skims first. **A stale claim about a SAFETY property is worse than no claim**: it gets
+# relied on precisely when nobody re-reads the code underneath it.
 #
 # Usage:
 #   df-supervisor.sh --mission <dir> [--interval SEC] [--max-iter N] [--max-usd N]

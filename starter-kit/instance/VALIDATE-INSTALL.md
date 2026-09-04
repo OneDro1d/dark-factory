@@ -43,11 +43,29 @@ Nothing below hardcodes a path. Discover, and report what you found.
 d="$PWD"; while [ "$d" != "/" ]; do ls "$d"/*.lock.json >/dev/null 2>&1 && { echo "KIT ROOT: $d"; ls "$d"/*.lock.json; break; }; d="$(dirname "$d")"; done
 ```
 
+⛔ **The walk-up finds the NEAREST record, which is very often the WRONG one.** Measured
+2026-09-04: on a kit with per-machine records under `instances/`, it stopped at the repo root's
+lockfile — which described a **different machine entirely**. Validating against that would have
+been precisely the failure Task 1 exists to catch.
+
+**So do not derive the record from proximity. Ask the engine, which lists and refuses to pick:**
+
+```sh
+<engine>/identify.sh --match <kit-root>/instances
+```
+
+⚠️ The collision is live, not theoretical: one workspace NAME can exist on two deployments, so
+two records differ only in their `deployment` field. Proximity cannot tell them apart and neither
+can a name.
+
 ```sh
 # the engine may be on PATH, at the kit root, or only inside the vendored upstream
 command -v df-preflight || echo "df-preflight: not on PATH"
 command -v df-mission   || echo "df-mission: not on PATH"
-find . -maxdepth 4 -name 'identify.sh' -o -maxdepth 4 -name 'lock-verify.sh' 2>/dev/null | head
+# ⚠️ NO DEPTH CAP. A `-maxdepth 4` here printed nothing on a real kit because the engine sits at
+# depth 5 under vendor/ — and "nothing" reads as "no engine on this machine".
+find . -path '*/boot-kit/scripts/identify.sh' -not -path '*/node_modules/*' 2>/dev/null | head
+find . -path '*/boot-kit/scripts/lock-verify.sh' -not -path '*/node_modules/*' 2>/dev/null | head
 ```
 
 Report: the kit root, the lockfile name(s), and where the engine actually resolves.
@@ -131,8 +149,24 @@ different inputs — one it should allow, one it should act on:
 echo '{"tool_name":"Bash","tool_input":{"command":"echo hi"}}' | <the hook> ; echo "exit=$?"
 ```
 
-⚠️ **A hook that answers identically to both inputs is not gating.** Report both outputs.
 ⚠️ `not found` from a wired hook is the **fails-open** case: nothing blocks and nothing errors.
+
+⛔ **"IDENTICAL ANSWERS MEAN IT IS NOT GATING" IS NECESSARY BUT NOT SUFFICIENT — and taking it as
+sufficient produced a wrong verdict in the field.** Measured 2026-09-04: a commit gate answered
+`{}` to both inputs above **and was gating correctly**. It has four abstain paths before it ever
+looks at the change set — gate disabled, not a commit, no context store, nothing staged — and
+both inputs hit the same one.
+
+**So build a POSITIVE CONTROL: construct the state the hook is supposed to act on, then vary
+exactly one thing.** What settled it there:
+
+| case | verdict |
+|---|---|
+| structural file staged, context store stale | `{"decision":"block", …}` |
+| same, plus a context-store file in the commit | `{}` |
+| same as the blocked case, but `--no-verify` | `{}` |
+
+⚠️ Two inputs that both miss the target prove nothing about the target.
 
 ## 4 · Preflight
 
@@ -153,8 +187,19 @@ This is the machinery most likely to be silently dead, because nothing complains
    hook is not writing.
 2. Publish a handoff (`/handoff`, or whatever this kit binds). **PASS** = a new file appears in
    `handoffs/` **and** the notepad is committed and pushed.
-3. ⚠️ **Now the part that cannot be tested by looking:** run `/clear`, send any message, and check
-   whether restored context actually arrives — the notes file, the newest handoff, the journal.
+3. ⚠️ **OPERATOR STEP — an agent cannot run this one.** `/clear` is user-side, and invoking it
+would destroy the context needed to report the result. **Ask the operator to run it**, then send
+any message and check whether restored context actually arrives — the notes file, the newest
+handoff pointer, the journal.
+
+   **The agent's half** is the hook-level proxy, which it CAN run: invoke the SessionStart hook
+   directly with a notepad cwd and read what it emits.
+
+   ⚠️ **And know what each path guarantees, because they are not the same.** Compaction has a
+   MECHANICAL floor — a PreCompact hook writes state into the file that gets injected. `/clear`
+   has **no mechanism at all**: it relies entirely on the agent having refreshed the notes file
+   before clearing. So auto-compaction is safe; `/clear` is safe only if the convention was
+   followed.
 
 **Report whether the restored block appeared and what was in it.** If nothing is injected, the
 SessionStart hook is wired and not working, and every future session on this machine starts
@@ -173,23 +218,37 @@ worker that will invent ticket state.**
 ```
 
 ```sh
-# what a WORKER has — the question nobody asks
-claude -p 'List your available MCP tool namespaces. If you have none, reply exactly: NO MCP IN WORKER. Then stop.' 2>&1 | tail -20
+# what a WORKER has — the question nobody asks.
+# ⚠️ --setting-sources project AND --output-format json ARE BOTH LOAD-BEARING.
+# Without them this measures a CONTAMINATED shape: a Stop hook can emit, which means "not
+# finished", so an extra turn runs and ITS text becomes `result`. Measured 2026-09-04 — the first
+# two readings returned a completeness gate describing an answer that never appeared in the
+# output. It is the difference between "the dispatch path is broken" (alarming, wrong) and
+# "hand-rolled workers are contaminated" (true, actionable).
+# This also matches the scope a real supervisor dispatches in, so the probe measures the shape
+# workers actually run in.
+claude -p 'List your available MCP tool namespaces. If you have none, reply exactly: NO MCP IN WORKER. Then stop.' \
+  --setting-sources project --output-format json 2>&1 | tail -5
 ```
 
 **NO MCP IN WORKER is a correct and important finding, not a failed test.** It means every worker
 here must be handed **file-based inputs**, and any promise that depends on those tools has to be
 verified *inside* the worker before it is dispatched.
 
-Then one **bounded** dispatch, dry-run first:
+Then one **bounded** dispatch, rendered first.
 
-```sh
-WORKER_DRY_RUN=1 <the kit's dispatch script> dev <any-ticket-id> \
-  "Print the repo root and exit. Evidence: the verbatim path."
-```
+⚠️ **Ask for the kit's own prompt-render or dry-run path, whatever it is called — do not assume a
+variable name.** An earlier version of this document said `WORKER_DRY_RUN=1`, which exists in no
+engine in this method. **A task that hardcodes another kit's interface tests the reader's
+willingness to report absence, not the kit.** Find the real one and name it in your report.
 
-Report whether a prompt renders. **Do not run it for real** unless the dry run looks right, and
-dispatch **at most one** real worker — this costs money.
+Report whether a prompt renders, and whether the hard stops appear in it. **Do not dispatch for
+real** unless the render looks right.
+
+⚠️ **Bound this by BUDGET, not by count.** A previous run needed five workers where this document
+said "at most one" — the first two were contaminated (see the flags above) and the scoping
+question needed a control pair. Captured spend was about **$2.20**. The count is only knowable
+after you know whether the harness returns clean output; the budget is knowable up front.
 
 ## 7 · Subagents
 

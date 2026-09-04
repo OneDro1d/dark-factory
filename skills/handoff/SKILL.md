@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Publish a deliberate, structured Handoff document for the current objective into the active notepad and force a git push so it syncs across machines. Use when wrapping a session, handing to a teammate or fresh agent, hitting a milestone, or asked to "create a handoff", "write a handoff", "checkpoint for next session", "hand this off". Writes to <notepad>/handoffs/<date>-<topic>.md (NOT a temp dir), redacts secrets, references artifacts by path/URL, suggests next skills. In agent-notepad this is the on-demand Handoff tier — distinct from the continuous Notes tier (NOTES.md + journal) that hooks keep fresh automatically.
+description: Publish a deliberate, structured Handoff document for the current objective into the active notepad and force a git push so it syncs across machines. Use when wrapping a session, handing to a teammate or fresh agent, hitting a milestone, or asked to "create a handoff", "write a handoff", "checkpoint for next session", "hand this off". Writes to <notepad>/handoffs/<date>-<topic>.md (NOT a temp dir), redacts secrets, references artifacts by path/URL, suggests next skills. In agent-notepad this is the on-demand Handoff tier — distinct from the continuous Notes tier (NOTES.md + journal). WARNING - 'hooks keep it fresh' holds ONLY on the compaction path, where pre-compact.sh writes a delimited pc-floor block into NOTES.md. On /clear nothing does, because PreCompact never fires - so NOTES.md is whatever the agent last wrote, and it MUST be refreshed in the same commit as the handoff.
 ---
 
 # handoff — publish a deliberate Handoff doc into the notepad
@@ -32,6 +32,19 @@ checkpoint someone else (or a fresh you) will read cold → publish a Handoff.
    `df-context-store` findings) instead of duplicating their content.
 5. **Suggests next skills** the receiving agent should invoke.
 6. **Forces a `git push`** of the notepad (git add → commit → push, best-effort) so the
+
+7. ⚠️ **Update `NOTES.md` yourself, and commit it WITH the handoff.** Operator rule, 2026-07-29:
+   *"Commit the handoff together with the session's NOTES.md update and any deploy-evidence, so
+   the checkpoint is one coherent commit."*
+
+   ⛔ **This is not bookkeeping — it is the only thing that makes the handoff reachable.**
+   `session-start.sh` injects `NOTES.md`, `DIGEST.md` and `repos.manifest.json`; it does **not**
+   read `handoffs/`. A handoff published without a Notes update is invisible to every cold
+   session — and the restore that misses it looks completely healthy.
+
+   **MEASURED 2026-09-04:** a `/clear` restored a `NOTES.md` seven weeks stale while that day's
+   handoff went unread. Nothing errored; the restore banner appeared and looked fine.
+   ⚠️ **A healthy restore banner is not evidence the payload is current.**
    handoff is immediately available on other machines / to teammates.
 
 ## When to use
