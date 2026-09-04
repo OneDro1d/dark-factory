@@ -144,12 +144,27 @@ combined="$(
     if [ -n "$newest" ]; then
       _hb="$(wc -c < "$newest" 2>/dev/null | tr -d ' ')"
       _cap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-65536}"
-      printf '\n\n### ⛔ NEWEST HANDOFF — READ THIS FIRST, IT OUTRANKS THE NOTES ABOVE\n\n'
+      printf '\n\n### ⛔ NEWEST HANDOFF — READ THIS FIRST\n\n'
       printf '  file: %s\n' "$newest"
-      printf '  last modified: %s\n' "$(date -u -r "$newest" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
-      printf '\n  This is the deliberate checkpoint. It states where the work stands, the ONE\n'
-      printf '  next action, and what is blocked. If it disagrees with NOTES.md above, IT WINS -\n'
-      printf '  the Notes are a continuous stream and may predate it. Resume from here.\n\n'
+      printf '  handoff written : %s\n' "$(date -u -r "$newest" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+      # ⚠️ WHICH IS NEWER IS A FACT, NOT A PREFERENCE — so state it rather than asserting a
+      # blanket precedence. The first version of this block said the handoff always WINS. That
+      # is right when it is the later document and WRONG when the Notes have moved on since:
+      # it would trade the old misdirection (handoff never read) for a new one (a stale handoff
+      # overriding current Notes). A rule that is correct only half the time is the shape this
+      # whole fix exists to remove.
+      if [ -f "$np/NOTES.md" ]; then
+        printf '  NOTES.md written: %s\n' "$(date -u -r "$np/NOTES.md" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+        if [ "$newest" -nt "$np/NOTES.md" ]; then
+          printf '\n  THE HANDOFF IS NEWER THAN THE NOTES. Where they disagree, the handoff wins.\n'
+        else
+          printf '\n  The NOTES above are NEWER than this handoff. Where they disagree, prefer the\n'
+          printf '  Notes for current state — but this handoff still carries the mission framing,\n'
+          printf '  the artefact links and the blocked list, which the Notes may not restate.\n'
+        fi
+      fi
+      printf '\n  This is the deliberate checkpoint: where the work stands, the ONE next action,\n'
+      printf '  and what is blocked and on whom. Resume from it — do not re-derive it.\n\n'
       printf -- '---8<--- handoff begins ---8<---\n'
       if [ "${_hb:-0}" -gt "$_cap" ]; then
         head -c "$_cap" "$newest"

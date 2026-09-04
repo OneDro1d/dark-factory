@@ -197,6 +197,32 @@ test_newest_handoff_content_is_injected_not_just_named() {
   rm -rf "$(dirname "$np")"
 }
 
+# ⚠️ PRECEDENCE IS A FACT ABOUT TIMESTAMPS, NOT A CONSTANT. The first version of the fix said
+# the handoff always WINS. Correct when it is the later document, WRONG when the Notes moved on
+# since — which would trade "handoff never read" for "stale handoff overrides current Notes".
+# Both directions are asserted because a rule that is right half the time reads as right.
+test_handoff_precedence_follows_the_timestamps() {
+  local np out; np="$(_scaffold)"
+  mkdir -p "$np/handoffs"
+  printf '# Handoff\nPRECEDENCE_SENTINEL\n' > "$np/handoffs/2026-05-05-h.md"
+
+  # handoff NEWER than the notes
+  touch -t 202601010000 "$np/NOTES.md"
+  touch -t 202602020000 "$np/handoffs/2026-05-05-h.md"
+  out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+  assert_contains "$out" "HANDOFF IS NEWER" "says the handoff wins when it is newer"
+  assert_not_contains "$out" "are NEWER than this handoff" "does not also claim the reverse"
+
+  # notes NEWER than the handoff
+  touch -t 202603030000 "$np/NOTES.md"
+  out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+  assert_contains "$out" "are NEWER than this handoff" "says the Notes lead when they are newer"
+  assert_not_contains "$out" "HANDOFF IS NEWER" "does not also claim the reverse"
+  # ...and the handoff is STILL injected either way — precedence is not suppression.
+  assert_contains "$out" "PRECEDENCE_SENTINEL" "the handoff is injected even when the Notes lead"
+  rm -rf "$(dirname "$np")"
+}
+
 # A truncated handoff must never be mistakable for a whole one.
 test_oversized_handoff_announces_its_truncation() {
   local np out; np="$(_scaffold)"
