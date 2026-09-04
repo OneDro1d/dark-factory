@@ -149,7 +149,13 @@ test_payload_larger_than_argv_limit_still_restores() {
   printf '\nBIG_NOTES_TAIL_SENTINEL\n' >> "$np/NOTES.md"
   rm -f "$big"
 
-  out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+  # ⚠️ THE BUDGET IS RAISED FOR THIS CASE ON PURPOSE. A context budget was added 2026-09-05
+  # (the harness truncates at ~67 KB), and under the default this NOTES.md would be trimmed to
+  # 36 KB — so the payload would never REACH the argv ceiling and this case would quietly stop
+  # testing the thing it exists for, while still passing. A test that passes for a new reason
+  # is not the same test. Raising the budget keeps a >1 MB payload going through the encoder,
+  # which is the actual subject here.
+  out="$(AGENT_NOTEPAD_MAX_BYTES=99000000 AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
 
   # The tail proves the WHOLE payload survived, not merely that something was emitted.
   assert_contains "$out" "BIG_NOTES_TAIL_SENTINEL" \
@@ -264,6 +270,31 @@ test_oversized_handoff_announces_its_truncation() {
   assert_contains "$out" "HANDOFF_HEAD_SENTINEL" "the head of a capped handoff still arrives"
   assert_contains "$out" "TRUNCATED" "truncation is ANNOUNCED, never silent"
   assert_not_contains "$out" "HANDOFF_TAIL_SENTINEL" "the cap actually bit"
+  rm -rf "$(dirname "$np")"
+}
+
+# ⛔ THE BUDGET MUST BE EXPLICIT AND ANNOUNCED. The harness truncates at a hard cap
+# (`cache_read: 16841` tokens, identical across two probes of different orderings — which is
+# what makes it a cap rather than a coincidence). This hook was emitting 293 KB into it and
+# letting the HARNESS do the cutting, silently.
+#
+# ⚠️ That is the same undeclared-ceiling defect this file fixes twice already, one level up:
+# the reader cannot know what it did not receive. A hook that overflows in silence cannot tell
+# a session what is missing, so it must spend LESS than the cap and say where it stopped.
+test_budget_truncates_explicitly_and_says_so() {
+  local np out; np="$(_scaffold)"
+  awk 'BEGIN{ for(i=0;i<2000;i++) print "notes filler ......" }' >> "$np/NOTES.md"
+  printf '\nNOTES_TAIL_MUST_BE_CUT\n' >> "$np/NOTES.md"
+
+  out="$(AGENT_NOTEPAD_MAX_BYTES=4000 AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+
+  assert_contains "$out" "TRUNCATED at" "the cut is ANNOUNCED, not silent"
+  assert_not_contains "$out" "NOTES_TAIL_MUST_BE_CUT" "the budget actually bit"
+  assert_contains "$out" "NOTES_SENTINEL_ARBBOT" "the HEAD of NOTES.md still arrives"
+  # ⚠️ Small, bounded sections must survive a pathological NOTES.md — that is the whole point
+  # of emitting them first.
+  assert_contains "$out" "MANIFEST_SENTINEL" "a small section is not starved by a huge one"
+  assert_contains "$out" "DIGEST_SENTINEL" "DIGEST survives too"
   rm -rf "$(dirname "$np")"
 }
 
