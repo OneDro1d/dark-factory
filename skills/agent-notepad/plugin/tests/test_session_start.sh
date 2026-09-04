@@ -168,6 +168,51 @@ test_payload_larger_than_argv_limit_still_restores() {
   rm -rf "$(dirname "$np")"
 }
 
+# ⛔ THE REGRESSION THAT REACHED A REAL OPERATOR. The hook emitted the handoff's NAME plus
+# "read it IF NOTES.md does not already cover where the work stands". On a real /clear the
+# session read a complete-looking NOTES.md, resolved that condition as covered, never opened
+# the handoff, and told the operator "session start auto-loads NOTES.md, not the handoff file."
+#
+# ⚠️ A NAME IN THE PAYLOAD IS NOT DELIVERY, and the suite could not tell the difference because
+# nothing asserted on the handoff's CONTENT. Asserting the filename appeared would have PASSED
+# against the broken hook — the filename is precisely what it emitted.
+test_newest_handoff_content_is_injected_not_just_named() {
+  local np out; np="$(_scaffold)"
+  mkdir -p "$np/handoffs"
+  printf '# older handoff\nOLD_HANDOFF_SENTINEL should not be chosen\n' > "$np/handoffs/2026-01-01-older.md"
+  printf '# Handoff: the current mission\nHANDOFF_BODY_SENTINEL the one next action\n' > "$np/handoffs/2026-02-02-newest.md"
+  touch -t 202601010000 "$np/handoffs/2026-01-01-older.md"
+  touch -t 202602020000 "$np/handoffs/2026-02-02-newest.md"
+
+  out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+
+  assert_contains "$out" "HANDOFF_BODY_SENTINEL" \
+    "the newest handoff's CONTENT is injected, not merely named"
+  assert_not_contains "$out" "OLD_HANDOFF_SENTINEL" "only the NEWEST handoff is injected"
+  # ⚠️ The instruction must not be CONDITIONAL — the conditional is what a cold reader
+  # resolved as "covered". It has to outrank the Notes explicitly.
+  assert_contains "$out" "READ THIS FIRST" "the handoff is presented imperatively"
+  assert_eq "SessionStart" "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName')" \
+    "still valid dual-field JSON with a handoff attached"
+  rm -rf "$(dirname "$np")"
+}
+
+# A truncated handoff must never be mistakable for a whole one.
+test_oversized_handoff_announces_its_truncation() {
+  local np out; np="$(_scaffold)"
+  mkdir -p "$np/handoffs"
+  { printf '# Handoff\nHANDOFF_HEAD_SENTINEL\n'
+    awk 'BEGIN{ for(i=0;i<400;i++) print "filler line to exceed the handoff cap ......" }'
+    printf 'HANDOFF_TAIL_SENTINEL\n'; } > "$np/handoffs/2026-03-03-big.md"
+
+  out="$(AGENT_NOTEPAD_HANDOFF_MAX_BYTES=2048 AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+
+  assert_contains "$out" "HANDOFF_HEAD_SENTINEL" "the head of a capped handoff still arrives"
+  assert_contains "$out" "TRUNCATED" "truncation is ANNOUNCED, never silent"
+  assert_not_contains "$out" "HANDOFF_TAIL_SENTINEL" "the cap actually bit"
+  rm -rf "$(dirname "$np")"
+}
+
 test_outside_notepad_emits_empty_object() {
   local sb out; sb="$(mktemp -d)"
   out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$sb")"
