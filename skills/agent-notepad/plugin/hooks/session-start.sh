@@ -131,7 +131,9 @@ if [ -d "$np/handoffs" ]; then
   newest="$(ls -t "$np/handoffs"/*.md 2>/dev/null | head -1)"
   if [ -n "$newest" ]; then
     _hb="$(wc -c < "$newest" 2>/dev/null | tr -d ' ')"
-    _cap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-65536}"
+    # 24 KB, not 64: this cap and AGENT_NOTEPAD_MAX_BYTES are spent from the SAME harness
+    # budget (~67 KB), so two independently-reasonable limits must still sum below it.
+    _cap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-24576}"
     printf '\n\n### ⛔ NEWEST HANDOFF — READ THIS FIRST\n\n'
     printf '  file: %s\n' "$newest"
     printf '  handoff written : %s\n' "$(date -u -r "$newest" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
@@ -198,20 +200,62 @@ combined="$(
   # protects the handoff from that, but it does not fix it — the Notes still lose their own
   # tail. Graduation is still the real repair.
   _emit_handoff "$np"
-  if [ -f "$np/NOTES.md" ]; then
-    printf '\n### NOTES.md\n\n'
-    cat "$np/NOTES.md"
-  fi
-  if [ -f "$np/DIGEST.md" ]; then
-    printf '\n\n### DIGEST.md (cross-scope, derived)\n\n'
-    cat "$np/DIGEST.md"
-  fi
-  if [ -f "$np/repos.manifest.json" ]; then
-    printf '\n\n### repos.manifest.json (code repos in scope)\n\n'
-    printf '```json\n'
-    cat "$np/repos.manifest.json"
-    printf '\n```\n'
-  fi
+  # ⛔ BUDGET THE REST, AND ANNOUNCE EVERY CUT. MEASURED 2026-09-05.
+  #
+  # The harness truncates the payload at a HARD CAP — `cache_read: 16841` tokens, IDENTICAL
+  # across two probes with different payload orderings, which is what proves it is a cap and
+  # not a coincidence. This hook was emitting 293 KB into it.
+  #
+  # ⚠️ SO THE HARNESS WAS DOING THE TRUNCATING, SILENTLY. That is the same defect this file
+  # already fixes twice — an encoder with an undeclared ceiling — one level up, and it made
+  # reordering look like a fix when it was only a TRADE: putting the handoff first bought
+  # HANDOFF: YES and immediately cost NOTES: NO.
+  #
+  # Emitting less than the cap, deliberately, is the only way the reader learns what is
+  # missing. A hook that overflows silently cannot tell a session what it did not receive.
+  # ⚠️ THE TWO CAPS MUST ADD UP TO LESS THAN THE HARNESS CAP, or they overflow together and
+  # neither notices. The handoff cap defaults to 24 KB (handoffs here top out near 17 KB) and
+  # this budget to 36 KB: ~60 KB total against the ~67 KB the harness accepts. Two independent
+  # limits that each look reasonable alone are how a budget gets blown — the same shape as a
+  # glob that is not a superset of the name it derives from.
+  _budget="${AGENT_NOTEPAD_MAX_BYTES:-36000}"
+  _spent=0
+  _emit_bounded() {   # <path> <heading> [fence]
+    local f="$1" heading="$2" fence="${3:-}" sz left
+    [ -f "$f" ] || return 0
+    sz="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"; sz="${sz:-0}"
+    left=$(( _budget - _spent ))
+    if [ "$left" -le 512 ]; then
+      printf '\n\n### %s — OMITTED, the context budget was already spent\n' "$heading"
+      printf '  %s (%s bytes) was NOT injected. Read it yourself before assuming it is empty.\n' "$f" "$sz"
+      return 0
+    fi
+    printf '\n\n### %s\n\n' "$heading"
+    [ -n "$fence" ] && printf '```%s\n' "$fence"
+    if [ "$sz" -gt "$left" ]; then
+      head -c "$left" "$f"
+      printf '\n[TRUNCATED at %s of %s bytes — the rest of %s was NOT injected. This is a\n' "$left" "$sz" "$f"
+      printf 'PARTIAL document; open it before concluding anything is absent from it.]\n'
+      _spent="$_budget"
+    else
+      cat "$f"
+      _spent=$(( _spent + sz ))
+    fi
+    [ -n "$fence" ] && printf '```\n'
+    return 0
+  }
+  # ⚠️ SMALL-AND-BOUNDED BEFORE LARGE-AND-UNBOUNDED. DIGEST.md and repos.manifest.json are a
+  # few KB each and fixed in shape; NOTES.md is the one that grows without limit (286 KB here,
+  # against its own declared budget of 150 lines). Emitting NOTES second-to-last would starve
+  # both of them to save a tail nobody reads.
+  #
+  # ⚠️ NOTES.md is LAST on purpose and truncating it from the end is the right cut: its Current
+  # goal and Next action live at the TOP, so the first N KB is the operationally useful part.
+  # That is a property of the template, not a law — if that layout changes, this ordering has
+  # to be revisited rather than trusted.
+  _emit_bounded "$np/DIGEST.md"           "DIGEST.md (cross-scope, derived)"
+  _emit_bounded "$np/repos.manifest.json" "repos.manifest.json (code repos in scope)" json
+  _emit_bounded "$np/NOTES.md"            "NOTES.md"
 )"
 
 # --- emit the dual-field SessionStart JSON contract ------------------------
