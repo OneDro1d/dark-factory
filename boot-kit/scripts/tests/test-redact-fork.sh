@@ -91,9 +91,26 @@ SELFPATH="$HERE/$(basename "$0")"
 # that pattern does not match, and tier-check caught it in CI after this test had passed.
 # **A sweep written around one spelling misses the others.** Markdown is included for the same
 # reason: the reference lived in a .md file the original --include list excluded.
-DANGLING="$(grep -rlnE 'skills/handoff-auto|\.\./handoff-auto|\[`?handoff-auto`?\]' "$ROOT" \
-  --include='*.sh' --include='*.py' --include='*.json' --include='*.md' 2>/dev/null \
-  | grep -v '\.git/' | grep -vF "$SELFPATH" || true)"
+# ⚠️ MATCH THE DEFECT CLASS, NOT THE TOKEN — the third correction to this one line.
+# Narrow (`skills/handoff-auto` only) it MISSED a real reference and tier-check caught it in CI.
+# Wide (any mention) it flagged test-undeclare-uninstalls.sh, whose header DOCUMENTS the
+# retirement — a file explaining why the skill is gone, failed for saying its name.
+# **A checker that searches for a string flags every file that discusses that string.**
+#
+# What actually breaks is a reference that would RESOLVE to the deleted directory: code naming
+# the path, or a markdown LINK / BACKTICKED name (exactly what tier-check.py flags). A sentence
+# in a comment resolves to nothing. So comments are stripped from code, and markdown must show
+# link or backtick syntax rather than the bare word.
+DANGLING=""
+for f in $(grep -rl 'handoff-auto' "$ROOT" --include='*.sh' --include='*.py' --include='*.json' --include='*.md' 2>/dev/null | grep -v '\.git/' | grep -vF "$SELFPATH"); do
+  case "$f" in
+    *.md)
+      grep -qE '\]\([^)]*handoff-auto|`handoff-auto`' "$f" 2>/dev/null && DANGLING="$DANGLING $f" ;;
+    *)
+      grep -v '^[[:space:]]*#' "$f" 2>/dev/null | grep -q 'skills/handoff-auto' && DANGLING="$DANGLING $f" ;;
+  esac
+done
+DANGLING="${DANGLING# }"
 if [ -z "$DANGLING" ]; then
   ok "no path reference to skills/handoff-auto remains"
 else
