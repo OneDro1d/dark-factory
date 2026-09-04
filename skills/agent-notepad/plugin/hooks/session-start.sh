@@ -75,6 +75,35 @@ combined="$(
     printf '\n\n### DIGEST.md (cross-scope, derived)\n\n'
     cat "$np/DIGEST.md"
   fi
+  # ⚠️ A POINTER TO THE NEWEST HANDOFF — never the document itself.
+  # The deliberate tier was WRITE-ONLY: this hook injected NOTES.md, DIGEST.md and
+  # repos.manifest.json and never looked at handoffs/, while skills/handoff/SKILL.md defines a
+  # handoff as "the SINGLE ENTRY POINT for a cold session ... the only document a fresh session
+  # has to read". Two halves of one skill disagreeing, and the failure is SILENT: the restore
+  # fires, looks healthy, and orients the session to whatever NOTES.md last said. MEASURED
+  # 2026-09-04 - a /clear restored Notes seven weeks stale while the handoff from that same
+  # day went unread. NOTE: no apostrophes in these comments - this block is inside a
+  # command substitution, where bash tracks quote state while scanning for the closing
+  # paren, so a lone single-quote character in a COMMENT opens a quote that never closes.
+  # (This warning is spelled out in words on purpose: the first version of it contained
+  # the character it warns about, and broke the file a second time.)
+  #
+  # ⚠️ THE NAME, NOT THE CONTENT. This hook runs on every session start and already cats three
+  # files; this estate has a live ticket about a 255 KB NOTES.md costing ~65k tokens of boot.
+  # Injecting handoffs would recreate that cost in a new place. A filename and a date are enough
+  # for the session to decide whether to open it.
+  if [ -d "$np/handoffs" ]; then
+    newest="$(ls -t "$np/handoffs"/*.md 2>/dev/null | head -1)"
+    if [ -n "$newest" ]; then
+      printf '\n\n### newest handoff (POINTER — not injected)\n\n'
+      printf '  %s\n' "$newest"
+      printf '  last modified: %s\n' "$(date -u -r "$newest" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+      printf '\n  Read it if NOTES.md above does not already cover where the work stands.\n'
+      printf '  WARNING - a handoff is NOT auto-read. If NOTES.md is older than this file,\n'
+      printf '  the Notes were not refreshed with the handoff and THIS pointer is your only\n'
+      printf '  route to the current state.\n'
+    fi
+  fi
   if [ -f "$np/repos.manifest.json" ]; then
     printf '\n\n### repos.manifest.json (code repos in scope)\n\n'
     printf '```json\n'

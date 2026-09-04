@@ -131,6 +131,35 @@ def main():
     #
     # `stop_hook_active` is true exactly when this hook is firing BECAUSE a previous Stop hook
     # blocked. The contract is: return success, emit nothing, let the turn end.
+    # ⛔ HEADLESS RUNS: RELEASE. A Stop hook that emits anything means "not finished", so the
+    # model takes another turn and THAT turn's text becomes the run's `result`. Interactively
+    # that is the whole point — a human reads the prompt and acts on it. In `claude -p` there is
+    # nobody to read it, and the only effect is that the worker's ANSWER is replaced by prose
+    # about completeness. Promise-Theory dispatch reads that field as evidence.
+    #
+    # MEASURED 2026-09-04 (ESO kit-validation run):
+    #   claude -p 'Reply with exactly this and nothing else: MARKER-9F3A-OK'
+    #     -> result = "Nothing outstanding. The turn was a single instruction…"
+    #   ...the same prompt with --setting-sources project (user hooks not loaded)
+    #     -> result = "MARKER-9F3A-OK"
+    #
+    # ⚠️ THE DISCRIMINATOR IS MEASURED, NOT GUESSED. The filed patch proposed "cli-print" and
+    # flagged it as unverified. Dumping the environment inside a real headless run:
+    #     interactive   CLAUDE_CODE_ENTRYPOINT = cli
+    #     headless -p   CLAUDE_CODE_ENTRYPOINT = sdk-cli
+    # "cli-print" occurs nowhere, so the patch as filed would have been INERT — correct-looking,
+    # shipped, and changing nothing.
+    #
+    # ⚠️ `sys.stdin.isatty()` is NOT a discriminator here and is deliberately not used: it is
+    # false in BOTH cases, because a Stop hook always receives its event as JSON on stdin.
+    # Including it would read like a second safeguard while contributing nothing.
+    #
+    # ⚠️ FAILS SAFE. This is a POSITIVE test for a headless run; an unknown or absent value keeps
+    # the gate. If the harness renames this value the gate becomes too talkative in workers again
+    # — the defect being fixed — rather than silently switching off where a human relies on it.
+    if os.environ.get("CLAUDE_CODE_ENTRYPOINT") == "sdk-cli":
+        return 0
+
     if stop_hook_active:
         return
 
