@@ -62,6 +62,17 @@ proj-arbbot/
 - **SessionStart** — best-effort `git pull`, then FILE-READS-ONLY inject `NOTES.md` +
   `DIGEST.md` + `repos.manifest.json` (~1–3 s). Outside a notepad, degrades to
   handoff-auto behavior.
+  **The payload has no size ceiling, and this is load-bearing.** It is piped to `jq -Rs`,
+  never passed as an argv element. Until 2026-09-04 it used `jq -n --arg`, and Linux caps
+  one argv element at 128 KB (`MAX_ARG_STRLEN`) while macOS caps only the ~1 MB total — so
+  a 259 KB `NOTES.md` restored fine on the maintainer's laptop and **injected zero bytes on
+  every Linux box in the fleet**, with the hook still exiting 0.
+  ⚠️ **A restore that emits nothing is indistinguishable from a notepad with nothing to
+  say.** That is why the encode failure path now injects a WARNING naming `NOTES.md` and
+  `DIGEST.md` instead of staying silent: the hook contract is *exit 0 always*, so the
+  payload is the only channel that reaches the session — stderr is read by nobody.
+  ⚠️ **Do not "fix" a large `NOTES.md` by capping the payload here.** Bloat is a real and
+  separate problem; capping would restore the silent-truncation failure this removed.
 - **Stop** — append deterministic journal entries (files touched, commands, a stop
   marker), upsert `sessions/index.json`, **mirror the journal into the memory index**,
   best-effort `git push`.
@@ -107,6 +118,26 @@ and re-wire handoff-auto. As a Claude Code plugin, the four Notes hooks are decl
 Ephemeral task progress → `NOTES.md`. Durable + code-anchored + single-repo → that repo's
 `FINDINGS`/`DECISIONS`. Cross-scope episodic (same prefix) → the memory index (mirror +
 digest). Deliberate handoff → `handoffs/` + remote. Distilled/canonical → the curated store.
+
+### Publishing a handoff commits the POINTER with the DOCUMENT
+
+`lib/publish-handoff.sh` stages `NOTES.md` and `DIGEST.md` alongside the handoff file, so
+the refreshed Notes land in the same commit. This is not tidiness. SessionStart injects
+`NOTES.md` and only a **pointer** to the newest handoff — so a cold reader told the Notes
+are current has no reason to open the handoff at all. Committing the document without the
+pointer keeps the artifact and loses the only route to it, which is exactly what this tier
+exists to prevent. Measured twice on 2026-09-04, on two machines, as ` M NOTES.md` left in
+the working tree after the publisher had exited 0.
+
+⚠️ **It stages those two files and nothing else — deliberately not `add -A`.** A notepad
+also holds a manifest, a charter and session journals that other machinery writes on its
+own schedule; sweeping them in publishes a half-written record from a different tier under
+this one's commit message.
+
+⚠️ **The commit is not best-effort; only the push is.** A flaky remote must not block a
+local checkpoint, but a *rejected commit* reported as success loses the checkpoint
+entirely — so a non-zero commit (other than "nothing to commit") is surfaced and returns
+non-zero.
 
 ## Relationship to handoff-auto
 
