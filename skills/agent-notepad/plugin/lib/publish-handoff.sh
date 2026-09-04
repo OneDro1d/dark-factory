@@ -76,6 +76,29 @@ publish_handoff() { # NOTEPAD_ROOT TOPIC [BODY_FILE]
   local plog="${AGENT_NOTEPAD_PUSH_LOG:-}"
   git -C "$root" add "handoffs/${date_stamp}-${slug}.md" >/dev/null 2>&1 || true
 
+  # ⛔ STAGE THE POINTER WITH THE DOCUMENT. The handoff skill's step 7 requires NOTES.md to
+  # be refreshed IN THE SAME COMMIT, and this function used to stage only the handoff — so
+  # the refreshed NOTES.md sat unstaged, the commit succeeded, and the publisher reported
+  # success over a handoff that the next cold session had no route to.
+  #
+  # ⚠️ NOTES.md is what makes a handoff REACHABLE. The SessionStart restore injects NOTES.md
+  # and only a POINTER to the newest handoff; a reader who is told the Notes are current has
+  # no reason to open the handoff at all. Committing the document without the pointer keeps
+  # the artifact and loses the thing that leads anyone to it.
+  #
+  # Measured twice on 2026-09-04 — on the laptop and again on the Poland Coder, where
+  # `git status` showed ` M NOTES.md` after this function had exited 0.
+  #
+  # ⚠️ Deliberately NOT `add -A`. This stages the two files this tier owns and nothing else:
+  # a notepad also holds a manifest, a scope charter and session journals that other
+  # machinery writes on its own schedule, and sweeping them into a handoff commit is how a
+  # half-written record from a different tier gets published under this one's message.
+  # DIGEST.md is included because SessionStart injects it beside NOTES.md — same tier, same
+  # reachability argument.
+  for _f in NOTES.md DIGEST.md; do
+    [ -f "$root/$_f" ] && git -C "$root" add "$_f" >/dev/null 2>&1 || true
+  done
+
   # ⛔ THE COMMIT IS NOT BEST-EFFORT. Measured 2026-09-04: this function printed the path and
   # exited 0 having committed NOTHING — a pre-commit gate had refused, and `>/dev/null 2>&1 ||
   # true` swallowed both the message and the exit code. The handoff sat staged, NOTES.md sat

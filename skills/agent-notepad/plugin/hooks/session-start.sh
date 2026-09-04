@@ -144,7 +144,54 @@ combined="$(
 
 # --- emit the dual-field SessionStart JSON contract ------------------------
 # jq safely encodes the payload (newlines, quotes, backticks).
-jq -n --arg ctx "$combined" \
-  '{systemMessage:$ctx, hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:$ctx}}'
+#
+# ⛔ NEVER PASS THE PAYLOAD AS AN ARGV ELEMENT. This line used to be
+#     jq -n --arg ctx "$combined"
+# and it is DEAD ON LINUX. Linux caps ONE argv element at 128 KB (MAX_ARG_STRLEN,
+# 32 pages — a compile-time kernel constant, with no ulimit that raises it); macOS has
+# no per-argument cap at all, only a ~1 MB total. So the same NOTES.md that restores
+# fine on the maintainer's laptop kills jq on every Coder box and every Linux
+# workstation in the fleet:
+#
+#   session-start.sh: line 147: /usr/bin/jq: Argument list too long
+#   exit=0  bytes=109
+#
+# ⚠️ AND THE HOOK STILL EXITED 0. Measured on the Poland Coder 2026-09-04 against a
+# 259 KB NOTES.md: every session on that machine had been starting with ZERO restored
+# context, no error the operator would ever see, and a boot block that looked healthy
+# because the STATIC context loaded normally. The PreCompact floor kept writing into
+# NOTES.md while the injection half silently never delivered it. **A restore that emits
+# nothing is indistinguishable from a notepad with nothing to say** — which is why this
+# survived an unknown number of sessions until a validation run went looking for it.
+#
+# ⚠️ Capping the payload is NOT the fix and must not be mistaken for one. A 259 KB
+# NOTES.md is a real and separate problem (this estate has a live ticket for it); the
+# defect HERE is that the encoder had a hard ceiling it never declared, and crossed it
+# in silence. Fixing the size would have hidden this, not repaired it.
+#
+# `-R` (raw input) + `-s` (slurp) reads the WHOLE of stdin as one JSON string. A pipe has
+# no size limit, and `printf` is a bash builtin — so "$combined" never crosses an execve
+# boundary at all, at any size.
+_json="$(printf '%s' "$combined" | jq -Rs \
+  '{systemMessage:., hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:.}}')"
+_rc=$?
+
+if [ "$_rc" -eq 0 ] && [ -n "$_json" ]; then
+  printf '%s\n' "$_json"
+else
+  # ⛔ THE ENCODE FAILED — SAY SO IN THE PAYLOAD. DO NOT EMIT NOTHING.
+  # This branch is the whole lesson of the bug above. The contract is "exit 0 always", so
+  # the payload is the ONLY channel that reaches the session; anything written to stderr
+  # is read by nobody. A silent empty restore trains the reader to conclude there was no
+  # prior state. Naming the paths costs a few hundred bytes and turns an invisible
+  # failure into a recoverable one.
+  # This message is short and fixed-size, so --arg is safe HERE and nowhere above.
+  jq -n --arg p "$np" '{
+    systemMessage: ("⛔ agent-notepad: the SessionStart restore FAILED TO ENCODE and injected NOTHING. This is NOT an empty notepad. Read " + $p + "/NOTES.md and " + $p + "/DIGEST.md yourself before assuming there is no prior state."),
+    hookSpecificOutput: {hookEventName:"SessionStart",
+      additionalContext: ("⛔ agent-notepad restore FAILED to encode — nothing was injected. Read " + $p + "/NOTES.md manually; do not treat this session as one with no prior state.")}
+  }' 2>/dev/null \
+    || printf '{"systemMessage":"agent-notepad: SessionStart restore FAILED to encode and injected nothing. Read the notepad NOTES.md manually."}\n'
+fi
 
 exit 0

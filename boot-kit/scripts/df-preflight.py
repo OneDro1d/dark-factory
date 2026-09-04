@@ -870,7 +870,7 @@ def expand_env(value):
     return re.sub(r"\$\{(\w+)\}|\$(\w+)", sub, value or ""), missing
 
 
-def probe_mcp(profile=None, scope=None):
+def probe_mcp(profile=None, scope=None, notes=None):
     """Bearer tokens expire. A header that exists proves nothing; a tools/list does.
 
     Never prints the token -- only the env var NAME it came from, and the transport
@@ -887,8 +887,24 @@ def probe_mcp(profile=None, scope=None):
     if not servers:
         return [finding("mcp", "mcpServers", "drift", "no MCP servers configured in %s" % cfg_path)]
 
+    # A DENOMINATOR THAT SHRINKS IN SILENCE IS A LIE THE REPORT TELLS BY OMISSION.
+    # `--profile onedroid` skips every hub whose name lacks that prefix. That filtering is
+    # correct -- an instance should not be judged on hubs it does not bind -- but it used to
+    # be a bare `continue`, so the skipped hubs left no trace at all and `ok=25` read as
+    # "25 of 25 probed" when it was "25 of 27, and I will not say which two".
+    #
+    # This is the same class as `unknown`: NOT PROBED is not a fact about the world. The
+    # repo path already had this right (`excluded by instance scope` is emitted as a real
+    # finding); the MCP path did not, and the gap produced two validation runs that
+    # DISAGREED about whether the shrink was reported -- 2026-09-04, Poland read it as
+    # "printed as excluded", the laptop as "silently shrinks". The laptop was right.
+    #
+    # A note, not a finding: these hubs are correctly out of scope, so they must not move
+    # the ok/drift/unknown counts. The reader just has to be able to SEE the filter ran.
+    skipped_by_profile = []
     for name, s in sorted(servers.items()):
         if profile and not name.startswith(profile):
+            skipped_by_profile.append(name)
             continue
         url = s.get("url")
         auth = (s.get("headers") or {}).get("Authorization")
@@ -936,6 +952,11 @@ def probe_mcp(profile=None, scope=None):
     # engine does not hardcode. A profile-specific wrapper that DOES know its estate names
     # can add that advisory on top of these per-server findings; the shared engine only
     # reports what it can observe about the servers actually configured.
+    if skipped_by_profile is not None and notes is not None and skipped_by_profile:
+        notes.append("MCP probes restricted to --profile %r: %d hub(s) NOT probed and NOT "
+                     "counted — %s. Correctly out of scope; named here so the denominator "
+                     "is never smaller than it looks."
+                     % (profile, len(skipped_by_profile), ", ".join(skipped_by_profile)))
     return out
 
 
@@ -994,7 +1015,7 @@ def build_report(profile):
     findings += probe_cloud()
     findings += probe_repos(manifest, lock, probed, scope)
     findings += probe_layout(lock)
-    findings += probe_mcp(profile, scope)
+    findings += probe_mcp(profile, scope, notes)
 
     drift = [f for f in findings if f["verdict"] == "drift"]
     unknown = [f for f in findings if f["verdict"] == "unknown"]
