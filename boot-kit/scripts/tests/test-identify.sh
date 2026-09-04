@@ -286,6 +286,46 @@ absent   "F: does not name the other one"   "instances/a" "$O"
 # ⚠️ NO AUTO-SELECT. Reporting a candidate is help; acting on it is the defect.
 absent   "F: does not install anything"     "install"     "$O"
 
+echo "=== K: --match sees the REPO-ROOT record, not just instances/* ==="
+# ⛔ The candidate set is "the repo root + instances/*", which is what df-preflight has always
+# documented. --match scanned instances/* alone, so on a repo whose OWN machine is recorded at
+# the root — the documented layout, not an accident — it answered "no declared instance matches
+# this machine". A FALSE NEGATIVE ON IDENTITY, from the tool whose whole job is identity, and a
+# reader following START-HERE would conclude their machine is undeclared and mint a duplicate.
+# Measured 2026-09-04 on the laptop, whose root record carries a fully measured install.identity.
+#
+# ⚠️ THE ROOT RECORD GETS ITS OWN DEPLOYMENT, AND THAT IS THE WHOLE TEST.
+# The first version of this case wrote the AWS record to the root and probed with the AWS
+# identity, then asserted the output contained "loom.lock.json". It PASSED AGAINST THE
+# PRE-FIX CODE — because instances/a holds that same record, so the old scan matched THAT
+# and printed a path ending in the same filename. An inert test that reads as coverage.
+# A third, unique deployment makes the root record the ONLY thing that can match, so the
+# assertion can no longer be satisfied from instances/.
+ROOT_REC='{"instance":"the-root-machine","install":{"identity":{"deployment":"https://coder.cloud-root.example/","workspace":"Loom"}}}'
+printf '%s\n' "$ROOT_REC" > "$T/loom.lock.json"
+O="$(CODER=true CODER_AGENT_URL=https://coder.cloud-root.example/ CODER_WORKSPACE_NAME=Loom bash "$ID" --match "$T/instances" 2>&1)"
+# ⚠️ ASSERT ON "A RECORD MATCHED", NOT ON THE PATH STRING. The first attempt compared against
+# "$T/loom.lock.json" and failed against the FIXED code too: $TMPDIR ends in a slash so $T
+# carries a doubled one, and the tool prints the `pwd -P` form, which also resolves
+# /var -> /private/var on macOS. Three spellings of one path, and the test was measuring the
+# spelling rather than the behaviour. `absent instances/` below already proves WHICH record
+# it was, so the path text buys nothing and costs a false failure.
+contains "K: the ROOT record is found when scanning instances/" "MATCHES:" "$O"
+absent   "K: and it is NOT reported as unmatched"               "no declared instance matches" "$O"
+absent   "K: no instances/ record is claimed to match"          "instances/" "$O"
+
+# ⚠️ DEDUPE BY REAL PATH. `instances/../loom.lock.json` and `loom.lock.json` are one file;
+# counting it twice turns one machine into "2 records match" — which reads as exactly the
+# ambiguity this check exists to DETECT, so the bug would masquerade as a finding.
+# ⚠️ Honest note: this assertion does NOT discriminate against the pre-fix code (which had
+# nothing to dedupe). It guards the fix from regressing, and is recorded as that, not as
+# evidence the bug existed.
+O="$(CODER=true CODER_AGENT_URL=https://coder.cloud-root.example/ CODER_WORKSPACE_NAME=Loom bash "$ID" --match "$T" 2>&1)"
+HITS="$(printf '%s\n' "$O" | grep -c 'MATCHES:')"
+if [ "$HITS" = "1" ]; then ok "K: the root record is counted ONCE when \$DIR is the root"
+else bad "K: the root record is counted ONCE when \$DIR is the root" "got $HITS MATCHES lines"; fi
+rm -f "$T/loom.lock.json"
+
 echo "=== G: no match is reported as a LIMIT, not as proof ==="
 O="$(CODER=true CODER_AGENT_URL=https://nowhere/ CODER_WORKSPACE_NAME=ghost bash "$ID" --match "$T/instances" 2>&1)"
 contains "G: says nothing matched"          "no declared instance matches" "$O"

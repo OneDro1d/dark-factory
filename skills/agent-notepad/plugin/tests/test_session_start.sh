@@ -83,6 +83,47 @@ test_digest_absent_still_injects() {
   rm -rf "$(dirname "$np")"
 }
 
+# ⛔ THE ENCODE-FAILURE BRANCH MUST ITSELF BE EXERCISED.
+#
+# The whole lesson of the argv bug is that a hook which exits 0 has exactly one channel to the
+# session — its payload — so a failure that emits nothing is invisible. The fix added a branch
+# that emits a WARNING instead. An UNTESTED fallback is the same defect one level down: it
+# would be discovered only by the failure it exists to report.
+#
+# jq is stubbed to fail ONLY on the slurp form, leaving the short fixed-size `--arg` call in
+# the fallback working — which is the realistic shape (that call is bounded and cannot hit the
+# ceiling). PATH is prepended for this one invocation only.
+test_encode_failure_warns_instead_of_emitting_nothing() {
+  local np out stub; np="$(_scaffold)"
+  stub="$(mktemp -d)"
+  cat > "$stub/jq" <<'STUB'
+#!/usr/bin/env bash
+for a in "$@"; do
+  if [ "$a" = "-Rs" ]; then
+    echo "stub: simulated encode failure" >&2
+    exit 5
+  fi
+done
+exec /usr/bin/env -i PATH=/usr/bin:/bin:/usr/local/bin jq "$@"
+STUB
+  chmod +x "$stub/jq"
+
+  out="$(PATH="$stub:$PATH" AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+
+  # ⚠️ NOT NOTHING. This is the assertion the original bug would have failed.
+  if [ -n "$out" ]; then _pass; else _fail "encode failure still emits a payload"; fi
+  ASSERT_CASES=$((ASSERT_CASES + 1))
+
+  assert_contains "$out" "FAILED TO ENCODE" "the failure is NAMED in the payload"
+  assert_contains "$out" "$np/NOTES.md" "and it names the file the reader must open"
+  # ⚠️ Must still be a parseable hook payload: a malformed one is discarded whole, which
+  # would put us straight back to injecting nothing.
+  assert_eq "SessionStart" "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName' 2>/dev/null)" \
+    "the warning is still valid dual-field SessionStart JSON"
+
+  rm -rf "$stub" "$(dirname "$np")"
+}
+
 # ⛔ THE REGRESSION TEST THIS SUITE DID NOT HAVE, AND THE REASON THE BUG SHIPPED.
 #
 # Every case above uses a sentinel notepad of a few hundred bytes. The hook encoded its
