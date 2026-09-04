@@ -42,20 +42,41 @@ _bounded_pull() {
   case "$secs" in ''|*[!0-9]*) secs=3 ;; esac
   # only attempt a pull if at least one remote is configured
   git -C "$dir" remote 2>/dev/null | grep -q . || return 0
+  # ⚠️ BEST-EFFORT, BUT NOT SILENT. A failed pull leaves the session reading STALE Notes while the
+  # restore banner looks perfectly healthy — the exact shape of the 2026-09-04 finding where a
+  # /clear restored a document seven weeks old and nothing errored.
+  #
+  # ⛔ AND THE COMMON CAUSE IS MUNDANE: `--ff-only` REFUSES ON A DIRTY TREE, and this notepad's own
+  # Stop hook writes sessions/index.json. Measured on a Coder box the same day: its pull had been
+  # failing for a full round, so it installed a stale pin and reported success. A machine whose
+  # journal has uncommitted entries fails this pull FOREVER, quietly.
+  #
+  # The failure is recorded and surfaced in the injected payload — where a reader can act on it —
+  # rather than written to /dev/null. Still non-blocking, still time-boxed, still returns 0.
+  PULL_NOTE=""
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$secs" git -C "$dir" pull --ff-only >/dev/null 2>&1 || true
+    PULL_ERR="$(timeout "$secs" git -C "$dir" pull --ff-only 2>&1)" || PULL_NOTE="$PULL_ERR"
   elif command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$secs" git -C "$dir" pull --ff-only >/dev/null 2>&1 || true
+    PULL_ERR="$(gtimeout "$secs" git -C "$dir" pull --ff-only 2>&1)" || PULL_NOTE="$PULL_ERR"
   else
-    # portable watchdog: background the pull, kill it if it overruns the budget
-    ( git -C "$dir" pull --ff-only >/dev/null 2>&1 ) &
+    # portable watchdog: background the pull, kill it if it overruns the budget.
+    # ⚠️ THIS IS THE LIVE BRANCH ON macOS — neither `timeout` nor `gtimeout` ships there, so this
+    # fallback is what actually runs on every Mac. An earlier fix surfaced pull failures in the
+    # other two branches and left this one writing to /dev/null, which meant the fix was inert
+    # exactly where it was being tested. Keep all three in step.
+    _pull_err="$(mktemp)"
+    ( git -C "$dir" pull --ff-only >"$_pull_err" 2>&1 ) &
     local pid=$! i=0 lim=$((secs * 10))
     while kill -0 "$pid" 2>/dev/null; do
       i=$((i + 1))
       if [ "$i" -ge "$lim" ]; then kill "$pid" 2>/dev/null; break; fi
       sleep 0.1
     done
-    wait "$pid" 2>/dev/null || true
+    if ! wait "$pid" 2>/dev/null; then
+      PULL_NOTE="$(head -5 "$_pull_err" 2>/dev/null)"
+      [ -n "$PULL_NOTE" ] || PULL_NOTE="pull did not complete within ${secs}s"
+    fi
+    rm -f "$_pull_err"
   fi
   return 0
 }
@@ -67,6 +88,15 @@ combined="$(
   printf '## agent-notepad — restored working memory (%s)\n' "$name"
   printf 'Objective-scoped working memory, auto-loaded on session start. Resume from '
   printf 'this instead of re-deriving state.\n'
+  # ⚠️ SAY SO BEFORE THE NOTES, not after. If the auto-pull failed, everything below may be stale
+  # and the reader needs to know that BEFORE reading it as current state.
+  if [ -n "${PULL_NOTE:-}" ]; then
+    printf '\n### WARNING - the notepad auto-pull FAILED; what follows may be STALE\n\n'
+    printf '%s\n' "$PULL_NOTE" | head -5
+    printf '\nA common cause is a dirty tree: --ff-only refuses when the journal has uncommitted\n'
+    printf 'entries, and this notepad writes sessions/index.json itself. Commit them, then pull.\n'
+    printf 'Until then every session starts on whatever these Notes last said.\n'
+  fi
   if [ -f "$np/NOTES.md" ]; then
     printf '\n### NOTES.md\n\n'
     cat "$np/NOTES.md"
