@@ -36,6 +36,12 @@ import os
 import sys
 import time
 
+# Cap the injected handoff. Bounded because an unbounded read is how the SessionStart argv
+# defect got in; the cap ANNOUNCES itself when it bites, so a partial handoff can never be
+# mistaken for a whole one. Handoffs on this estate top out around 17 KB, so this is headroom,
+# not a squeeze.
+MAX_HANDOFF_BYTES = int(os.environ.get("HANDOFF_MAX_BYTES") or 65536)
+
 # Sources that mean "this session has no prior context in the window".
 # `resume` is deliberately absent: the context is still there, so a pointer is noise.
 COLD_SOURCES = ("clear", "startup", "compact")
@@ -142,17 +148,66 @@ def main():
             )
         return
 
-    emit(
-        "## READ THIS FIRST -- the deliberate handoff\n\n"
+    # ⛔ INJECT THE CONTENT. THIS HOOK USED TO EMIT THE PATH AND SAY "read it before acting".
+    #
+    # MEASURED 2026-09-04 on a real /clear, and again mechanically with `claude -p`: the session
+    # answered "session start auto-loads NOTES.md, not the handoff file" and carried on without
+    # the mission. A hook cannot make a model open a file. It can only put text in the context,
+    # so a PATH is a request and CONTENT is delivery -- and a request competes with everything
+    # else in a large payload.
+    #
+    # ⚠️ WORSE, TWO HOOKS WERE ANSWERING THE SAME QUESTION DIFFERENTLY. agent-notepad's
+    # session-start.sh injects the handoff body; this one emitted a pointer, and both opened with
+    # "READ THIS FIRST". The model believed the pointer and reported the handoff absent WHILE THE
+    # BODY WAS ALSO IN ITS CONTEXT. One artifact, two homes, and the halves disagreed.
+    #
+    # The de-duplication is deliberate and is why this reads a marker rather than just injecting:
+    # inside an agent-notepad, that hook OWNS the handoff and this one must stay silent. Emitting
+    # both would put the same 17 KB in twice and reintroduce the contradiction the moment the two
+    # texts drift apart again.
+    notepad_hook = os.path.join(
+        os.path.expanduser("~"), ".claude", "hooks", "agent-notepad", "hooks", "session-start.sh"
+    )
+    if os.path.isfile(notepad_hook):
+        try:
+            with open(notepad_hook, encoding="utf-8", errors="replace") as fh:
+                owns_handoff = "NEWEST HANDOFF" in fh.read()
+        except Exception:
+            owns_handoff = False
+        if owns_handoff:
+            return      # agent-notepad injects it. Silence here is the de-duplication.
+
+    try:
+        with open(handoff, encoding="utf-8", errors="replace") as fh:
+            body = fh.read(MAX_HANDOFF_BYTES + 1)
+    except Exception as e:
+        # ⚠️ Falling back to the PATH is correct ONLY here, where the content is genuinely
+        # unavailable -- and it says so, rather than presenting a request as a delivery.
+        emit("## READ THIS FIRST -- the deliberate handoff\n\n    " + handoff + "\n\n"
+             "Its content could NOT be read (" + str(e) + "), so this is a path, not the "
+             "document. Open it before acting.")
+        return
+
+    truncated = len(body) > MAX_HANDOFF_BYTES
+    if truncated:
+        body = body[:MAX_HANDOFF_BYTES]
+
+    msg = (
+        "## READ THIS FIRST -- the deliberate handoff (full text below)\n\n"
         "    " + handoff + "\n\n"
         "This session began from '" + (source or "unknown") + "', so it carries no prior "
-        "context. That file is the ENTRY POINT: where the work stands, the ONE next action, "
-        "links to every artefact touched, and what is blocked and on whom. **Read it before "
-        "acting.** It points at everything else -- follow its links rather than exploring.\n\n"
+        "context. This is the ENTRY POINT: where the work stands, the ONE next action, links to "
+        "every artefact touched, and what is blocked and on whom. Resume from it -- do not "
+        "re-derive it, and do not re-explore what it already links.\n\n"
         "WARNING: if it is stale or describes different work, say so and fall back to NOTES.md "
         "and the mission's own MISSION.md. A handoff that does not orient you is a finding "
-        "about the session that wrote it, not a reason to guess."
+        "about the session that wrote it, not a reason to guess.\n\n"
+        "---8<--- handoff begins ---8<---\n" + body
     )
+    msg += ("\n---8<--- TRUNCATED at %d bytes. THIS IS NOT THE WHOLE HANDOFF -- open %s "
+            "for the rest. ---8<---\n" % (MAX_HANDOFF_BYTES, handoff)) if truncated \
+        else "\n---8<--- handoff ends ---8<---\n"
+    emit(msg)
 
 
 if __name__ == "__main__":
