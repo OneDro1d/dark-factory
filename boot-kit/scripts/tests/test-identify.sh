@@ -204,6 +204,78 @@ O="$(CODER=true CODER_AGENT_URL="$INCLUSTER" CODER_WORKSPACE_NAME=x bash "$ID" 2
 contains "I: an unprobeable id is reported as unknown" "could not probe" "$O"
 contains "I: and warns the URL may not be unique" "may not be deployment-unique" "$O"
 
+echo "=== J: a COPIED measurement is refused, even when the values match ==="
+# ⛔ THE CASE THE WHOLE FEATURE EXISTS FOR, and the one a value-comparison cannot catch.
+# Provenance used to be a free-text $note reading "MEASURED on the machine". `cp -R` copies that
+# sentence verbatim onto a box nobody measured, and it then reads MORE authoritative than a blank
+# field — so it stops the next reader from checking. Flagged in the ESO install report 2026-09-03.
+#
+# ⚠️ THE VALUES HERE MATCH THIS MACHINE EXACTLY. That is deliberate: the usual way a copied
+# record arises is `cp -R` between two workspaces on ONE deployment, where deployment and
+# workspace legitimately agree. A check that compares values passes it. What does not pass is the
+# record's own claim about WHAT IT WAS MEASURED FOR.
+COPIED="$(mklock copied '{"instance":"box-b","install":{"identity":{
+  "deployment":"https://coder.cloud-a.example/","workspace":"Loom",
+  "origin":{"how":"measured","on":"2026-09-04","by":"identify.sh --declare","forInstance":"box-a"}}}}')"
+O="$(CODER=true CODER_AGENT_URL=https://coder.cloud-a.example/ CODER_WORKSPACE_NAME=Loom bash "$ID" --lock "$COPIED" 2>&1)"; rc=$?
+contains "J: refuses a measurement taken for another instance" "MEASURED FOR A DIFFERENT INSTANCE" "$O"
+contains "J: names both instances"                             "box-a" "$O"
+contains "J: says how to fix it by MEASURING"                  "--declare" "$O"
+if [ "$rc" -eq 3 ]; then ok "J: exits 3"; else bad "J: exits 3" "exit $rc — a refusal that exits 0 is invisible"; fi
+
+echo "=== J2: the SAME record, once its provenance names itself, is accepted ==="
+# Proves the refusal is about provenance and not about the values, which are byte-identical here.
+OWNED="$(mklock owned '{"instance":"box-a","install":{"identity":{
+  "deployment":"https://coder.cloud-a.example/","workspace":"Loom",
+  "origin":{"how":"measured","on":"2026-09-04","by":"identify.sh --declare","forInstance":"box-a"}}}}')"
+O="$(CODER=true CODER_AGENT_URL=https://coder.cloud-a.example/ CODER_WORKSPACE_NAME=Loom bash "$ID" --lock "$OWNED" 2>&1)"; rc=$?
+contains "J2: an own measurement is accepted" "matches this machine" "$O"
+if [ "$rc" -eq 0 ]; then ok "J2: exits 0"; else bad "J2: exits 0" "exit $rc"; fi
+
+echo "=== J3: the instance name is read in BOTH shapes ==="
+# ⚠️ `.instance` is a bare string in older records and an object with `.name` in current ones.
+# Reading one shape only is exactly what left loom-delia unmarked and three weeks behind.
+OBJ="$(mklock objshape '{"instance":{"name":"box-b","kind":"instance"},"install":{"identity":{
+  "deployment":"https://coder.cloud-a.example/","workspace":"Loom",
+  "origin":{"how":"measured","on":"2026-09-04","forInstance":"box-a"}}}}')"
+O="$(CODER=true CODER_AGENT_URL=https://coder.cloud-a.example/ CODER_WORKSPACE_NAME=Loom bash "$ID" --lock "$OBJ" 2>&1)"; rc=$?
+contains "J3: object-shaped instance is read too" "MEASURED FOR A DIFFERENT INSTANCE" "$O"
+if [ "$rc" -eq 3 ]; then ok "J3: and exits 3"; else bad "J3: and exits 3" "exit $rc"; fi
+
+echo "=== J4: ABSENT provenance is a NOTE, never a refusal ==="
+# ⚠️ Every record on the fleet predates this field. Blocking on absence would fire fleet-wide on
+# day one and be trained past within a day — the same reason install.identity itself arms
+# gradually. Absence is `unknown`; only a positive contradiction refuses.
+NOPROV="$(mklock noprov '{"instance":"box-a","install":{"identity":{
+  "deployment":"https://coder.cloud-a.example/","workspace":"Loom"}}}')"
+O="$(CODER=true CODER_AGENT_URL=https://coder.cloud-a.example/ CODER_WORKSPACE_NAME=Loom bash "$ID" --lock "$NOPROV" 2>&1)"; rc=$?
+contains "J4: says provenance is undeclared" "declares no identity provenance" "$O"
+contains "J4: and says that is not a failure" "Not a failure" "$O"
+if [ "$rc" -eq 0 ]; then ok "J4: and still exits 0"; else bad "J4: and still exits 0" "exit $rc"; fi
+
+echo "=== J5: how=measured with no forInstance is reported, not silently trusted ==="
+# The one field that makes a copy detectable is the one that would be missing.
+HALF="$(mklock half '{"instance":"box-a","install":{"identity":{
+  "deployment":"https://coder.cloud-a.example/","workspace":"Loom",
+  "origin":{"how":"measured","on":"2026-09-04"}}}}')"
+O="$(CODER=true CODER_AGENT_URL=https://coder.cloud-a.example/ CODER_WORKSPACE_NAME=Loom bash "$ID" --lock "$HALF" 2>&1)"
+contains "J5: names the missing field" "no origin.forInstance" "$O"
+
+echo "=== J6: --declare RECORDS what it measured for ==="
+# Without this the schema is just a second thing for cp -R to copy.
+DECL="$(mklock todeclare '{"instance":"declared-box","install":{}}')"
+env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --declare "$DECL" >/dev/null 2>&1
+FOR="$(jq -r '.install.identity.origin.forInstance // "MISSING"' "$DECL" 2>/dev/null)"
+HOW="$(jq -r '.install.identity.origin.how // "MISSING"' "$DECL" 2>/dev/null)"
+if [ "$FOR" = "declared-box" ]; then ok "J6: origin.forInstance is the record's own instance"
+else bad "J6: origin.forInstance is the record's own instance" "got '$FOR'"; fi
+if [ "$HOW" = "measured" ]; then ok "J6: origin.how is measured"; else bad "J6: origin.how is measured" "got '$HOW'"; fi
+
+# ...and that freshly declared record must now pass its own provenance check
+O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --lock "$DECL" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "J6: and the record it wrote passes its own check"
+else bad "J6: and the record it wrote passes its own check" "exit $rc: $O"; fi
+
 echo "=== F: --match lists candidates and NEVER picks one ==="
 mkdir -p "$T/instances/a" "$T/instances/b"
 printf '%s\n' "$AWS" > "$T/instances/a/loom.lock.json"

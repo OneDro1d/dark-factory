@@ -16,8 +16,11 @@
     "check-compound-bash.sh",
     "context-budget.py"
   ],
-  "harnesses": ["claude-code", "codex"],
+  "harnesses": [
+    "claude-code",
+    "codex"
+  ],
   "$excluded": {
-    "handoff-auto": "Superseded by agent-notepad, which says so in its own description and whose installer unwires it. Both are still shipped so an existing install does not break, but a NEW kit naming both would install two hook suites competing for the same events. ⚠️ They also carry two forks of one hardened redactor (lib/redact.sh, differing only in header comments) — a redactor that drifts fails silently, and that is worth resolving before either is bundled again."
+    "handoff-auto": "REMOVED FROM TIER 1 on 2026-09-04. It was superseded by agent-notepad, whose installer already unwired it; no kit named it; and nothing outside its own directory sourced its code. The reason to remove rather than keep it was the note this entry used to carry: it shipped a SECOND copy of the hardened lib/redact.sh, and a redactor that drifts fails silently. That fork is now resolved to one copy, and test-redact-fork.sh asserts it stays that way instead of watching two copies drift."
   }
 }

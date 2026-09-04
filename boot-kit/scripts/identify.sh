@@ -84,6 +84,50 @@ host_id() {
 # invalidate every record it is meant to protect. Case-folded for the same reason.
 norm_host() { printf '%s' "$1" | sed 's/\.local$//' | tr '[:upper:]' '[:lower:]'; }
 
+# ⚠️ TOLERATES BOTH SHAPES. `.instance` is a bare string in older records and an object with
+# `.name` in current ones. Reading only one shape is exactly what left loom-delia unmarked and
+# three weeks behind its siblings.
+instance_name() {
+  jq -r 'if (.instance|type) == "object" then (.instance.name // empty) else (.instance // empty) end' \
+    "$1" 2>/dev/null
+}
+
+# ---- was this identity ever measured FOR THIS RECORD? -----------------------
+# ⛔ THE cp -R PROBLEM. Provenance used to be a free-text $note reading "MEASURED on the machine".
+# A copy carries that sentence verbatim onto a machine nobody measured, and reads MORE
+# authoritative than a blank field — so it stops the next reader from checking.
+#
+# A measurement now records WHAT IT WAS MEASURED FOR. Copy the record, rename the instance, and
+# `forInstance` still names the old one: the record contradicts itself, and the contradiction is
+# checkable with no machine, no network, and no knowledge of the true value.
+#
+# ⚠️ The question is NOT "is this value correct" — nothing can answer that from here. It is
+# "was this value ever measured for THIS record", which the record itself answers.
+#
+# 0 = consistent or unknowable   1 = a measurement belongs to a DIFFERENT record
+check_provenance() {
+  lf="$1"; quiet="${2:-}"
+  how="$(jq -r '.install.identity.origin.how // empty' "$lf" 2>/dev/null)"
+  [ -n "$how" ] || {
+    # ⚠️ ABSENCE IS `unknown`, NOT A FAULT. Every record predates this field; blocking on
+    # absence would fire fleet-wide on day one and be trained past within a day.
+    [ -n "$quiet" ] || say "   note: this record declares no identity provenance (origin) —"
+    [ -n "$quiet" ] || say "         it cannot be told apart from a copied one. Not a failure."
+    return 0
+  }
+  [ "$how" = "measured" ] || return 0
+  forinst="$(jq -r '.install.identity.origin.forInstance // empty' "$lf" 2>/dev/null)"
+  [ -n "$forinst" ] || {
+    [ -n "$quiet" ] || say "   note: origin.how=measured but no origin.forInstance — the one field"
+    [ -n "$quiet" ] || say "         that would make a copy detectable is the one that is missing."
+    return 0
+  }
+  myinst="$(instance_name "$lf")"
+  [ -n "$myinst" ] || return 0
+  [ "$forinst" = "$myinst" ] && return 0
+  return 1
+}
+
 KIND="laptop"; DEPLOY=""; WORKSPACE=""; HOSTID="$(host_id)"
 if [ "${CODER:-}" = "true" ] || [ -n "${CODER_WORKSPACE_NAME:-}" ]; then
   KIND="coder"
@@ -209,6 +253,29 @@ check_one() {
 
 if [ "$MODE" = "check" ]; then
   [ -f "$LOCK" ] || { say "FATAL: no lockfile at $LOCK"; exit 2; }
+
+  # ⛔ PROVENANCE FIRST. A record whose measurement was taken for a DIFFERENT instance is wrong
+  # regardless of whether its values happen to match this machine — and they often will, because
+  # the usual way it arises is `cp -R` between two boxes on one deployment. Checking the values
+  # first would let that case pass.
+  if ! check_provenance "$LOCK"; then
+    say ""
+    say "⛔ THIS RECORD'S IDENTITY WAS MEASURED FOR A DIFFERENT INSTANCE."
+    say "   lockfile      : $LOCK"
+    say "   instance      : $(instance_name "$LOCK")"
+    say "   measured for  : $(jq -r '.install.identity.origin.forInstance // "-"' "$LOCK")"
+    say "   measured on   : $(jq -r '.install.identity.origin.on // "-"' "$LOCK")"
+    say ""
+    say "   That is the signature of a COPIED record: the values were taken from another"
+    say "   machine and the copy kept saying they were measured. It is wrong even if the"
+    say "   values happen to match this box, because nobody measured them HERE."
+    say ""
+    say "   Fix it by MEASURING, not by editing the name:"
+    say "     1. remove install.identity from this record"
+    say "     2. run: identify.sh --declare $LOCK   (on the machine it describes)"
+    exit 3
+  fi
+
   check_one "$LOCK"; rc=$?
   case "$rc" in
     0) say "   ✓ the lockfile's declared identity matches this machine" ; exit 0 ;;
@@ -240,14 +307,30 @@ if [ "$MODE" = "declare" ]; then
     say "   If it is wrong, edit it by hand so the change is visible in the diff."
     exit 3
   fi
+  # ⚠️ READ FROM THE RECORD, not from the directory name. A lookalike directory name is how a
+  # real merge SHA once got called fabricated on this estate.
+  DECL_INSTANCE="$(instance_name "$LOCK")"
+  DECL_WHEN="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if [ -z "$DECL_INSTANCE" ]; then
+    say "   ⚠️ this record declares no instance name, so the measurement cannot record what it"
+    say "      was measured FOR — the field that makes a copied record detectable. Add"
+    say "      \"instance\" to the lockfile first."
+    exit 2
+  fi
   if [ "$KIND" = "coder" ]; then
     NEWID="$(jq -n --arg d "$DEPLOY" --arg w "$WORKSPACE" --arg i "$DEPLOY_ID" \
+      --arg inst "$DECL_INSTANCE" --arg when "$DECL_WHEN" \
       '{deployment:$d, workspace:$w}
        + (if $i == "" then {} else {deploymentId:$i} end)
+       + {origin:{how:"measured", on:$when, by:"identify.sh --declare", forInstance:$inst,
+           "$forInstanceNote":"THE INSTANCE THIS WAS MEASURED FOR. A copied record keeps this name while its own instance changes, which is what makes the copy detectable without a machine, a network, or any knowledge of the true value."}}
        + {"$note":"MEASURED on the machine by identify.sh --declare. deploymentId comes from GET /api/v2/buildinfo and is the REAL discriminator: CODER_AGENT_URL may be an in-cluster address that any co-located workspace reports, on any deployment. hostname is deliberately absent -- on Coder it is the k8s pod name and changes on every restart."}')"
   else
-    NEWID="$(jq -n --arg h "$HOSTID" \
-      '{hostname:$h, "$note":"MEASURED on the machine by identify.sh --declare, from scutil LocalHostName where available (stable) rather than hostname (which follows the network on macOS)."}')"
+    NEWID="$(jq -n --arg h "$HOSTID" --arg inst "$DECL_INSTANCE" --arg when "$DECL_WHEN" \
+      '{hostname:$h,
+        origin:{how:"measured", on:$when, by:"identify.sh --declare", forInstance:$inst,
+          "$forInstanceNote":"THE INSTANCE THIS WAS MEASURED FOR. A copied record keeps this name while its own instance changes, which is what makes the copy detectable."},
+        "$note":"MEASURED on the machine by identify.sh --declare, from scutil LocalHostName where available (stable) rather than hostname (which follows the network on macOS)."}')"
   fi
   say ""
   say "   will write into $LOCK:"
