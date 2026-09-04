@@ -235,16 +235,31 @@ def find_lock():
         return env, None
     # KIT_ROOT, not NOTEPAD: the lockfile describes the MACHINE and lives with the kit.
     # A mission launched from any notepad still needs this machine's codeLayout.
+    # ⚠️ THE ROOT RECORD IS NOT ALWAYS NAMED loom.lock.json, and assuming it is has already
+    # cost this estate three weeks. `loom-delia`'s record is `delia.lock.json`; the Catalyst
+    # layer's is `catalyst.lock.json`. A sweep that globbed the name marked three sibling kits
+    # and silently skipped the fourth, and that kit's own record says why:
+    # "A warning that lives only in prose does not stop a tool."
+    #
+    # ⚠️ LATENT, NOT LIVE, WHEN WRITTEN — and that is exactly why it is worth closing now.
+    # Neither of those kits ships boot-kit/scripts/ today, so this code never runs there. But
+    # install.sh REGENERATES boot-kit/scripts/ on install, so preflight appears on the first
+    # install and immediately cannot find the record it exists to read. A defect that is
+    # unreachable until the moment it matters is still a defect.
+    #
+    # Root: any *.lock.json. Instances: loom.lock.json, which IS the convention there and is
+    # asserted by the installer — narrowing that would let an unrelated JSON masquerade as a
+    # machine record.
     cands = []
-    root = os.path.join(KIT_ROOT, "loom.lock.json")
-    if os.path.isfile(root):
-        cands.append(root)
+    for n in sorted(os.listdir(KIT_ROOT) if os.path.isdir(KIT_ROOT) else []):
+        if n.endswith(".lock.json") and os.path.isfile(os.path.join(KIT_ROOT, n)):
+            cands.append(os.path.join(KIT_ROOT, n))
     d = os.path.join(KIT_ROOT, "instances")
     if os.path.isdir(d):
         cands += [os.path.join(d, n, "loom.lock.json") for n in sorted(os.listdir(d))
                   if os.path.isfile(os.path.join(d, n, "loom.lock.json"))]
     if not cands:
-        return None, "no loom.lock.json under %s" % KIT_ROOT
+        return None, "no *.lock.json under %s (root) or instances/*/loom.lock.json" % KIT_ROOT
     if len(cands) == 1:
         return cands[0], None
 
