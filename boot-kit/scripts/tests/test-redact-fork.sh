@@ -85,7 +85,14 @@ fi
 # the third self-matching check in one session (`pgrep -f df-supervisor` was the first two).
 # **A checker that searches for a string is a file that CONTAINS that string.**
 SELFPATH="$HERE/$(basename "$0")"
-DANGLING="$(grep -rln 'skills/handoff-auto' "$ROOT" --include='*.sh' --include='*.py' --include='*.json' 2>/dev/null \
+# ⚠️ THE PATTERN IS WIDENED, BECAUSE THE NARROW ONE ALREADY MISSED ONE. The first version matched
+# only the PATH form `skills/handoff-auto`. The live dangling reference was a bare name plus a
+# RELATIVE link — [`handoff-auto`](../handoff-auto/SKILL.md) in agent-notepad's SKILL.md — which
+# that pattern does not match, and tier-check caught it in CI after this test had passed.
+# **A sweep written around one spelling misses the others.** Markdown is included for the same
+# reason: the reference lived in a .md file the original --include list excluded.
+DANGLING="$(grep -rlnE 'skills/handoff-auto|\.\./handoff-auto|\[`?handoff-auto`?\]' "$ROOT" \
+  --include='*.sh' --include='*.py' --include='*.json' --include='*.md' 2>/dev/null \
   | grep -v '\.git/' | grep -vF "$SELFPATH" || true)"
 if [ -z "$DANGLING" ]; then
   ok "no path reference to skills/handoff-auto remains"

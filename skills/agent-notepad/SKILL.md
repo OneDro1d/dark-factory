@@ -12,15 +12,20 @@ A **notepad** is one standalone git repo per objective (`<group>-<objective>`, e
 context compaction, keeps history (append-only journal, not a rewrite), spans several
 code repos from a single session, and syncs across machines. It is the short-term,
 auto-loaded tier that complements a curated long-term store — and it **evolves and
-supersedes** [`handoff-auto`](../handoff-auto/SKILL.md): the same continuity machinery,
+supersedes** handoff-auto: the same continuity machinery,
 now objective-scoped instead of cwd-scoped, with history and cross-repo reach.
+⚠️ handoff-auto is deliberately UNBACKTICKED and unlinked here: it was REMOVED from this
+repo on 2026-09-04, and a backticked name reads to `tier-check.py` as a reference to a
+component this tier ships — which is what the gate caught. The plugin installer still
+UNWIRES its old hook entries from an existing `settings.json`; that is for machines
+installed before the removal, and it stays.
 
 Product = **a Claude Code plugin**: hooks + skills + a notepad template + a small Python
 memory adapter. No binary, no daemon. Full rationale in [`DESIGN.md`](./DESIGN.md).
 
 ## Why it beats naive auto-handoff
 
-`handoff-auto` keys by cwd → one rewritten file → parallel sessions clobber, no history,
+handoff-auto keys by cwd → one rewritten file → parallel sessions clobber, no history,
 single-repo. A notepad gives **zero contention** (separate folder + cwd + git repo per
 objective), **append-only history**, and **cross-repo context** driven from one place via
 absolute paths (never `cd`). The episodic memory index is exercised at both ends by hooks
@@ -56,7 +61,7 @@ proj-arbbot/
 
 - **SessionStart** — best-effort `git pull`, then FILE-READS-ONLY inject `NOTES.md` +
   `DIGEST.md` + `repos.manifest.json` (~1–3 s). Outside a notepad, degrades to
-  `handoff-auto` behavior.
+  handoff-auto behavior.
 - **Stop** — append deterministic journal entries (files touched, commands, a stop
   marker), upsert `sessions/index.json`, **mirror the journal into the memory index**,
   best-effort `git push`.
@@ -105,8 +110,8 @@ digest). Deliberate handoff → `handoffs/` + remote. Distilled/canonical → th
 
 ## Relationship to handoff-auto
 
-Evolution, not coexistence: the `handoff-auto` machinery becomes the **Notes** tier; its
-hooks are extended and the commit gate is added. The installer unwires `handoff-auto`
+Evolution, not coexistence: the handoff-auto machinery becomes the **Notes** tier; its
+hooks are extended and the commit gate is added. The installer unwires handoff-auto
 (leaving its files in place, reversible). Outside a notepad, behavior degrades to today's.
 
 ## Non-goals (v1)

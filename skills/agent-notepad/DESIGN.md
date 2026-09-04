@@ -1,6 +1,6 @@
 # agent-notepad — persistent, per-objective working memory for coding agents
 
-**Status:** Design (build in progress) · **Origin:** genericized from a Loom-specific design, 2026-07-10 · **DF stage:** companion to `df-context-store` (Stage 0.5). Evolves and subsumes `handoff-auto`.
+**Status:** Design (build in progress) · **Origin:** genericized from a Loom-specific design, 2026-07-10 · **DF stage:** companion to `df-context-store` (Stage 0.5). Evolves and subsumes handoff-auto.
 
 > ⚠️ **PARTIALLY SUPERSEDED, 2026-07-29 / 2026-08-03.** The **episodic memory index** tier
 > described below (U6 adapter, Stop write-mirror, digest builder) is **gone**. The reference
@@ -27,11 +27,11 @@ Product = **a Claude Code plugin** (hooks + skills + notepad-template + a small 
 
 ## 1. Problem
 
-An agent operator runs several concurrent agent sessions, for days, each on a distinct objective. Naive auto-handoff (e.g. `handoff-auto`) keys by cwd → one rewritten file → **no session identity** (parallel sessions clobber), **no history** (rewrite not append), **single-repo** (no cross-repo context). Needed: a short-term, persistent, auto-loaded **working memory** that complements a curated long-term store (which structurally misses recent detail); survives compaction; keeps history; spans several repos from one session; syncs across machines.
+An agent operator runs several concurrent agent sessions, for days, each on a distinct objective. Naive auto-handoff (e.g. handoff-auto) keys by cwd → one rewritten file → **no session identity** (parallel sessions clobber), **no history** (rewrite not append), **single-repo** (no cross-repo context). Needed: a short-term, persistent, auto-loaded **working memory** that complements a curated long-term store (which structurally misses recent detail); survives compaction; keeps history; spans several repos from one session; syncs across machines.
 
 ## 2. Goals / Non-goals
 
-**Goals:** concurrent objective-scoped sessions with zero contention (file *and* git level) · append-only history · cross-repo context with no manual `cd` · memory index demonstrably used, enforced · code-commit governance enforced · survive compaction, enable `/clear` instead of `/compact` · cross-device sync · reuse `handoff-auto`, `df-context-store`, an episodic memory index, git.
+**Goals:** concurrent objective-scoped sessions with zero contention (file *and* git level) · append-only history · cross-repo context with no manual `cd` · memory index demonstrably used, enforced · code-commit governance enforced · survive compaction, enable `/clear` instead of `/compact` · cross-device sync · reuse handoff-auto, `df-context-store`, an episodic memory index, git.
 
 **Non-goals (YAGNI):** no new DB/service (files are truth) · no live context-% trigger (not exposed to hooks) · no automatic `/clear` (agent/human habit) · no group folder or shared mutable files · no replacement of the curated store · no cross-*group* auto-sharing in v1.
 
@@ -87,9 +87,9 @@ proj-arbbot/
 ### 6.8 Formats & rationale
 Format follows the *consumer* (read-as-context by the model vs parsed-by-code by a hook): **Markdown** for context-loaded files (`NOTES`/`DIGEST`/`SCOPE`/`CLAUDE`/`handoffs`/per-repo store) — the parser is the model, zero-overhead context. **JSONL** for the journal (append + `jq`-filter). **JSON** for config (`manifest`, `index.json`, `org-routing`). **Graph** relationships → the memory index's graph + the curated store's graph, **not a repo format**. **No SQL.** `NOTES.md` stays terse-markdown, never a compressed dialect, never compresses away a caveat.
 
-## 7. Hook set — enforcement (extends `handoff-auto`)
+## 7. Hook set — enforcement (extends handoff-auto)
 
-1. **SessionStart — restore + auto-pull (READ end):** best-effort `git pull` (non-blocking) → read `NOTES.md` + `DIGEST.md` + `repos.manifest.json` + per-repo context-store pointers → inject via dual-field JSON. **File reads only** (~1–3 s budget; no live search — digest is precomputed). Degrades to `handoff-auto` behavior outside a notepad.
+1. **SessionStart — restore + auto-pull (READ end):** best-effort `git pull` (non-blocking) → read `NOTES.md` + `DIGEST.md` + `repos.manifest.json` + per-repo context-store pointers → inject via dual-field JSON. **File reads only** (~1–3 s budget; no live search — digest is precomputed). Degrades to handoff-auto behavior outside a notepad.
 2. **Stop — journal + mirror + sync (WRITE end):** append deterministic journal entries → upsert `index.json` → **mirror new entries into the memory index** (`mempalace mine <notepad>/sessions/` or the venv-python adapter, `wing=<prefix>`, `room=<repo>`) → best-effort `git push`. Guarantees the index is *written* every cycle.
    ⚠️ **Historical from here on.** The named implementation was removed 2026-07-29 — see the banner at the top of this file. What follows is the DESIGN, and the tool is not the current one. Said again here because a reader arriving at a section does not see a banner nine screens up — the same reason CI names its own limitation in a step title and not only in a job summary.
 3. **Digest builder — async, off critical path:** `mempalace search "<objective>" --wing <prefix>` → rewrite `DIGEST.md`. Guarantees the index is *queried* every cycle. Trigger: debounced Stop or scheduled job.
@@ -113,8 +113,8 @@ Ephemeral/task-progress → `NOTES.md`. Durable/code-anchored/one-repo → that 
 1. **Memory-index usage** (§7.2/7.3): hooks guarantee write + query every cycle.
 2. **Code/context lockstep** (§7.6): the notepad's PreToolUse gate blocks agent code-commits that drift from the code repo's store.
 
-## 12. Relationship to `handoff-auto` + `/clear`
-Evolution: `handoff-auto` machinery becomes the **Notes** tier (`NOTES.md` + journal); its hooks are extended; the PreToolUse commit gate is added. Outside a notepad, behavior degrades to today's. `/clear` instead of `/compact`: `NOTES.md` + journal + digest fully re-hydrate → lossless-by-design (human habit; no ctx-% trigger). Recency gap closed: the digest is built from the recent journal index.
+## 12. Relationship to handoff-auto + `/clear`
+Evolution: handoff-auto machinery becomes the **Notes** tier (`NOTES.md` + journal); its hooks are extended; the PreToolUse commit gate is added. Outside a notepad, behavior degrades to today's. `/clear` instead of `/compact`: `NOTES.md` + journal + digest fully re-hydrate → lossless-by-design (human habit; no ctx-% trigger). Recency gap closed: the digest is built from the recent journal index.
 
 ## 13. Design units (for isolation & independent build)
 
@@ -129,7 +129,7 @@ Evolution: `handoff-auto` machinery becomes the **Notes** tier (`NOTES.md` + jou
 | **U7 `/scope-init`** | gh-create (consent), interview, bootstrap code repos (consent), warm-start `NOTES.md`, derive prefix wing, wire sync | U1, U5, gh |
 | **U8 Commit gate** | PreToolUse staleness check on `git -C … commit` | U5 |
 | **U9 `/handoff` retarget** | publish to `handoffs/` + force push | U1 |
-| **U10 Packaging** | plugin manifest + installer + `notepad-template/`; supersedes/uninstalls `handoff-auto` | all |
+| **U10 Packaging** | plugin manifest + installer + `notepad-template/`; supersedes/uninstalls handoff-auto | all |
 
 ## 14. U6 feasibility — RESOLVED GREEN + mirror mechanism verified (2026-07-10)
 MemPalace ships a CLI (`a local venv CLI`) with `mine <dir>` (ingest → WRITE) and `search "q" --wing X` (→ READ). Shell → memory-index is a first-class supported path (MemPalace ships a production Stop hook). No network, no MCP dependency in the hook, no build toolchain. The adapter (U6) wraps this behind a stub-able interface so the rest is testable without a live palace.
@@ -142,7 +142,7 @@ So `op_mirror` renders the journal into a **Markdown digest** under a staging di
 
 ## 15. Build notes (from prior handoff-auto build)
 - **Install to a STABLE runtime path** (`~/.claude/hooks/agent-notepad/{hooks,lib}`), copied by the installer — NOT the repo path (branch-fragile).
-- Generic Notes hooks live **user-level** (cwd-detect + degrade like `handoff-auto`); the **commit gate ships in the notepad template's `.claude/settings.json`** (arms only in notepad sessions). Claude Code merges user + project hooks.
+- Generic Notes hooks live **user-level** (cwd-detect + degrade like handoff-auto); the **commit gate ships in the notepad template's `.claude/settings.json`** (arms only in notepad sessions). Claude Code merges user + project hooks.
 - Hook recipe: read JSON from stdin (`jq`/python), output `{}` (allow) or `{"decision":"block","reason":...}`, **exit 0 always**, `chmod +x`, pipe-test each hook.
 - **Redaction tests trip GitHub push-protection** on secret literals → split token prefixes at runtime in test fixtures.
 - SessionStart hooks inject only non-discoverable + stable info; read a precomputed file, never compute.
@@ -156,7 +156,7 @@ So `op_mirror` renders the journal into a **Markdown digest** under a staging di
 6. *(Moved to §17 — df-context-store's responsibility, not an agent-notepad criterion.)* A finding recorded via `knowledge-keeper` appears in the target code repo's `FINDINGS.md`, visible to a *different* scope without a search.
 7. An agent `git -C <code-repo> commit` that drifts from the store is **blocked** by §7.6; a compliant commit passes.
 8. `/handoff` writes `handoffs/<date>-<topic>.md` **and** pushes to remote.
-9. In a non-notepad cwd, behavior matches `handoff-auto` (regression).
+9. In a non-notepad cwd, behavior matches handoff-auto (regression).
 10. `/clear` then a fresh session restores goal + next-action from `NOTES.md` alone (lossless rehydrate).
 11. U6 adapter passes in **stub mode** (no live palace) and in **live mode** (real `mempalace`).
 
