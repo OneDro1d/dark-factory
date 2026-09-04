@@ -31,8 +31,16 @@ trap 'rm -rf "$T"' EXIT
 
 mklock() { printf '%s\n' "$2" > "$T/$1.json"; printf '%s' "$T/$1.json"; }
 
-AWS='{"instance":"coder-eso-aws--loom","install":{"identity":{"deployment":"https://coder-dev02.aws.esosuite.net/","workspace":"Loom"}}}'
-AZ='{"instance":"coder-eso-azure--loom","install":{"identity":{"deployment":"https://coder.aks-dev-scus.esosuite.net/","workspace":"Loom"}}}'
+# ⚠️ THE HOSTNAMES BELOW ARE SYNTHETIC, AND THAT IS LOAD-BEARING.
+# This repo is PUBLIC. Earlier fixtures here named two real ESO control planes; the publish gate
+# flags that class, and #91 had already replaced a real deployment_id in this same file for the
+# same reason. **The measurement belongs in the private instance record; the public repo gets the
+# SHAPE.** What is under test is that two DIFFERENT deployments refuse and one MATCHING deployment
+# passes — any two distinct URLs prove that, and `.example` is reserved by RFC 2606 so these can
+# never resolve to a real host.
+# Do not "make these realistic". Realism here is the defect.
+AWS='{"instance":"coder-eso-aws--loom","install":{"identity":{"deployment":"https://coder.cloud-a.example/","workspace":"Loom"}}}'
+AZ='{"instance":"coder-eso-azure--loom","install":{"identity":{"deployment":"https://coder.cloud-b.example/","workspace":"Loom"}}}'
 BARE='{"instance":"legacy","install":{"hooks":[]}}'
 
 L_AWS="$(mklock aws "$AWS")"; L_AZ="$(mklock az "$AZ")"; L_BARE="$(mklock bare "$BARE")"
@@ -43,23 +51,23 @@ contains "A: says laptop"            "laptop"   "$O"
 absent   "A: no Coder deployment"    "workspace  :" "$O"
 
 echo "=== B: inside a workspace, the DEPLOYMENT is what is reported ==="
-O="$(CODER=true CODER_AGENT_URL=https://coder-dev02.aws.esosuite.net/ CODER_WORKSPACE_NAME=Loom bash "$ID" 2>&1)"
+O="$(CODER=true CODER_AGENT_URL=https://coder.cloud-a.example/ CODER_WORKSPACE_NAME=Loom bash "$ID" 2>&1)"
 contains "B: says Coder workspace"   "Coder workspace" "$O"
-contains "B: names the deployment"   "coder-dev02.aws" "$O"
+contains "B: names the deployment"   "cloud-a.example" "$O"
 contains "B: names the workspace"    "Loom"     "$O"
 # ⚠️ THE POD NAME MUST NOT BE PRESENTED AS IDENTITY. It changes every restart.
 contains "B: says the pod name is not usable identity" "NOT USED" "$O"
 
 echo "=== C: the SAME workspace name on ANOTHER deployment is a different machine ==="
 # ⛔ This is the live hazard: `Loom` exists on both. The name alone must not satisfy the check.
-O="$(CODER=true CODER_AGENT_URL=https://coder.aks-dev-scus.esosuite.net/ CODER_WORKSPACE_NAME=Loom bash "$ID" --lock "$L_AWS" 2>&1)"; rc=$?
+O="$(CODER=true CODER_AGENT_URL=https://coder.cloud-b.example/ CODER_WORKSPACE_NAME=Loom bash "$ID" --lock "$L_AWS" 2>&1)"; rc=$?
 contains "C: refuses the AWS record on the Azure box" "DIFFERENT MACHINE" "$O"
 contains "C: shows both sides"                        "you are" "$O"
 if [ "$rc" -eq 3 ]; then ok "C: exits 3 so the installer can stop"
 else bad "C: exits 3 so the installer can stop" "exit was $rc — a refusal that exits 0 is invisible"; fi
 
 echo "=== D: the RIGHT record on the same box is accepted ==="
-O="$(CODER=true CODER_AGENT_URL=https://coder.aks-dev-scus.esosuite.net/ CODER_WORKSPACE_NAME=Loom bash "$ID" --lock "$L_AZ" 2>&1)"; rc=$?
+O="$(CODER=true CODER_AGENT_URL=https://coder.cloud-b.example/ CODER_WORKSPACE_NAME=Loom bash "$ID" --lock "$L_AZ" 2>&1)"; rc=$?
 contains "D: confirms the match" "matches this machine" "$O"
 if [ "$rc" -eq 0 ]; then ok "D: exits 0"; else bad "D: exits 0" "exit was $rc"; fi
 
@@ -76,7 +84,7 @@ O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --lock "
 contains "D2: a Coder record is refused on a laptop" "DIFFERENT MACHINE" "$O"
 if [ "$rc" -eq 3 ]; then ok "D2: and exits 3"; else bad "D2: and exits 3" "exit was $rc"; fi
 
-O="$(CODER=true CODER_AGENT_URL=https://coder-dev02.aws.esosuite.net/ CODER_WORKSPACE_NAME=Loom bash "$ID" --lock "$HOSTLOCK" 2>&1)"; rc=$?
+O="$(CODER=true CODER_AGENT_URL=https://coder.cloud-a.example/ CODER_WORKSPACE_NAME=Loom bash "$ID" --lock "$HOSTLOCK" 2>&1)"; rc=$?
 contains "D2: a laptop record is refused on a Coder box" "DIFFERENT MACHINE" "$O"
 if [ "$rc" -eq 3 ]; then ok "D2: and exits 3 there too"; else bad "D2: and exits 3 there too" "exit was $rc"; fi
 
@@ -200,7 +208,7 @@ echo "=== F: --match lists candidates and NEVER picks one ==="
 mkdir -p "$T/instances/a" "$T/instances/b"
 printf '%s\n' "$AWS" > "$T/instances/a/loom.lock.json"
 printf '%s\n' "$AZ"  > "$T/instances/b/loom.lock.json"
-O="$(CODER=true CODER_AGENT_URL=https://coder.aks-dev-scus.esosuite.net/ CODER_WORKSPACE_NAME=Loom bash "$ID" --match "$T/instances" 2>&1)"
+O="$(CODER=true CODER_AGENT_URL=https://coder.cloud-b.example/ CODER_WORKSPACE_NAME=Loom bash "$ID" --match "$T/instances" 2>&1)"
 contains "F: names the matching record"     "instances/b" "$O"
 absent   "F: does not name the other one"   "instances/a" "$O"
 # ⚠️ NO AUTO-SELECT. Reporting a candidate is help; acting on it is the defect.
