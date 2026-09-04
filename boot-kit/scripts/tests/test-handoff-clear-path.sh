@@ -28,7 +28,10 @@ mkdir -p "$NP/handoffs/nested/deep"
 printf '# NOTES\n' > "$NP/NOTES.md"
 printf 'older\n'  > "$NP/handoffs/2026-01-01-old.md"
 sleep 1
-printf 'newest\n' > "$NP/handoffs/2026-09-01-current.md"
+# ⚠️ The body carries a DISTINCTIVE marker. It used to be the bare word "newest", which also
+# appears in prose about the newest handoff — so a test could not tell "the body was inlined"
+# from "the word was mentioned". The old inline-detection grepped for exactly that word.
+printf '# Handoff\nHANDOFF_BODY_MARKER the one next action\n' > "$NP/handoffs/2026-09-01-current.md"
 
 # HOME is redirected so a real ~/.claude/handoffs snapshot cannot mask the fallback.
 run() { # run <source> <cwd> [session_id]
@@ -59,11 +62,27 @@ else
   bad "emits both systemMessage and additionalContext" "got: ${OUT:0:200}"
 fi
 
-# --- 4. it POINTS, it does not COPY: the handoff body must not be inlined ---
-if printf '%s' "$OUT" | grep -q 'newest'; then
-  bad "points without copying the handoff body" "inlined the file contents"
+# --- 4. it INJECTS the handoff body. INVERTED 2026-09-04, and this case is why the defect
+# survived: it asserted "it POINTS, it does not COPY" and FAILED the correct behaviour.
+#
+# ⛔ THE SUITE WAS PROTECTING THE BUG. A hook cannot make a model open a file — it can only put
+# text in the context — so a path is a REQUEST and content is DELIVERY. Measured on a real
+# /clear and again with `claude -p`: the session answered "session start auto-loads NOTES.md,
+# not the handoff file" and carried on without the mission. This assertion would have blocked
+# anyone who tried to fix it, while reading like diligence about payload size.
+#
+# ⚠️ Inverted rather than deleted, so the reversal is auditable. A silently dropped assertion
+# looks the same as one that never existed.
+if printf '%s' "$OUT" | grep -q 'HANDOFF_BODY_MARKER'; then
+  ok "injects the handoff BODY, not merely its path"
 else
-  ok "points without copying the handoff body"
+  bad "injects the handoff BODY, not merely its path" "the body was not inlined"
+fi
+# ...and the bound must announce itself, so a partial handoff is never mistaken for a whole one.
+if printf '%s' "$OUT" | grep -q 'handoff begins'; then
+  ok "the injected body is delimited"
+else
+  bad "the injected body is delimited" "no begin marker"
 fi
 
 # --- 5. resolves the notepad from a DEEP cwd, not just its root ---
