@@ -348,11 +348,44 @@ fi
 
 if [ "$MODE" = "match" ]; then
   [ -d "$DIR" ] || { say "FATAL: no such directory $DIR"; exit 2; }
+
+  # ⛔ THE CANDIDATE SET IS "THE REPO ROOT + instances/*", NOT "instances/* ALONE".
+  #
+  # This used to scan only `$DIR/*/loom.lock.json` and `$DIR/*.lock.json`. On a repo whose
+  # own machine is recorded at the REPO ROOT — which is the documented layout, not an
+  # accident — pointing it at `instances/` can never find that machine, and it answered:
+  #
+  #   no declared instance matches this machine.
+  #
+  # ⚠️ THAT IS A FALSE NEGATIVE ON IDENTITY, which is the one thing this tool exists to get
+  # right. Measured 2026-09-04: the laptop's record sits at the root with a fully MEASURED
+  # `install.identity` (hostname, origin, forInstance), and `--match instances` reported it
+  # absent while correctly matching the Coder record beside it. A reader following
+  # START-HERE would conclude their machine is undeclared and mint a duplicate record.
+  #
+  # ⚠️ df-preflight ALREADY had this right — its candidate list is documented as "the root
+  # loom.lock.json plus each instances/*/loom.lock.json". Two tools in one estate disagreeing
+  # about which files describe a machine is the one-artifact-two-homes failure, and the half
+  # that was wrong is the half a human reads first.
+  #
+  # The parent is included because `instances/` is by construction a subdirectory of the
+  # instance repo; when $DIR IS the repo root the glob above already covers it, and the
+  # realpath dedupe below stops the record being counted twice.
+  _cands="$DIR/*/loom.lock.json $DIR/*.lock.json $DIR/../loom.lock.json"
+
   n=0
-  for lf in "$DIR"/*/loom.lock.json "$DIR"/*.lock.json; do
+  _seen=""
+  for lf in $_cands; do
     [ -f "$lf" ] || continue
+    # ⚠️ DEDUPE BY REAL PATH, not by the string. `instances/../loom.lock.json` and
+    # `loom.lock.json` are the same file; counting it twice would turn one machine into
+    # "2 records match", which reads as the ambiguity this check is supposed to detect.
+    _rp="$(cd "$(dirname "$lf")" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "$(basename "$lf")")"
+    [ -n "$_rp" ] || _rp="$lf"
+    case " $_seen " in *" $_rp "*) continue ;; esac
+    _seen="$_seen $_rp"
     if check_one "$lf" quiet; then
-      say "   MATCHES: $lf"
+      say "   MATCHES: $_rp"
       n=$((n + 1))
     fi
   done
