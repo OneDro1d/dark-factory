@@ -173,6 +173,13 @@ chmod +x "$TARGET/install.sh"
 
 cp "$SELF/dot-gitignore.template" "$TARGET/.gitignore" 2>/dev/null || true
 
+# The post-install validation prompt. COPIED INTO THE INSTANCE, not left in the upstream: a
+# machine is validated by the person standing at it, and a document that lives only in the public
+# repo is one more thing they have to know to go and find. It is the last step of the install and
+# it ships with the kit.
+cp "$SELF/VALIDATE-INSTALL.md" "$TARGET/VALIDATE-INSTALL.md" 2>/dev/null \
+  || say "WARN  could not copy VALIDATE-INSTALL.md — this instance ships with no way to prove it works"
+
 # The instance's project instructions. Rendered, not copied: it carries the instance name,
 # and it ships as a .template so that a file named CLAUDE.md never sits in the kit itself --
 # a harness would auto-load it into sessions ABOUT the kit and inject instructions meant for
@@ -242,6 +249,11 @@ say "  bash install.sh"
 say "  df-mission start $EXAMPLE_ID --profile default --max-iter 5 --max-usd 5"
 say "                             # the worked example: proves the loop, writes only inside"
 say "                             # .df/missions/$EXAMPLE_ID/, needs no hub and no network"
+say ""
+say "  THEN VALIDATE IT — the install is not finished until something has RUN:"
+say "    paste VALIDATE-INSTALL.md into a fresh session on this machine"
+say "    ⚠️ every check that looks for a FILE already passes on a broken install; that document"
+say "       exercises the machinery instead."
 say ""
 say "NOT DONE BY THIS SCRIPT, and not doable by any script:"
 say "  - git hosting login"
