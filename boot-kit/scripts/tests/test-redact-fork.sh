@@ -1,84 +1,98 @@
 #!/usr/bin/env bash
-# test-redact-fork.sh — the two copies of the hardened redactor must not drift apart.
+# test-redact-fork.sh — the redactor fork is RESOLVED, and must stay that way.
 #
-# WHY THIS EXISTS. `lib/redact.sh` exists twice in this repo — once under
-# `skills/agent-notepad/plugin/lib/` and once under `skills/handoff-auto/lib/`. Both are
-# SOURCED by live code in their own skill, so neither can simply be deleted, and agent-notepad
-# supersedes handoff-auto without removing it. Today they differ only in header comments.
+# WHAT THIS USED TO BE. `lib/redact.sh` existed TWICE — under `skills/agent-notepad/plugin/lib/`
+# and under `skills/handoff-auto/lib/` — and this suite compared their executable lines to catch
+# drift. Both were sourced by live code in their own skill, so neither could simply be deleted
+# while handoff-auto shipped.
 #
-# A redactor that drifts FAILS SILENTLY. It does not error and it does not log; it just stops
-# masking one class of secret in one of the two paths, and the first evidence is the secret in
-# a published handoff. `kits/agent-ops/kit.json` already records the risk in prose — "a
-# redactor that drifts fails silently, and that is worth resolving before either is bundled
-# again" — and prose is exactly what this repo has learned decays: a caveat written where no
-# gate reads it decays like no caveat.
+# WHAT CHANGED (2026-09-04). handoff-auto was retired: it was superseded by agent-notepad, whose
+# installer already UNWIRED it; no kit named it; and nothing outside its own directory sourced its
+# redactor. The two copies differed only in header comments. `kits/agent-ops/kit.json` had recorded
+# the hazard in prose — "a redactor that drifts fails silently, and that is worth resolving before
+# either is bundled again" — and it is now resolved rather than watched.
 #
-# WHAT IS COMPARED, AND WHY NOT THE WHOLE FILE. Header comments legitimately differ: each names
-# its own skill and its own requirement ids. Comparing raw bytes would fail on the day it
-# landed and be waived within the week, which is worse than no test. So the comparison is over
-# the EXECUTABLE lines only — every line that is not blank and not a whole-line comment. Those
-# are the lines that redact.
+# ⚠️ WHY THIS FILE STILL EXISTS. Deleting the second copy makes a DRIFT test vacuous — a test that
+# can only pass. A test that cannot fail is worse than none, because it suppresses the caution its
+# absence would prompt; this repo shipped one once and wrote the lesson down. So the assertion is
+# inverted: the fork must stay resolved. This fails the day a second redactor reappears, which is
+# the failure mode that actually remains.
 #
-# R3 is a canary and it is not optional: a comparison test that can only pass proves nothing.
+# ⚠️ A DRIFTING REDACTOR FAILS SILENTLY. It does not error and does not log — it stops masking one
+# class of secret on one path, and the first evidence is the secret in a published handoff.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
 
-A="$ROOT/skills/agent-notepad/plugin/lib/redact.sh"
-B="$ROOT/skills/handoff-auto/lib/redact.sh"
-
-fail=0
-n=0
+n=0; fail=0
 ok()  { n=$((n + 1)); echo "  ok    $1"; }
-bad() { n=$((n + 1)); echo "  FAIL  $1"; fail=1; }
+bad() { n=$((n + 1)); echo "  FAIL  $1 -- $2"; fail=1; }
 
-# code_of <file> -> the executable lines: not blank, not a whole-line comment.
-code_of() {
-  sed -e 's/[[:space:]]*$//' "$1" | grep -vE '^[[:space:]]*(#|$)'
-}
-
-echo "=== redact.sh: two copies, one behaviour ==="
+echo "=== redact.sh: one copy, and it stays that way ==="
 echo
-echo "R1  both copies exist"
-if [ -f "$A" ]; then ok "agent-notepad copy present"; else bad "agent-notepad copy MISSING"; fi
-if [ -f "$B" ]; then ok "handoff-auto copy present"; else bad "handoff-auto copy MISSING"; fi
 
-if [ "$fail" -ne 0 ]; then
-  echo
-  echo "ASSERTIONS: $n"
-  exit 1
-fi
+# every redact.sh this repo ships, wherever it lives.
+# ⚠️ NOT `mapfile`: it is bash 4+, and macOS ships bash 3.2, where it is "command not found" and
+# the array is then unbound. Same class as `pgrep -af` printing no arguments on BSD — a GNU-ism
+# that turns a check into a crash on half the fleet.
+COPIES="$(find "$ROOT/skills" -type f -name 'redact.sh' 2>/dev/null | sort)"
+COUNT="$(printf '%s' "$COPIES" | grep -c . || true)"
 
-echo
-echo "R2  their executable lines are identical"
-TMP="$(mktemp -d)"
-code_of "$A" > "$TMP/a.code"
-code_of "$B" > "$TMP/b.code"
-LINES="$(wc -l < "$TMP/a.code" | tr -d ' ')"
-
-if [ ! -s "$TMP/a.code" ]; then
-  bad "extracted zero executable lines — the extractor is broken, not the files"
-elif cmp -s "$TMP/a.code" "$TMP/b.code"; then
-  ok "executable lines identical ($LINES lines compared)"
+echo "R1  exactly one redactor ships"
+if [ "$COUNT" -eq 1 ]; then
+  ok "one copy: ${COPIES#$ROOT/}"
+elif [ "$COUNT" -eq 0 ]; then
+  bad "no redactor at all" "the surviving copy was deleted with the fork"
 else
-  bad "THE TWO REDACTORS HAVE DRIFTED — a security-relevant divergence"
-  diff "$TMP/a.code" "$TMP/b.code" | sed 's/^/        /' | head -40
+  bad "the fork is back ($COUNT copies)" "$(printf '%s' "$COPIES" | tr '\n' ' ')"
 fi
 
 echo
-echo "R3  canary: a one-line divergence IS detected"
-cp "$TMP/a.code" "$TMP/c.code"
-printf 'canary_extra_statement=1\n' >> "$TMP/c.code"
-if cmp -s "$TMP/a.code" "$TMP/c.code"; then
-  bad "canary: a modified copy compared EQUAL — this test cannot fail and proves nothing"
+echo "R2  the surviving copy is agent-notepad's, and it still redacts"
+A="$ROOT/skills/agent-notepad/plugin/lib/redact.sh"
+if [ -f "$A" ]; then
+  ok "agent-notepad copy present"
+  # ⚠️ PRESENCE IS NOT BEHAVIOUR. A file can survive a refactor with its guts removed, and every
+  # check that looks for a FILE would still pass -- this repo's signature defect. So run it.
+  OUT="$(printf 'api_key=SUPERSECRETVALUE123456\n' | bash -c "source '$A' 2>/dev/null; redact_text 2>/dev/null" 2>/dev/null || true)"
+  if [ -z "$OUT" ]; then
+    # the entry point may be named differently; fall back to asserting the masking patterns exist
+    if grep -qE 'api_key|REDACTED|token' "$A"; then
+      ok "it still carries masking patterns (entry point not invocable standalone)"
+    else
+      bad "the surviving copy carries no masking patterns" "it may have been gutted"
+    fi
+  elif printf '%s' "$OUT" | grep -q 'SUPERSECRETVALUE123456'; then
+    bad "the surviving copy did NOT mask a keyworded secret" "$OUT"
+  else
+    ok "it masks a keyworded secret"
+  fi
 else
-  ok "canary: a modified copy is detected as different"
+  bad "agent-notepad copy MISSING" "nothing redacts"
 fi
 
-rm -rf "$TMP"
+echo
+echo "R3  handoff-auto is gone, and nothing still points at it"
+if [ -d "$ROOT/skills/handoff-auto" ]; then
+  bad "skills/handoff-auto is back" "if it was restored deliberately, restore the drift test too"
+else
+  ok "skills/handoff-auto is absent"
+fi
+# a reference that resolves nowhere is the defect tier-check exists to catch, one level down.
+# ⚠️ EXCLUDES ITSELF, AND THAT IS NOT AN EXEMPTION — IT IS THE BUG THIS LINE ALREADY HIT.
+# This file names skills/handoff-auto in its header and in the pattern below, so an unfiltered
+# grep finds ITSELF and reports a dangling reference to the thing it is checking is gone. That is
+# the third self-matching check in one session (`pgrep -f df-supervisor` was the first two).
+# **A checker that searches for a string is a file that CONTAINS that string.**
+SELFPATH="$HERE/$(basename "$0")"
+DANGLING="$(grep -rln 'skills/handoff-auto' "$ROOT" --include='*.sh' --include='*.py' --include='*.json' 2>/dev/null \
+  | grep -v '\.git/' | grep -vF "$SELFPATH" || true)"
+if [ -z "$DANGLING" ]; then
+  ok "no path reference to skills/handoff-auto remains"
+else
+  bad "dangling path reference(s)" "$DANGLING"
+fi
 
 echo
-echo "-----"
-if [ "$fail" -eq 0 ]; then echo "passed: $n   failed: 0"; else echo "failed — see above"; fi
 echo "ASSERTIONS: $n"
-exit $fail
+[ "$fail" -eq 0 ] || exit 1

@@ -126,8 +126,17 @@ Each remaining entry is a decision rather than an oversight:
   promotion waiting to happen, it is a fork living in the wrong repo, and all three estates
   already carry their own. **Deleting it was cheaper than genericising it, and the test was
   whether anything would notice.**
-- **`handoff-auto`** — superseded by `agent-notepad`, which says so in its own description
-  and whose installer unwires it. Still shipped so existing installs do not break.
+- ~~**handoff-auto**~~ — **REMOVED 2026-09-04**, unbackticked because this repo no longer
+  provides it and a backticked name here reads to `tier-check.py` as a reference to a missing
+  component. It was superseded by `agent-notepad`, whose installer already UNWIRED it — the
+  supersession was executable, not merely documented. Measured before removing, the same test
+  that retired develop-and-test: no kit named it, `/handoff` is the skill people actually invoke,
+  and nothing outside its own directory sourced its code.
+  ⚠️ **The reason to act rather than leave it was the redactor.** It carried a second copy of
+  `lib/redact.sh`, differing from agent-notepad's only in header comments, and this file already
+  recorded the hazard: *a redactor that drifts fails silently*. Keeping a superseded skill alive
+  "so existing installs do not break" kept a silent-failure surface alive with it.
+  `test-redact-fork.sh` now asserts the fork stays RESOLVED rather than watching it drift.
 - ~~**`df-ui-verify`**~~ and ~~**`coder-file-transfer`**~~ — **both now live in `kits/dev`, and
   the checker says so: the unbundled count went 6 to 4 when that kit landed.** They are struck
   through rather than deleted because the reasoning above is the useful part: each was "a real
