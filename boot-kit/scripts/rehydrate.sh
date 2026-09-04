@@ -213,6 +213,67 @@ while read -r s; do
   fi
 done < <(jq -r '(.install.skills // [])[]' "$LOCK")
 
+# ---- 2b. UN-DECLARING MUST UNINSTALL ----------------------------------------
+# ⛔ Until 2026-09-04 it did not, and both machines proved it in one afternoon: a skill removed
+# from Tier 1 AND from the lockfile left its symlink in $LIVE/skills, so every install afterwards
+# reported DRIFT (L10: "resolves INTO this instance but is declared by nothing here"). The
+# installer only ever ADDED — declaring installed, un-declaring did nothing.
+#
+# ⚠️ SYMLINKS ONLY, AND ONLY OURS. The section above already separates the two cases under one
+# `rm -rf`: a symlink can go, losing nothing, because the bytes live at the other end; a REAL
+# directory may be the only copy of somebody's edit. This prune refuses anything that is not a
+# link, and refuses any link that does not point into THIS instance's tree — a machine carries
+# other instances and a person's own hand-made links, and an installer that removed every
+# undeclared link would delete other people's work and call it tidying.
+#
+# ⚠️ A DANGLING LINK IS THE COMMON CASE, so the test cannot be "does it resolve": the target was
+# deleted with the retirement. Compare the LINK TEXT against this instance's root.
+# ⚠️ $ROOT, not a path derived from $LOCK. rehydrate takes its instance from the CURRENT
+# DIRECTORY and $LOCK is a RELATIVE filename, so `dirname "$LOCK"` is "." — right by coincidence
+# and wrong the moment anyone passes a path. $ROOT is what every other step here already uses.
+# ⚠️ TWO SPELLINGS OF ONE ROOT, and comparing only one made this prune a silent no-op.
+# On macOS /var is a symlink to /private/var, so a link created from `mktemp`'s path carries
+# /var/... while `pwd` reports /private/var/... . The same applies to any checkout under a
+# symlinked home or mount. A path comparison that knows one spelling skips every link and reports
+# success — the worst of the three outcomes, because it is indistinguishable from "nothing to do".
+# The target may DANGLE (the retirement deleted it), so resolving the target is not available;
+# resolving the ROOT both ways is.
+# ⚠️ A PATH IS NOT A STRING. Measured on this machine, three spellings of one directory:
+#     link text   /var/folders/…/T//run.XXX/inst/vendor/…   (TMPDIR's trailing slash, doubled)
+#     pwd         /var/folders/…/T/run.XXX/inst             (collapsed)
+#     pwd -P      /private/var/folders/…/T/run.XXX/inst     (/var is a symlink on macOS)
+# A raw prefix test matched none of them, so the prune skipped every link and said nothing —
+# indistinguishable from "there was nothing to prune". Repeated slashes are squeezed on both
+# sides, and BOTH root spellings are kept because the target may DANGLE (the retirement deleted
+# it), which rules out resolving the target itself.
+squeeze_slashes() { printf '%s' "$1" | sed 's#//*#/#g'; }
+INSTANCE_ROOT="$(squeeze_slashes "$ROOT")"
+INSTANCE_ROOT_P="$(squeeze_slashes "$(cd "$ROOT" 2>/dev/null && pwd -P || printf '%s' "$ROOT")")"
+PRUNED=0
+if [ -d "$LIVE/skills" ]; then
+  for link in "$LIVE"/skills/*; do
+    [ -L "$link" ] || continue                       # never a real directory
+    name="$(basename "$link")"
+    target="$(readlink "$link" 2>/dev/null || true)"
+    tnorm="$(squeeze_slashes "$target")"
+    case "$tnorm" in
+      "$INSTANCE_ROOT"/*|"$INSTANCE_ROOT_P"/*) ;;     # ours, in either spelling of the root
+      *) continue ;;                                  # somebody else's link — not ours to touch
+    esac
+    if jq -e --arg s "$name" '((.install.skills // []) | index($s)) != null' "$LOCK" >/dev/null 2>&1; then
+      continue                                        # still declared
+    fi
+    rm -f "$link"
+    PRUNED=$((PRUNED + 1))
+    if [ -e "$target" ]; then
+      say "  UNLINKED $name (no longer declared; the content stays at $target)"
+    else
+      say "  UNLINKED $name (no longer declared, and its target is already gone)"
+    fi
+  done
+fi
+[ "$PRUNED" -eq 0 ] || say "  pruned $PRUNED undeclared skill link(s) belonging to this instance"
+
 # ---- 3. install hooks --------------------------------------------------------
 # Hooks are COPIED, not symlinked: they must survive a wipe of the disk the links
 # would live on, and __HOME__ has to be rehydrated per machine.

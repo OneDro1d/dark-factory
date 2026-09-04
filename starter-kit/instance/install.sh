@@ -348,5 +348,25 @@ jq -r '(.notRestorable // {}) | to_entries[] | select(.key | startswith("$") | n
 say ""
 say "  Read AUTHENTICATION.md before pointing this at a hub."
 
+# ---- 7. the install is not finished until something has RUN ------------------
+# ⚠️ Everything above proves files were COPIED and that the tree matches the lockfile. None of it
+# proves the machinery WORKS. A hook command that does not exist FAILS OPEN — nothing blocks and
+# nothing errors. A hook installed but named in no settings.json is inert. Both are invisible to
+# every check in section 5, because those check declarations against disk, and disk is exactly
+# what is fine in both cases.
+#
+# ⚠️ NOT GATED ON $RC, on purpose. An install that ends in drift is precisely when someone most
+# needs telling that files-in-place is not the same as working.
+step "validate — files in place is not the same as working"
+if [ -f "$ROOT/VALIDATE-INSTALL.md" ]; then
+  say "  paste $ROOT/VALIDATE-INSTALL.md into a FRESH session on this machine."
+  say "  It exercises the machinery instead of looking for it: it makes the identity check"
+  say "  disagree on purpose, feeds a gate two different inputs, and asks what a headless"
+  say "  worker can actually see — which is not what this session can see."
+else
+  say "  WARN  no VALIDATE-INSTALL.md in this kit. Nothing here proves the install WORKS,"
+  say "        only that files were copied. Fetch it from the starter kit before trusting this."
+fi
+
 [ "$DRY" -eq 1 ] && exit 0
 exit "$RC"
