@@ -223,6 +223,34 @@ test_handoff_precedence_follows_the_timestamps() {
   rm -rf "$(dirname "$np")"
 }
 
+# ⛔ ORDER IS THE MECHANISM, AND NOTHING ASSERTED IT.
+#
+# MEASURED with a real cold `claude -p`: NOTES: YES / DIGEST: NO / HANDOFF: NO, with ~17k of a
+# ~73k-token payload arriving. The payload is TRUNCATED FROM THE END, so a 275 KB NOTES.md
+# emitted first pushed the handoff off the edge.
+#
+# ⚠️ TWO CORRECT FIXES WERE INVISIBLE BECAUSE OF THIS — injecting the body, and de-duplicating
+# the two hooks. Both produced the content, both appended it last, both were cut. A payload
+# built correctly and ordered wrongly is indistinguishable from one never built, which is why
+# every earlier assertion here ("does the substring appear") passed while production failed.
+test_handoff_is_emitted_before_the_notes() {
+  local np out hi ni; np="$(_scaffold)"
+  mkdir -p "$np/handoffs"
+  printf '# Handoff\nORDER_HANDOFF_SENTINEL\n' > "$np/handoffs/2026-04-04-h.md"
+  out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+
+  # Byte OFFSETS, because "both are present" is precisely the assertion that missed this.
+  hi="$(printf '%s' "$out" | grep -bo 'ORDER_HANDOFF_SENTINEL' | head -1 | cut -d: -f1)"
+  ni="$(printf '%s' "$out" | grep -bo 'NOTES_SENTINEL_ARBBOT' | head -1 | cut -d: -f1)"
+  ASSERT_CASES=$((ASSERT_CASES + 1))
+  if [ -n "$hi" ] && [ -n "$ni" ] && [ "$hi" -lt "$ni" ]; then
+    _pass
+  else
+    _fail "the handoff is emitted BEFORE NOTES.md (handoff@${hi:-none} notes@${ni:-none})"
+  fi
+  rm -rf "$(dirname "$np")"
+}
+
 # A truncated handoff must never be mistakable for a whole one.
 test_oversized_handoff_announces_its_truncation() {
   local np out; np="$(_scaffold)"

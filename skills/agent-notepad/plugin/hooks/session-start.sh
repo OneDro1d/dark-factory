@@ -82,6 +82,90 @@ _bounded_pull() {
 }
 _bounded_pull "$np" || true
 
+# ---- the newest handoff, emitted FIRST -------------------------------------
+# Lifted out of the command substitution 2026-09-04. Two reasons, both measured:
+#
+#  1. ORDER. The payload is truncated from the END, so the handoff had to move ahead of a
+#     275 KB NOTES.md or it is cut. A function is how it gets emitted first without
+#     duplicating the block.
+#  2. The apostrophe hazard documented below applies INSIDE `$( )`, where bash tracks quote
+#     state while scanning for the closing paren. A function body is parsed at definition
+#     time, out here, so that trap no longer governs this code. It broke this file twice.
+_emit_handoff() {
+  local np="$1" newest _hb _cap
+# ⚠️ A POINTER TO THE NEWEST HANDOFF — never the document itself.
+# The deliberate tier was WRITE-ONLY: this hook injected NOTES.md, DIGEST.md and
+# repos.manifest.json and never looked at handoffs/, while skills/handoff/SKILL.md defines a
+# handoff as "the SINGLE ENTRY POINT for a cold session ... the only document a fresh session
+# has to read". Two halves of one skill disagreeing, and the failure is SILENT: the restore
+# fires, looks healthy, and orients the session to whatever NOTES.md last said. MEASURED
+# 2026-09-04 - a /clear restored Notes seven weeks stale while the handoff from that same
+# day went unread. NOTE: no apostrophes in these comments - this block is inside a
+# command substitution, where bash tracks quote state while scanning for the closing
+# paren, so a lone single-quote character in a COMMENT opens a quote that never closes.
+# (This warning is spelled out in words on purpose: the first version of it contained
+# the character it warns about, and broke the file a second time.)
+#
+# ⛔ THE CONTENT, NOT THE NAME. CORRECTED 2026-09-04 AFTER THE POINTER FAILED IN PRODUCTION.
+#
+# This block used to emit a filename plus: "Read it IF NOTES.md above does not already cover
+# where the work stands." MEASURED, on a real /clear: the session read a complete-looking
+# NOTES.md, resolved that condition as "covered", never opened the handoff, and answered the
+# operator with "session start auto-loads NOTES.md, not the handoff file." The restore looked
+# perfectly healthy. THE CONDITIONAL WAS THE DEFECT: a cold reader cannot judge whether the
+# Notes cover the work, because not knowing is the state it is in.
+#
+# ⚠️ THE TOKEN ARGUMENT THAT PRODUCED THE POINTER MEASURED THE WRONG FILE. It cited a 255 KB
+# NOTES.md and applied that fear to handoffs. Handoffs on this estate top out around 17 KB
+# (~4k tokens) - two orders of magnitude smaller, and the ONE document whose entire purpose is
+# to orient a session that has lost its context. Trading it away to save 4k tokens, while
+# still cat-ing a 275 KB NOTES.md three lines above, was the wrong economy.
+#
+# ⚠️ This is what the hook was ALWAYS meant to do: the design record for auto-handoff across
+# compaction says "SessionStart hook ... injects the SAVED HANDOFF as additionalContext /
+# systemMessage". The pointer was a regression against a written design, not a new tradeoff.
+#
+# Bounded, because an unbounded read is how the previous defect got in: capped, and the cap
+# ANNOUNCES ITSELF when it bites, so a truncated handoff can never look like a whole one.
+if [ -d "$np/handoffs" ]; then
+  newest="$(ls -t "$np/handoffs"/*.md 2>/dev/null | head -1)"
+  if [ -n "$newest" ]; then
+    _hb="$(wc -c < "$newest" 2>/dev/null | tr -d ' ')"
+    _cap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-65536}"
+    printf '\n\n### ⛔ NEWEST HANDOFF — READ THIS FIRST\n\n'
+    printf '  file: %s\n' "$newest"
+    printf '  handoff written : %s\n' "$(date -u -r "$newest" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+    # ⚠️ WHICH IS NEWER IS A FACT, NOT A PREFERENCE — so state it rather than asserting a
+    # blanket precedence. The first version of this block said the handoff always WINS. That
+    # is right when it is the later document and WRONG when the Notes have moved on since:
+    # it would trade the old misdirection (handoff never read) for a new one (a stale handoff
+    # overriding current Notes). A rule that is correct only half the time is the shape this
+    # whole fix exists to remove.
+    if [ -f "$np/NOTES.md" ]; then
+      printf '  NOTES.md written: %s\n' "$(date -u -r "$np/NOTES.md" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+      if [ "$newest" -nt "$np/NOTES.md" ]; then
+        printf '\n  THE HANDOFF IS NEWER THAN THE NOTES. Where they disagree, the handoff wins.\n'
+      else
+        printf '\n  The NOTES above are NEWER than this handoff. Where they disagree, prefer the\n'
+        printf '  Notes for current state — but this handoff still carries the mission framing,\n'
+        printf '  the artefact links and the blocked list, which the Notes may not restate.\n'
+      fi
+    fi
+    printf '\n  This is the deliberate checkpoint: where the work stands, the ONE next action,\n'
+    printf '  and what is blocked and on whom. Resume from it — do not re-derive it.\n\n'
+    printf -- '---8<--- handoff begins ---8<---\n'
+    if [ "${_hb:-0}" -gt "$_cap" ]; then
+      head -c "$_cap" "$newest"
+      printf '\n---8<--- TRUNCATED at %s of %s bytes. THIS IS NOT THE WHOLE HANDOFF -\n' "$_cap" "$_hb"
+      printf 'open %s to read the rest before acting. ---8<---\n' "$newest"
+    else
+      cat "$newest"
+      printf '\n---8<--- handoff ends ---8<---\n'
+    fi
+  fi
+fi
+}
+
 # --- build the combined context (file reads only) --------------------------
 name="$(basename "$np")"
 combined="$(
@@ -97,6 +181,23 @@ combined="$(
     printf 'entries, and this notepad writes sessions/index.json itself. Commit them, then pull.\n'
     printf 'Until then every session starts on whatever these Notes last said.\n'
   fi
+  # ⛔ ORDER IS THE MECHANISM. THE HANDOFF GOES FIRST. MEASURED 2026-09-04.
+  #
+  # The payload is TRUNCATED before it reaches the model, and truncation cuts from the END —
+  # so position in this file IS priority. With a 275 KB NOTES.md emitted first, a cold session
+  # received `NOTES: YES / DIGEST: NO / HANDOFF: NO` and ~17k tokens of a ~73k-token payload.
+  # Everything after NOTES.md was silently dropped.
+  #
+  # ⚠️ TWO CORRECT FIXES HAD ALREADY FAILED BECAUSE OF THIS. Injecting the handoff body
+  # (#102) and de-duplicating the two hooks (#103) were both right and both invisible: the
+  # content was produced, appended last, and cut. A payload that is built correctly and
+  # ordered wrongly is indistinguishable from one that was never built.
+  #
+  # ⚠️ AND THIS RECLASSIFIES THE NOTES.md BLOAT. It is not a token-cost inconvenience; a large
+  # NOTES.md ACTIVELY DESTROYS CONTINUITY by crowding out everything behind it. Ordering
+  # protects the handoff from that, but it does not fix it — the Notes still lose their own
+  # tail. Graduation is still the real repair.
+  _emit_handoff "$np"
   if [ -f "$np/NOTES.md" ]; then
     printf '\n### NOTES.md\n\n'
     cat "$np/NOTES.md"
@@ -104,77 +205,6 @@ combined="$(
   if [ -f "$np/DIGEST.md" ]; then
     printf '\n\n### DIGEST.md (cross-scope, derived)\n\n'
     cat "$np/DIGEST.md"
-  fi
-  # ⚠️ A POINTER TO THE NEWEST HANDOFF — never the document itself.
-  # The deliberate tier was WRITE-ONLY: this hook injected NOTES.md, DIGEST.md and
-  # repos.manifest.json and never looked at handoffs/, while skills/handoff/SKILL.md defines a
-  # handoff as "the SINGLE ENTRY POINT for a cold session ... the only document a fresh session
-  # has to read". Two halves of one skill disagreeing, and the failure is SILENT: the restore
-  # fires, looks healthy, and orients the session to whatever NOTES.md last said. MEASURED
-  # 2026-09-04 - a /clear restored Notes seven weeks stale while the handoff from that same
-  # day went unread. NOTE: no apostrophes in these comments - this block is inside a
-  # command substitution, where bash tracks quote state while scanning for the closing
-  # paren, so a lone single-quote character in a COMMENT opens a quote that never closes.
-  # (This warning is spelled out in words on purpose: the first version of it contained
-  # the character it warns about, and broke the file a second time.)
-  #
-  # ⛔ THE CONTENT, NOT THE NAME. CORRECTED 2026-09-04 AFTER THE POINTER FAILED IN PRODUCTION.
-  #
-  # This block used to emit a filename plus: "Read it IF NOTES.md above does not already cover
-  # where the work stands." MEASURED, on a real /clear: the session read a complete-looking
-  # NOTES.md, resolved that condition as "covered", never opened the handoff, and answered the
-  # operator with "session start auto-loads NOTES.md, not the handoff file." The restore looked
-  # perfectly healthy. THE CONDITIONAL WAS THE DEFECT: a cold reader cannot judge whether the
-  # Notes cover the work, because not knowing is the state it is in.
-  #
-  # ⚠️ THE TOKEN ARGUMENT THAT PRODUCED THE POINTER MEASURED THE WRONG FILE. It cited a 255 KB
-  # NOTES.md and applied that fear to handoffs. Handoffs on this estate top out around 17 KB
-  # (~4k tokens) - two orders of magnitude smaller, and the ONE document whose entire purpose is
-  # to orient a session that has lost its context. Trading it away to save 4k tokens, while
-  # still cat-ing a 275 KB NOTES.md three lines above, was the wrong economy.
-  #
-  # ⚠️ This is what the hook was ALWAYS meant to do: the design record for auto-handoff across
-  # compaction says "SessionStart hook ... injects the SAVED HANDOFF as additionalContext /
-  # systemMessage". The pointer was a regression against a written design, not a new tradeoff.
-  #
-  # Bounded, because an unbounded read is how the previous defect got in: capped, and the cap
-  # ANNOUNCES ITSELF when it bites, so a truncated handoff can never look like a whole one.
-  if [ -d "$np/handoffs" ]; then
-    newest="$(ls -t "$np/handoffs"/*.md 2>/dev/null | head -1)"
-    if [ -n "$newest" ]; then
-      _hb="$(wc -c < "$newest" 2>/dev/null | tr -d ' ')"
-      _cap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-65536}"
-      printf '\n\n### ⛔ NEWEST HANDOFF — READ THIS FIRST\n\n'
-      printf '  file: %s\n' "$newest"
-      printf '  handoff written : %s\n' "$(date -u -r "$newest" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
-      # ⚠️ WHICH IS NEWER IS A FACT, NOT A PREFERENCE — so state it rather than asserting a
-      # blanket precedence. The first version of this block said the handoff always WINS. That
-      # is right when it is the later document and WRONG when the Notes have moved on since:
-      # it would trade the old misdirection (handoff never read) for a new one (a stale handoff
-      # overriding current Notes). A rule that is correct only half the time is the shape this
-      # whole fix exists to remove.
-      if [ -f "$np/NOTES.md" ]; then
-        printf '  NOTES.md written: %s\n' "$(date -u -r "$np/NOTES.md" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
-        if [ "$newest" -nt "$np/NOTES.md" ]; then
-          printf '\n  THE HANDOFF IS NEWER THAN THE NOTES. Where they disagree, the handoff wins.\n'
-        else
-          printf '\n  The NOTES above are NEWER than this handoff. Where they disagree, prefer the\n'
-          printf '  Notes for current state — but this handoff still carries the mission framing,\n'
-          printf '  the artefact links and the blocked list, which the Notes may not restate.\n'
-        fi
-      fi
-      printf '\n  This is the deliberate checkpoint: where the work stands, the ONE next action,\n'
-      printf '  and what is blocked and on whom. Resume from it — do not re-derive it.\n\n'
-      printf -- '---8<--- handoff begins ---8<---\n'
-      if [ "${_hb:-0}" -gt "$_cap" ]; then
-        head -c "$_cap" "$newest"
-        printf '\n---8<--- TRUNCATED at %s of %s bytes. THIS IS NOT THE WHOLE HANDOFF -\n' "$_cap" "$_hb"
-        printf 'open %s to read the rest before acting. ---8<---\n' "$newest"
-      else
-        cat "$newest"
-        printf '\n---8<--- handoff ends ---8<---\n'
-      fi
-    fi
   fi
   if [ -f "$np/repos.manifest.json" ]; then
     printf '\n\n### repos.manifest.json (code repos in scope)\n\n'
