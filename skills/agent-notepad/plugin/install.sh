@@ -94,15 +94,47 @@ echo "agent-notepad:   runtime tree -> $DEST/{hooks,lib,bin,notepad-template}"
 # ⚠️ FAIL-SAFE EITHER WAY. Without the config git falls back to an ordinary conflict — today's
 # behaviour — never to corruption. So this is a convenience, not a load-bearing guarantee, and
 # a machine that skips it is inconvenienced rather than broken.
-if command -v git >/dev/null 2>&1; then
-  if git config --global merge.loom-session-index.driver >/dev/null 2>&1; then
-    echo "agent-notepad:   merge driver already registered"
+#
+# ⛔ `--global` DOES NOT HONOUR `--target`, AND THAT ESCAPED THE TEST HOME. Measured on this
+# laptop hours after the first version shipped: the real `~/.gitconfig` held
+#   python3 /var/folders/.../T/tmp.k3YHwrrg3s/.claude/hooks/agent-notepad/lib/merge-session-index.py
+# — a path inside a DELETED temp dir, written by `test_install.sh` running the installer with
+# `--target <tmpdir>`. Everything else this script writes is under "$TARGET_HOME"; this one
+# line was addressed by SCOPE instead, so the hermetic test was not hermetic and it silently
+# reconfigured the developer's own machine. Point the global scope AT THE TARGET.
+#
+# ⛔ AND DO NOT SKIP WHEN PRESENT. The first version returned early on
+# `git config --global ... >/dev/null` succeeding — a PRESENCE check, which cannot tell a good
+# registration from one naming a directory that no longer exists. It reported "already
+# registered" over exactly the dead path above and left it there. Idempotent means CONVERGES
+# ON CORRECT, not "leaves whatever it finds": compare the value and rewrite when it differs.
+#
+# ⚠️ THE OVERRIDE IS ONLY FOR A REDIRECTED TARGET, NEVER FOR THE REAL HOME. Forcing
+# GIT_CONFIG_GLOBAL=$HOME/.gitconfig would CREATE that file on a machine whose global config
+# actually lives at the XDG path (~/.config/git/config) — and git reads XDG only when
+# ~/.gitconfig is absent, so creating it would silently shadow every global setting the user
+# has. On the real HOME, plain `--global` lets git resolve its own file.
+_git_cfg() { # run `git config --global ...` against the TARGET's global config
+  if [ "$TARGET_HOME" = "${HOME:-}" ]; then
+    git config --global "$@"
   else
-    git config --global merge.loom-session-index.name \
+    GIT_CONFIG_GLOBAL="$TARGET_HOME/.gitconfig" git config --global "$@"
+  fi
+}
+if command -v git >/dev/null 2>&1; then
+  _want="python3 $DEST/lib/merge-session-index.py %O %A %B"
+  _have="$(_git_cfg merge.loom-session-index.driver 2>/dev/null || true)"
+  if [ "$_have" = "$_want" ]; then
+    echo "agent-notepad:   merge driver already registered (correct path)"
+  else
+    _git_cfg merge.loom-session-index.name \
       "agent-notepad sessions/index.json union, keyed by sessionId" 2>/dev/null || true
-    if git config --global merge.loom-session-index.driver \
-         "python3 $DEST/lib/merge-session-index.py %O %A %B" 2>/dev/null; then
-      echo "agent-notepad:   merge driver registered (sessions/index.json)"
+    if _git_cfg merge.loom-session-index.driver "$_want" 2>/dev/null; then
+      if [ -n "$_have" ]; then
+        echo "agent-notepad:   merge driver RE-registered (stale path replaced: $_have)"
+      else
+        echo "agent-notepad:   merge driver registered (sessions/index.json)"
+      fi
     else
       echo "agent-notepad: ! could not register the merge driver — index.json conflicts stay manual"
     fi

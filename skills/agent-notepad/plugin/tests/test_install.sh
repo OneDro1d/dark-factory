@@ -133,4 +133,50 @@ test_installed_hook_is_pipe_testable() {
   rm -rf "$T" "$cwd"
 }
 
+# ⛔ THE HERMETIC CLAIM IN THIS FILE'S HEADER WAS FALSE FOR ONE LINE, AND IT ESCAPED.
+# The merge-driver registration used `git config --global`, which does NOT honour --target.
+# Measured on the developer's laptop hours after it shipped: the real ~/.gitconfig held a
+# driver path inside a mktemp dir this very suite had already deleted. Every OTHER write in
+# install.sh is addressed by PATH (under $TARGET_HOME); that one was addressed by SCOPE, and
+# scope does not follow the target.
+#
+# ⚠️ The first assertion alone would NOT have caught it — a registration can be correct in the
+# target AND leaked to the real HOME. The second assertion is the one that matters, and it is
+# the shape to copy for any future config write: assert the write LANDED, then assert it did
+# not land ANYWHERE ELSE.
+test_merge_driver_registers_into_the_target_not_the_real_home() {
+  local T real_before real_after
+  T="$(mktemp -d)"
+  real_before="$(git config --global merge.loom-session-index.driver 2>/dev/null || true)"
+  bash "$INSTALL" --target "$T" >/dev/null 2>&1
+
+  local got
+  got="$(GIT_CONFIG_GLOBAL="$T/.gitconfig" \
+           git config --global merge.loom-session-index.driver 2>/dev/null || true)"
+  assert_contains "$got" "$T/.claude/hooks/agent-notepad/lib/merge-session-index.py" \
+    "driver registered in the TARGET's gitconfig, naming the target's own path"
+
+  real_after="$(git config --global merge.loom-session-index.driver 2>/dev/null || true)"
+  assert_eq "$real_before" "$real_after" \
+    "the REAL ~/.gitconfig is untouched by an install with --target"
+  rm -rf "$T"
+}
+
+# ⚠️ Idempotent must mean CONVERGES ON CORRECT, not "leaves whatever it finds". The first
+# version returned early whenever the key merely EXISTED — a presence check, which reported
+# "already registered" over a path pointing into a deleted directory and left it there.
+test_merge_driver_rewrites_a_stale_registration() {
+  local T; T="$(mktemp -d)"
+  GIT_CONFIG_GLOBAL="$T/.gitconfig" git config --global \
+    merge.loom-session-index.driver "python3 /nonexistent/gone/merge-session-index.py %O %A %B"
+  bash "$INSTALL" --target "$T" >/dev/null 2>&1
+  local got
+  got="$(GIT_CONFIG_GLOBAL="$T/.gitconfig" \
+           git config --global merge.loom-session-index.driver 2>/dev/null || true)"
+  assert_not_contains "$got" "/nonexistent/gone/" "the stale path is gone"
+  assert_contains "$got" "$T/.claude/hooks/agent-notepad/lib/merge-session-index.py" \
+    "the correct path replaced it"
+  rm -rf "$T"
+}
+
 run_tests
