@@ -76,5 +76,6 @@ src="$(jq -r '.notepadSource' "$TMP/a.json" 2>/dev/null)"
 [ "$src" = "discovered from cwd" ] && ok "C: source is cwd discovery" || bad "C: source" "got '$src'"
 
 echo
-echo "pass=$PASS fail=$FAIL"
+echo "PASS=$PASS FAIL=$FAIL"
+echo "ASSERTIONS: $((PASS+FAIL))"
 [ "$FAIL" -eq 0 ]
