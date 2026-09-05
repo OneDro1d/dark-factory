@@ -324,7 +324,13 @@ try: print(json.load(sys.stdin).get('systemMessage','')[:2000])
 except Exception: pass
 ")"
 
-  assert_contains "$head" "READ THESE FILES NOW" "the imperative is inside the first 2 KB"
+  assert_contains "$head" "WHAT IS BELOW, AND WHAT IS NOT" "the orientation block is inside the first 2 KB"
+  # ⚠️ TRUTHFUL, not merely present: this fixture's handoff is tiny, so it IS inlined whole and
+  # the header must say so — an unconditional "READ THIS FILE" here would be an instruction
+  # contradicting reality, which this estate measured (2026-04-24) the agent obeying over the
+  # reality.
+  assert_contains "$head" "INLINED IN FULL" "a handoff that fits is reported as inlined in full"
+  assert_contains "$head" "NOT inlined" "NOTES.md is reported as NOT inlined"
   assert_contains "$head" "$np/handoffs/2026-06-06-h.md" "the handoff PATH is inside the first 2 KB"
   assert_contains "$head" "$np/NOTES.md" "the NOTES path is inside the first 2 KB"
   assert_contains "$head" "TRUNCATED" "the reader is warned content may be cut"
@@ -431,7 +437,28 @@ except Exception: pass
   assert_contains "$ctx" "not" "the guard is present"
   assert_contains "$ctx" "a reason to skip the files above" \
     "a next action reading as DONE is explicitly NOT permission to skip the files"
-  assert_contains "$ctx" "READ THESE FILES NOW" "the imperative still leads"
+  assert_contains "$ctx" "WHAT IS BELOW, AND WHAT IS NOT" "the orientation block still leads"
+}
+
+# ⛔ THE HEADER MUST NEVER SAY "INLINED IN FULL" OVER A TRUNCATED HANDOFF. A header that always
+# reassures is worse than the old imperative: it would tell a cold session the cut document was
+# complete. So the cut branch is tested separately, with the byte counts it must show.
+test_header_reports_a_cut_handoff_as_cut_with_the_numbers() {
+  local np out head; np="$(_scaffold)"
+  mkdir -p "$np/handoffs"
+  # a handoff LARGER than the cap
+  awk 'BEGIN{ print "# Handoff"; for(i=0;i<400;i++) print "line of handoff body ......" }' \
+    > "$np/handoffs/2026-06-06-big.md"
+  out="$(AGENT_NOTEPAD_NO_PULL=1 AGENT_NOTEPAD_HANDOFF_MAX_BYTES=1024 _run_hook "$np")"
+  head="$(printf '%s' "$out" | python3 -c "
+import sys, json
+try: print(json.load(sys.stdin).get('systemMessage','')[:2000])
+except Exception: pass
+")"
+  assert_contains "$head" "HANDOFF — CUT" "a handoff over the cap is reported as CUT"
+  assert_contains "$head" "only 1024 of" "the header states how many bytes ARE below"
+  assert_contains "$head" "OPEN THIS FILE" "and orders the read, because here it IS needed"
+  assert_not_contains "$head" "INLINED IN FULL" "it must not also claim the handoff is whole"
 }
 
 run_tests
