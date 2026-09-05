@@ -308,6 +308,85 @@ else
   say "WARN  no rehydrate.sh in the pinned engine — skills and hooks were NOT installed"
 fi
 
+# ---- 3b. plugins -> $LIVE/skills (personal skills-directory plugins) --------
+# ADDED for M-KITV2 B15. `agent`/hooks/bin/monitors materialised into
+# ~/.claude/skills/<name>/ with a .claude-plugin/plugin.json load AUTOMATICALLY, in
+# every interactive session, as <name>@skills-dir -- no marketplace, no /plugin
+# install, no `enabledPlugins` entry. That last part is measured, not assumed:
+# kitv2/b4 ran the marketplace + project `enabledPlugins` path against real headless
+# launches and it delivered NOTHING to `-p` or `-p --setting-sources project` -- no
+# hooks, no bin, no monitors, no agent, and no error on stdout, stderr or --debug. A
+# headless worker cannot tell it is ungoverned on that path. This step exists because
+# the ONLY path measured to work at all is a materialised copy under $LIVE/skills/.
+# Headless workers do not use this step -- they get the same plugin content through
+# --plugin-dir, launched by df-worker (also kitv2/b4: GREEN on both headless modes).
+#
+# ONE PIN. The plugin is materialised from THIS lockfile's own dark-factory pin, never
+# from a marketplace sha declared beside it -- moving the plugin forward is moving the
+# T1 pin, and there is no second version number that can drift out of step with it.
+#
+# ONLY `upstream:<path>` IS ACCEPTED. `local:` or a bare path would materialise an
+# unpinned, unaudited tree under the exact banner the paragraph above just asserted
+# ("one pin") -- refused, not accommodated.
+#
+# DEST MUST RESOLVE UNDER $LIVE/skills/. That is the one directory the personal
+# skills-directory loader scans (docs: "a .claude-plugin/plugin.json under
+# ~/.claude/skills/<name>/ loads in every project"); the lockfile spells it
+# "~/.claude/skills/<name>" literally, and this step is the only place that expands
+# the `~` -- against $LIVE, which is overridable (LOOM_LIVE) for exactly the reason
+# BINDIR is below: a test that has to write into the real ~/.claude is a test nobody
+# runs twice. Anything not spelled under that literal prefix is refused rather than
+# written somewhere a human did not choose.
+#
+# A REFUSED PLUGIN DOES NOT ABORT THE INSTALL — the other steps still run, and this
+# is a plugin-by-plugin loop, not an all-or-nothing gate — but it DOES cost the exit
+# code: RC follows the same "installed but NOT locked" contract lock-verify uses
+# below, so a refusal is never silently swallowed into a green run.
+step "plugins"
+RC=0
+PLUG_N="$(jq -r '(.install.plugins // []) | length' "$LOCK")"
+if [ "$PLUG_N" -eq 0 ]; then
+  say "plugins: none declared"
+else
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    PNAME="$(jq -r '.name // empty' <<<"$p")"
+    PSRC="$(jq -r '.source // empty' <<<"$p")"
+    PDEST="$(jq -r '.dest // empty' <<<"$p")"
+    [ -n "$PNAME" ] || PNAME="<unnamed>"
+    case "$PSRC" in
+      upstream:*) SRC_REL="${PSRC#upstream:}" ;;
+      *) say "  REFUSED plugin $PNAME: source '$PSRC' is not upstream:<path>"
+         RC=2; continue ;;
+    esac
+    case "$PDEST" in
+      "~/.claude/skills/"*) PDEST_ABS="$LIVE/skills/${PDEST#\~/.claude/skills/}" ;;
+      *) say "  REFUSED plugin $PNAME: dest '$PDEST' is outside ~/.claude/skills/"
+         RC=2; continue ;;
+    esac
+    PSRC_ABS="$T1/$SRC_REL"
+    if [ "$DRY" -eq 1 ]; then
+      say "  would materialise plugin $PNAME <- $SRC_REL -> $PDEST_ABS"
+      continue
+    fi
+    if [ ! -f "$PSRC_ABS/.claude-plugin/plugin.json" ]; then
+      say "  REFUSED plugin $PNAME: no .claude-plugin/plugin.json at $SRC_REL"
+      RC=2; continue
+    fi
+    mkdir -p "$(dirname "$PDEST_ABS")"
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a --delete "$PSRC_ABS/" "$PDEST_ABS/" \
+        || { say "  REFUSED plugin $PNAME: rsync failed"; RC=2; continue; }
+    else
+      rm -rf "$PDEST_ABS"
+      mkdir -p "$PDEST_ABS"
+      cp -R "$PSRC_ABS/." "$PDEST_ABS/" \
+        || { say "  REFUSED plugin $PNAME: copy failed"; RC=2; continue; }
+    fi
+    say "  plugin $PNAME: materialised from ${T1_COMMIT:0:8} -> $PDEST_ABS"
+  done < <(jq -c '(.install.plugins // [])[]' "$LOCK")
+fi
+
 # ---- 4. PATH -----------------------------------------------------------------
 step "df-mission on PATH"
 # Overridable for the same reason rehydrate.sh takes LOOM_LIVE: a test that has to write
@@ -332,7 +411,9 @@ fi
 
 # ---- 5. verify ---------------------------------------------------------------
 step "verify"
-RC=0
+# RC is initialised in the "plugins" step above, not here: a refused plugin must
+# already have set it to 2 before this line, and re-zeroing it here would silently
+# forgive that refusal the moment lock-verify itself happens to pass.
 if [ "$DRY" -eq 1 ]; then
   say "would  run boot-kit/scripts/lock-verify.sh"
 elif [ -f "$ENGINE_DST/lock-verify.sh" ]; then
