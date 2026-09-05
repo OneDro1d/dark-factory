@@ -369,6 +369,60 @@ else
   bash "$RMD" --home "$HOME" || true
 fi
 
+# ---- 6. df-mission on PATH ---------------------------------------------------
+# ⚠️ INSTALLED-BUT-UNREACHABLE IS NOT INSTALLED, and it fails much later and in the wrong
+# place: as "command not found" at the moment somebody first needs it.
+#
+# ⛔ MEASURED 2026-09-05, per kit installer: the four personal kits link this in their own
+# step 4; `loom_storage-ESO` and `loom-delia` DO NOT. Both materialise the whole engine and
+# then never link the single CLI entry point, so on those two the engine is present and the
+# command does not exist. Fixing their two forked installers by hand would have fixed two
+# machines and left the next fork to rediscover it — this fixes every kit at the next pin.
+#
+# ⚠️ IDEMPOTENT WITH THE KITS THAT ALREADY DO IT: this runs BEFORE their step 4, both create
+# the same link to the same target, so whichever runs second is a no-op.
+say ""
+say "== 6. df-mission on PATH =="
+# Overridable for the same reason LIVE is: a test that has to write into the real
+# ~/.local/bin is a test nobody runs twice.
+BINDIR="${LOOM_BIN:-$HOME/.local/bin}"
+DFM="$SELFDIR/df-mission"
+if [ ! -f "$DFM" ]; then
+  say "  WARN  df-mission not in the pinned engine — nothing to link"
+elif [ "$DRY" -eq 1 ]; then
+  say "  would link $BINDIR/df-mission -> $DFM"
+else
+  mkdir -p "$BINDIR"
+  # ⚠️ rm THEN ln, never a bare `ln -sf`. If the existing name still RESOLVES TO A DIRECTORY,
+  # `ln -sf` does not replace it — it creates the new link INSIDE that directory and leaves
+  # the original untouched, so the repoint silently does not take. This estate has already
+  # lost an afternoon to exactly that, on ~/.claude/skills.
+  #
+  # ⛔ AND A REAL DIRECTORY THERE IS NOT OURS TO DELETE. `rm -f` cannot remove one — it fails
+  # and `ln -s` then fails too, which is how this was CAUGHT: the case-C fixture nested a
+  # stray link exactly as the old bug did. The answer is NOT `rm -rf`. A directory at
+  # $BINDIR/df-mission was put there by somebody, this script cannot know what is inside it,
+  # and silently destroying a directory in the operator's own ~/.local/bin to install a
+  # convenience symlink is a trade nobody agreed to. REFUSE, say precisely what to do, move on.
+  if [ -d "$BINDIR/df-mission" ] && [ ! -L "$BINDIR/df-mission" ]; then
+    say "  WARN  $BINDIR/df-mission is a DIRECTORY — refusing to delete it."
+    say "        df-mission is installed at $DFM and will NOT resolve as a command."
+    say "        Move or remove that directory yourself, then re-run this."
+  else
+  rm -f "$BINDIR/df-mission"
+  if ln -s "$DFM" "$BINDIR/df-mission" 2>/dev/null; then
+    say "  ok    $BINDIR/df-mission"
+    case ":$PATH:" in
+      *":$BINDIR:"*) ;;
+      *) say "  WARN  $BINDIR is not on your PATH — df-mission is installed and will NOT resolve."
+         say "        Add it to your shell profile, then open a new shell." ;;
+    esac
+  else
+    say "  WARN  could not link $BINDIR/df-mission"
+  fi
+  fi
+fi
+
 say ""
 say "== summary =="
 # Printed on every run, including zero. "No overrides" and "nobody looked" are different
