@@ -206,7 +206,7 @@ elif command -v gh >/dev/null 2>&1; then
   MISSID=""
   while read -r acct; do
     [ -n "$acct" ] || continue
-    printf '%s\n' "$HAVE" | grep -qx "$acct" || MISSID="$MISSID$acct"$'\n'
+    grep -qx "$acct" <<<"$HAVE" || MISSID="$MISSID$acct"$'\n'
   done <<EOF
 $REQ_ACCTS
 EOF
@@ -569,10 +569,10 @@ else
     # lockfile entry. Without this second test, correctly declaring all five hooks of a
     # suite still leaves its directory reported as undeclared for ever — a finding that
     # cannot be resolved is a finding people learn to skip. Found by declaring one.
-    if printf '%s\n' "$DECLARED_HOOKS" | grep -qxF "$b"; then
+    if grep -qxF "$b" <<<"$DECLARED_HOOKS"; then
       continue
     fi
-    if [ -d "$LIVE/hooks/$b" ] && printf '%s\n' "$DECLARED_HOOKS" | grep -q "^$b/"; then
+    if [ -d "$LIVE/hooks/$b" ] && grep -q "^$b/" <<<"$DECLARED_HOOKS"; then
       continue
     fi
     L8UNDECL="$L8UNDECL $b"$'\n'
@@ -652,7 +652,7 @@ else
   L9BADEXCUSE=""
   while read -r h; do
     [ -n "$h" ] || continue
-    if printf '%s' "$L9CMDS" | grep -qF -- "$h"; then
+    if grep -qF -- "$h" <<<"$L9CMDS"; then
       continue
     fi
     reason="$(jq -r --arg h "$h" '.install.hooksUnwired[$h] // empty' "$LOCK" 2>/dev/null)"
@@ -776,8 +776,14 @@ else
     b="$(basename "$f")"
     if is_not_an_entry "$b"; then L10SKIP=$((L10SKIP + 1)); continue; fi
     L10SEEN=$((L10SEEN + 1))
-    printf '%s\n' "$DECLARED_SKILLS" | grep -qxF "$b" && continue
-    printf '%s\n' "$DECLARED_PLUGIN_DIRS" | grep -qxF "$b" && continue
+    # ⚠️ HERE-STRINGS, NOT PIPES. This script runs under `set -o pipefail`, and `grep -q` exits
+    # on its first match — if `printf` is still writing when it does, printf takes SIGPIPE, the
+    # pipeline is non-zero, and a DECLARED name reads as undeclared. Measured 2026-09-05 on a
+    # Linux instance: the SAME record, the SAME code, LOCKED at 17:5x and two declared skills
+    # reported as orphans at 18:59 — links this very install had just created. A here-string has
+    # no second process to be interrupted. (The L8 hook check above had the same shape.)
+    grep -qxF "$b" <<<"$DECLARED_SKILLS" && continue
+    grep -qxF "$b" <<<"$DECLARED_PLUGIN_DIRS" && continue
     if [ ! -L "$LIVE/skills/$b" ]; then
       L10OPAQUE="$L10OPAQUE$b"$'\n'
       continue
