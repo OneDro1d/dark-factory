@@ -61,6 +61,21 @@ explicitly (`claude --agent df-orchestrator`, or a supervisor profile that passe
 role). The tier is then a launch-profile decision — visible, per role, reversible — and no model
 name is frozen into a public file, where it would age into a silent downgrade.
 
+## claim-gate: which tool call counts as the claim
+
+`hooks/claim-gate.py` decides which tool call is the mechanical claim on a tracker item, and
+that decision is tracker-shaped, not hardcoded to one tracker. Three env vars, exported by
+`df-worker`'s matching `--claim-tool` / `--claim-item-keys` / `--claim-values-key` flags,
+tell it: `DF_CLAIM_TOOL` (a regex over `tool_name`), `DF_CLAIM_ITEM_KEYS` (comma-separated
+`tool_input` keys that may hold the item id), and `DF_CLAIM_VALUES_KEY` (the `tool_input`
+key holding the values `DF_CLAIM_COLUMNS` is checked against — the empty string means check
+`tool_input` itself). Each defaults to the original Monday-only shape
+(`itemId`/`item_id`/`itemID`, values under `columnValues`), so a worker launched without
+these flags is unaffected. A Monday tracker needs none of them; a Notion tracker (item id in
+`page_id`, claim fields nested under a `properties` object) sets all three; a Jira tracker
+(item id in `issue_key`, claim fields like `assignee` at the top level of `tool_input`, with
+no nested values object) sets `DF_CLAIM_VALUES_KEY` to the empty string.
+
 ## Developing this plugin
 
 Load it directly from a working tree, without installing it:

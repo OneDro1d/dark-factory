@@ -51,7 +51,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__.*monday.*change_item_column_values",
+        "matcher": "mcp__.*",
         "hooks": [
           {
             "type": "command",

@@ -13,7 +13,9 @@ TWO EVENTS, ONE FILE, so the write-side and the marker-side cannot drift apart:
       no marker yet -> DENY everything except the tracker write that claims DF_TICKET
       marker present -> DENY any tracker WRITE whose item id is not DF_TICKET
                         (a worker cannot edit another worker's ticket), else abstain
-  PostToolUse (matcher "mcp__.*monday.*change_item_column_values")
+  PostToolUse (matcher "mcp__.*" — this file, not hooks.json, decides which call is the
+              claim; a matcher hardcoded to Monday's tool name would silently never fire
+              for a Notion or Jira claim write, so the GATE narrows, not the matcher)
       the claim write succeeded -> create <marker dir>/.claim-done
 
 MARKER LOCATION: `$DF_SCRATCH/.claim-done` when DF_SCRATCH is set, else the hook event's
@@ -40,6 +42,38 @@ every required key at its exact expected value; anything else is DENIED, and the
 prints the exact expected columnValues JSON so the worker can copy it verbatim rather than
 guess again. PostToolUse mirrors this: the marker is written only for a write that matched.
 DF_CLAIM_COLUMNS unset -> unchanged: any write to DF_TICKET is the claim, exactly as before.
+
+THE TRACKER-AGNOSTIC SHAPE (measured, second live estate): a Monday-shaped write is not the
+only claim shape a tracker can have. A Notion tracker claims via a tool like
+`mcp__<hub>__notion-<workspace>__notion-update-page` with the item id in `page_id` and the claim
+fields nested under a `properties` object; a Jira tracker claims via
+`mcp__<hub>__jira_update_issue` with the item id in `issue_key` and the claim fields
+(`assignee`, `fields`) at the TOP LEVEL of `tool_input`, no nested values object at all. A
+gate that only recognises `tool_name` matching Monday's shape denies every one of those
+writes forever, for the whole session. Three env vars generalise the same three questions
+this file always had to answer — which tool call is the write, which argument names the
+item, which argument (if any) holds the values to check — each defaulting to exactly the
+old Monday-only behaviour so an unset environment is byte-for-byte unchanged:
+
+  DF_CLAIM_TOOL        a regex over tool_name. Default: the Monday regex above.
+  DF_CLAIM_ITEM_KEYS   comma-separated tool_input keys that may hold the item id, tried in
+                       order. Default: "itemId,item_id,itemID".
+  DF_CLAIM_VALUES_KEY  the tool_input key holding the values object DF_CLAIM_COLUMNS is
+                       matched against. Default: "columnValues". The EMPTY STRING means
+                       "match DF_CLAIM_COLUMNS against tool_input itself" — what Jira's
+                       top-level assignee/fields need, since there is no nested values
+                       object to name. Unset (not present in the environment at all) means
+                       the default; present-but-empty is a deliberate, different value, so
+                       the two are told apart by whether the key is IN the environment, not
+                       by truthiness of its value.
+
+DF_CLAIM_TOOL is compiled once per invocation. An INVALID regex while `DF_TICKET` is set is
+a DENY, not a fall-through to the default and not an allow: a gate that cannot evaluate its
+own arming has decided nothing, and the fail-closed rule below applies to this exactly as it
+does to any other internal error. Every denial that fires while unclaimed (or on a claim
+write whose values do not match) NAMES the tool regex, the item key(s) and — when
+DF_CLAIM_COLUMNS is armed — the values key and the expected payload, so a worker can copy
+them verbatim rather than guess a tracker's shape from a stack trace.
 
 ACTIVE ONLY WHEN `DF_TICKET` IS SET. Hooks inherit the launching process's environment
 ("A hook process inherits the parent environment"), and df-worker exports DF_TICKET,
@@ -76,7 +110,11 @@ import sys
 
 # The tracker write, matched by shape. `mcp__<server>__<...>change_item_column_values` —
 # the server segment moves between estates and installs, so it is a wildcard on purpose.
-TRACKER_WRITE = re.compile(r"^mcp__.*monday.*change_item_column_values$")
+# These three are the OLD, hardcoded Monday-only behaviour, now just the DEFAULT for the
+# three env vars below — an unset environment reproduces them byte-for-byte.
+DEFAULT_CLAIM_TOOL = r"^mcp__.*monday.*change_item_column_values$"
+DEFAULT_CLAIM_ITEM_KEYS = ("itemId", "item_id", "itemID")
+DEFAULT_CLAIM_VALUES_KEY = "columnValues"
 
 MARKER = ".claim-done"
 
@@ -128,12 +166,48 @@ def load_claim_columns():
     return obj
 
 
-def parsed_column_values(tool_input):
-    """tool_input['columnValues'] as a dict, whether the caller passed a JSON string (the
-    monday-pww tool's documented shape) or an already-decoded object."""
+def claim_tool_pattern():
+    """The compiled regex over tool_name that recognises the claim write. DF_CLAIM_TOOL,
+    or the old hardcoded Monday regex when unset/blank. An invalid regex RAISES — the
+    caller's fail-closed handling in main() turns that into a DENY, never a silent
+    fall-back to the default and never an allow."""
+    raw = os.environ.get("DF_CLAIM_TOOL", "").strip()
+    return re.compile(raw if raw else DEFAULT_CLAIM_TOOL)
+
+
+def claim_item_keys():
+    """The tool_input keys (tried in order) that may hold the item id. DF_CLAIM_ITEM_KEYS
+    is comma-separated; unset/blank, or a value with no non-empty entries, falls back to
+    the old hardcoded tuple."""
+    raw = os.environ.get("DF_CLAIM_ITEM_KEYS", "").strip()
+    if not raw:
+        return DEFAULT_CLAIM_ITEM_KEYS
+    keys = tuple(k.strip() for k in raw.split(",") if k.strip())
+    return keys if keys else DEFAULT_CLAIM_ITEM_KEYS
+
+
+def claim_values_key():
+    """The tool_input key holding the values DF_CLAIM_COLUMNS is matched against, or None
+    meaning "match DF_CLAIM_COLUMNS against tool_input itself" (Jira's top-level
+    assignee/fields shape). NOT SET AT ALL -> the old default "columnValues". SET TO THE
+    EMPTY STRING -> None. These are deliberately different outcomes, so the check is
+    membership in os.environ, never truthiness of the value — a value of "" is not the
+    same fact as the variable being absent."""
+    if "DF_CLAIM_VALUES_KEY" not in os.environ:
+        return DEFAULT_CLAIM_VALUES_KEY
+    raw = os.environ["DF_CLAIM_VALUES_KEY"].strip()
+    return raw if raw else None
+
+
+def parsed_values(tool_input, values_key):
+    """The dict DF_CLAIM_COLUMNS is checked against: tool_input[values_key], whether given
+    as a JSON string or an already-decoded object — or tool_input itself when values_key is
+    None (DF_CLAIM_VALUES_KEY="")."""
     if not isinstance(tool_input, dict):
         return None
-    cv = tool_input.get("columnValues")
+    if values_key is None:
+        return tool_input
+    cv = tool_input.get(values_key)
     if isinstance(cv, dict):
         return cv
     if isinstance(cv, str):
@@ -156,8 +230,8 @@ def value_matches(expected, actual):
     return actual == expected
 
 
-def claim_matches(tool_input, claim_columns):
-    values = parsed_column_values(tool_input)
+def claim_matches(tool_input, claim_columns, values_key):
+    values = parsed_values(tool_input, values_key)
     if not isinstance(values, dict):
         return False
     return all(
@@ -166,11 +240,11 @@ def claim_matches(tool_input, claim_columns):
     )
 
 
-def item_id_of(tool_input):
+def item_id_of(tool_input, item_keys):
     """The item id a tracker write targets, as a string, or None."""
     if not isinstance(tool_input, dict):
         return None
-    for key in ("itemId", "item_id", "itemID"):
+    for key in item_keys:
         if key in tool_input:
             v = tool_input[key]
             if isinstance(v, bool) or v is None:
@@ -198,27 +272,53 @@ def pre_tool_use(event, ticket):
     tool_name = event.get("tool_name")
     tool_name = tool_name if isinstance(tool_name, str) else ""
     tool_input = event.get("tool_input")
-    is_tracker_write = bool(TRACKER_WRITE.match(tool_name))
-    item = item_id_of(tool_input) if is_tracker_write else None
+
+    tool_pattern = claim_tool_pattern()
+    item_keys = claim_item_keys()
+    values_key = claim_values_key()
+
+    is_tracker_write = bool(tool_pattern.match(tool_name))
+    item = item_id_of(tool_input, item_keys) if is_tracker_write else None
 
     claim_columns = load_claim_columns()
     claimed = os.path.isfile(marker_path(event))
 
+    values_desc = values_key if values_key is not None else "tool_input itself"
+
     if not claimed:
         if is_tracker_write and item == ticket:
-            if claim_columns is None or claim_matches(tool_input, claim_columns):
+            if claim_columns is None or claim_matches(tool_input, claim_columns, values_key):
                 abstain()
             deny(
-                "claim-gate: this write to item %s does not carry the claim. "
-                "DF_CLAIM_COLUMNS requires columnValues to match exactly: %s"
-                % (ticket, json.dumps(claim_columns, sort_keys=True))
+                "claim-gate: this write to item %s does not carry the claim. Tool "
+                "regex: %s | item key(s): %s | values key: %s | DF_CLAIM_COLUMNS "
+                "requires %s to match exactly: %s"
+                % (
+                    ticket,
+                    tool_pattern.pattern,
+                    ",".join(item_keys),
+                    values_desc,
+                    values_desc,
+                    json.dumps(claim_columns, sort_keys=True),
+                )
             )
         deny(
             "claim-gate: item %s is not claimed yet. Your FIRST tool call must be the "
-            "tracker write that claims it: call the tool matching "
-            "`mcp__<hub>__change_item_column_values` with itemId=%s (set Claimed By and "
-            "DF Status=Doing). Every other tool call is denied until that write lands."
-            % (ticket, ticket)
+            "tracker write that claims it: call a tool whose name matches `%s`, with "
+            "one of item key(s) %s equal to %s%s. Every other tool call is denied "
+            "until that write lands."
+            % (
+                ticket,
+                tool_pattern.pattern,
+                ",".join(item_keys),
+                ticket,
+                (
+                    ""
+                    if claim_columns is None
+                    else " and %s matching %s"
+                    % (values_desc, json.dumps(claim_columns, sort_keys=True))
+                ),
+            )
         )
 
     if is_tracker_write and item is not None and item != ticket:
@@ -235,15 +335,20 @@ def post_tool_use(event, ticket):
     tool_name = event.get("tool_name")
     tool_name = tool_name if isinstance(tool_name, str) else ""
     tool_input = event.get("tool_input")
-    if not TRACKER_WRITE.match(tool_name):
+
+    tool_pattern = claim_tool_pattern()
+    item_keys = claim_item_keys()
+    values_key = claim_values_key()
+
+    if not tool_pattern.match(tool_name):
         abstain()
-    if item_id_of(tool_input) != ticket:
+    if item_id_of(tool_input, item_keys) != ticket:
         abstain()
     if response_failed(event.get("tool_response")):
         abstain()
 
     claim_columns = load_claim_columns()
-    if claim_columns is not None and not claim_matches(tool_input, claim_columns):
+    if claim_columns is not None and not claim_matches(tool_input, claim_columns, values_key):
         abstain()
 
     path = marker_path(event)

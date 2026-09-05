@@ -107,6 +107,10 @@ RULES_LIST=""
 DENY_LIST=""
 DISALLOW_LIST=""
 CLAIM_COLUMNS=""
+CLAIM_TOOL=""
+CLAIM_ITEM_KEYS=""
+CLAIM_VALUES_KEY=""
+CLAIM_VALUES_KEY_SET=0
 DRY="${WORKER_DRY_RUN:-0}"
 
 POS=0
@@ -177,6 +181,33 @@ while [ $# -gt 0 ]; do
     --claim-columns)
       [ $# -ge 2 ] || die "--claim-columns needs a JSON object"
       CLAIM_COLUMNS="$2"
+      shift 2 ;;
+    # ── --claim-tool / --claim-item-keys / --claim-values-key: the same claim, a ────────
+    # different tracker's shape. claim-gate.py used to recognise the claim ONLY as a
+    # Monday-shaped tool_name with itemId/columnValues — a Notion or Jira worker can never
+    # satisfy that and is denied every tool call for the whole session. These three export
+    # DF_CLAIM_TOOL / DF_CLAIM_ITEM_KEYS / DF_CLAIM_VALUES_KEY into the child env EXACTLY
+    # the way --claim-columns above exports DF_CLAIM_COLUMNS: verbatim, only when given,
+    # and echoed in --dry-run. Each is single-valued (not repeatable like --rules/--deny) —
+    # one tracker, one shape, per worker.
+    #
+    # --claim-values-key is the one exception to "only when given, tracked by non-empty
+    # value": the EMPTY STRING is itself a meaningful value to claim-gate.py (match
+    # DF_CLAIM_COLUMNS against tool_input itself, for a tracker with no nested values
+    # object). So this flag is tracked by whether it was PASSED at all
+    # (CLAIM_VALUES_KEY_SET), never by whether its value happens to be non-empty.
+    --claim-tool)
+      [ $# -ge 2 ] || die "--claim-tool needs a regex"
+      CLAIM_TOOL="$2"
+      shift 2 ;;
+    --claim-item-keys)
+      [ $# -ge 2 ] || die "--claim-item-keys needs a comma-separated list of arg names"
+      CLAIM_ITEM_KEYS="$2"
+      shift 2 ;;
+    --claim-values-key)
+      [ $# -ge 2 ] || die "--claim-values-key needs a name (the empty string is valid: it means match against tool_input itself)"
+      CLAIM_VALUES_KEY="$2"
+      CLAIM_VALUES_KEY_SET=1
       shift 2 ;;
     --dry-run) DRY=1; shift ;;
     -h|--help) sed -n '2,4p' "$0"; exit 0 ;;
@@ -402,6 +433,14 @@ export DF_SCRATCH="$SCRATCH"
 # carry before treating it as the claim — exported only when the caller passed one, so a
 # worker launched without --claim-columns is unaffected (old behaviour).
 [ -n "$CLAIM_COLUMNS" ] && export DF_CLAIM_COLUMNS="$CLAIM_COLUMNS"
+# DF_CLAIM_TOOL / DF_CLAIM_ITEM_KEYS / DF_CLAIM_VALUES_KEY: same rule, a different
+# tracker's shape — exported only when the caller passed the matching flag, so a worker
+# launched without them is unaffected (claim-gate.py's own Monday-only default).
+[ -n "$CLAIM_TOOL" ] && export DF_CLAIM_TOOL="$CLAIM_TOOL"
+[ -n "$CLAIM_ITEM_KEYS" ] && export DF_CLAIM_ITEM_KEYS="$CLAIM_ITEM_KEYS"
+# --claim-values-key "" is a real, distinct value (see the flag's own comment above), so
+# this is gated on CLAIM_VALUES_KEY_SET, never on [ -n "$CLAIM_VALUES_KEY" ].
+[ "$CLAIM_VALUES_KEY_SET" = "1" ] && export DF_CLAIM_VALUES_KEY="$CLAIM_VALUES_KEY"
 
 if [ "$DRY" = "1" ]; then
   printf 'scratch: %s\n' "$SCRATCH"
@@ -418,12 +457,18 @@ if [ "$DRY" = "1" ]; then
     [ -n "$dn" ] && printf 'disallow: %s\n' "$dn"
   done
   [ -n "$CLAIM_COLUMNS" ] && printf 'claim-columns: %s\n' "$CLAIM_COLUMNS"
+  [ -n "$CLAIM_TOOL" ] && printf 'claim-tool: %s\n' "$CLAIM_TOOL"
+  [ -n "$CLAIM_ITEM_KEYS" ] && printf 'claim-item-keys: %s\n' "$CLAIM_ITEM_KEYS"
+  [ "$CLAIM_VALUES_KEY_SET" = "1" ] && printf 'claim-values-key: %s\n' "$CLAIM_VALUES_KEY"
   printf -- '---- env ----\n'
   printf 'DF_TICKET=%s\n' "$DF_TICKET"
   printf 'DF_ROLE=%s\n' "$DF_ROLE"
   printf 'DF_MISSION=%s\n' "$DF_MISSION"
   printf 'DF_SCRATCH=%s\n' "$DF_SCRATCH"
   [ -n "$CLAIM_COLUMNS" ] && printf 'DF_CLAIM_COLUMNS=%s\n' "$DF_CLAIM_COLUMNS"
+  [ -n "$CLAIM_TOOL" ] && printf 'DF_CLAIM_TOOL=%s\n' "$DF_CLAIM_TOOL"
+  [ -n "$CLAIM_ITEM_KEYS" ] && printf 'DF_CLAIM_ITEM_KEYS=%s\n' "$DF_CLAIM_ITEM_KEYS"
+  [ "$CLAIM_VALUES_KEY_SET" = "1" ] && printf 'DF_CLAIM_VALUES_KEY=%s\n' "$DF_CLAIM_VALUES_KEY"
   printf -- '---- argv ----\n'
   printf 'claude\n'
   for a in "$@"; do printf '%s\n' "$a"; done
