@@ -190,6 +190,33 @@ echo "=== H2: the SAME record satisfies gh api .../pulls/<n>/merge too ==="
 O="$(run_hook "$REPO_MATCH" "gh api -X PUT repos/$ORIGIN_REPO/pulls/1/merge")"
 equals "H2: gh api merge form is recognised and allowed" "{}" "$O"
 
+echo "=== W: F-MG1 -- wrapper spellings must be SEEN (measured bypass: env --chdir=<repo> gh pr merge) ==="
+# Measured 2026-09-05 on a Linux instance during the interactive validation: the bare form was
+# denied, `env --chdir=<tier1> gh pr merge 999999` reached GitHub. Detection keyed on tokens[0]
+# being `gh`; a wrapper puts gh anywhere else. Every spelling below carries the mismatching
+# record from case G and must be DENIED with the mismatch reason -- {} would mean unseen.
+REPO_W="$(mk_repo 1)"
+write_record "$REPO_W" "$OTHER_SHA" false real
+for CMD in \
+  "env --chdir=$REPO_W gh pr merge 1" \
+  "env -C $REPO_W gh pr merge 1" \
+  "nice -n 5 gh pr merge 1 --repo $ORIGIN_REPO" \
+  "timeout 60 gh pr merge 1 -R $ORIGIN_REPO" \
+  "/usr/local/bin/gh pr merge 1 --repo $ORIGIN_REPO" \
+  "bash -c 'gh pr merge 1 --repo $ORIGIN_REPO'" \
+  "bash -lc 'cd $REPO_W && gh pr merge 1'" \
+  "eval 'gh pr merge 1 --repo $ORIGIN_REPO'" \
+  "cd $REPO_W && gh pr merge 1" \
+  "env FOO=bar gh api -X PUT repos/$ORIGIN_REPO/pulls/1/merge"; do
+  O="$(run_hook "$REPO_W" "$CMD")"
+  contains "W: seen and denied: $CMD" "commit mismatch" "$O"
+done
+echo "=== W2: wrapped NON-merges stay {} ==="
+O="$(run_hook "$T" "env --chdir=$REPO_W gh pr view 1")"
+equals "W2: env-wrapped gh pr view is not a merge" "{}" "$O"
+O="$(run_hook "$T" "nice gh pr list --repo $ORIGIN_REPO")"
+equals "W2: nice-wrapped gh pr list is not a merge" "{}" "$O"
+
 echo "=== I: cwd not inside any checkout, no registry entry -- abstain, not deny ==="
 # MEASURED DEFECT this covers: cwd outside the checkout used to be an automatic deny
 # ("run the merge from inside the checkout"), and the registry/checkout record was never

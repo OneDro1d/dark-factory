@@ -616,6 +616,34 @@ if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
           mkdir -p "$REGISTRY_DIR" 2>/dev/null
           printf '%s\n' "$RECORD_JSON" > "$REGISTRY_FILE" 2>/dev/null
         fi
+        # ── the SAME verdict, where the MERGE happens ─────────────────────────────
+        # Every client-side gate on `gh pr merge` is a floor: measured 2026-09-05 (F-MG1),
+        # `env --chdir=<repo> gh pr merge N` walked past the hook. The ceiling is a status the
+        # branch ruleset REQUIRES and only this script produces: `publish-gate/real`, posted on
+        # HEAD when the tree is CLEAN under the REAL denylist and NOT dirty. CI cannot post it
+        # (it has no real conf) and a hand-typed `gh api` could — but whoever can do that can
+        # merge anyway; the threat here is the agent skipping the gate, not the operator
+        # forging it. Skipped, visibly, when: the tree is dirty (a status on HEAD would vouch
+        # for bytes HEAD does not contain), origin is not github, gh is absent or unauthed, or
+        # DF_PUBLISH_GATE_STATUS=0. A failed post is a WARNING, never a gate failure: the local
+        # verdict stands on its own; the status is the copy the server reads.
+        if [ "${DF_PUBLISH_GATE_STATUS:-1}" != "0" ] && [ -n "$REGISTRY_FILE" ] \
+           && [ "$RECORD_DIRTY" = "false" ] && command -v gh >/dev/null 2>&1; then
+          case "$ORIGIN_URL" in
+            *github.com*)
+              _slug_gh="${REGISTRY_FILE##*/}"; _slug_gh="${_slug_gh%.json}"; _slug_gh="${_slug_gh/__//}"
+              if gh api -X POST "repos/$_slug_gh/statuses/$HEAD_SHA" \
+                   -f state=success -f context=publish-gate/real \
+                   -f description="real denylist, clean tree, $RECORD_TS" \
+                   -f target_url="https://github.com/$_slug_gh/commit/$HEAD_SHA" >/dev/null 2>&1; then
+                printf 'status  publish-gate/real = success on %s (%s)\n' "${HEAD_SHA:0:8}" "$_slug_gh"
+              else
+                printf 'WARN    could not post status publish-gate/real on %s — gh unauthenticated, or no push rights; the local verdict stands, the server will not see it\n' "${HEAD_SHA:0:8}"
+              fi ;;
+          esac
+        elif [ "$RECORD_DIRTY" = "true" ] && [ -n "$REGISTRY_FILE" ]; then
+          printf 'status  publish-gate/real NOT posted: the tree is dirty — commit, then re-run the gate on the commit you will merge\n'
+        fi
       fi
     else
       rm -f "$RECORD" 2>/dev/null

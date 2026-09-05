@@ -4,7 +4,9 @@
   "enforcement": "active",
   "conditions": {
     "ref_name": {
-      "include": ["~DEFAULT_BRANCH"],
+      "include": [
+        "~DEFAULT_BRANCH"
+      ],
       "exclude": []
     }
   },
@@ -24,17 +26,30 @@
         "require_code_owner_review": false,
         "require_last_push_approval": false,
         "required_review_thread_resolution": false,
-        "allowed_merge_methods": ["squash", "merge", "rebase"]
+        "allowed_merge_methods": [
+          "squash",
+          "merge",
+          "rebase"
+        ]
       }
     },
-    { "type": "non_fast_forward" },
-    { "type": "deletion" },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "deletion"
+    },
     {
       "type": "required_status_checks",
       "parameters": {
         "strict_required_status_checks_policy": true,
         "required_status_checks": [
-          { "context": "publish-gate" }
+          {
+            "context": "publish-gate"
+          },
+          {
+            "context": "publish-gate/real"
+          }
         ]
       }
     }
