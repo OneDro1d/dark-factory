@@ -134,10 +134,10 @@ def main():
     # is SHARED across instances; the lockfile is PER-INSTANCE. Wiring the whole template puts
     # hooks into a machine that never installs them -- a chain that breaks on every event.
     #
-    # Measured on the Poland Coder 2026-09-03, the day #84 shipped: three template entries
-    # (catalyst-release-discipline-scoped.sh, handoff-sessionstart-load.py,
+    # Measured on a remote dev workspace 2026-09-03, the day #84 shipped: three template entries
+    # (<sibling-org-layer>-release-discipline-scoped.sh, handoff-sessionstart-load.py,
     # handoff-precompact.py) were wired there and declared by NOTHING in that lockfile -- that
-    # box has no catalyst lane, and its own $hookBumpNote records removing the catalyst hooks
+    # box has no <sibling-org-layer> lane, and its own $hookBumpNote records removing the <sibling-org-layer> hooks
     # on 2026-08-31. lock-verify L9 caught it from the other side: "wired in settings but NOT
     # PRESENT on disk -- the chain breaks every session".
     #

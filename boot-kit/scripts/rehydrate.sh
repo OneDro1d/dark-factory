@@ -374,7 +374,7 @@ fi
 # place: as "command not found" at the moment somebody first needs it.
 #
 # ⛔ MEASURED 2026-09-05, per kit installer: the four personal kits link this in their own
-# step 4; `loom_storage-ESO` and `loom-delia` DO NOT. Both materialise the whole engine and
+# step 4; `<a sibling instance repo>` and `<a personal kit>` DO NOT. Both materialise the whole engine and
 # then never link the single CLI entry point, so on those two the engine is present and the
 # command does not exist. Fixing their two forked installers by hand would have fixed two
 # machines and left the next fork to rediscover it — this fixes every kit at the next pin.

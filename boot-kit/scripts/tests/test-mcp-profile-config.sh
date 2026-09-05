@@ -34,7 +34,7 @@ cat > "$CFG" <<'JSON'
   "mcpServers": {
     "onedroid":     {"url": "https://x/hub/a/mcp", "headers": {"Authorization": "Bearer LITERALTOKEN1"}},
     "onedroid-dev": {"url": "https://x/hub/b/mcp", "headers": {"Authorization": "Bearer ${DF_TEST_TOKEN_SET}"}},
-    "optima":       {"url": "https://x/hub/c/mcp", "headers": {"Authorization": "Bearer LITERALTOKEN2"}},
+    "hub-b":        {"url": "https://x/hub/c/mcp", "headers": {"Authorization": "Bearer LITERALTOKEN2"}},
     "onedroid-nx":  {"url": "https://x/hub/d/mcp", "headers": {"Authorization": "Bearer ${DF_TEST_TOKEN_UNSET}"}}
   }
 }
@@ -50,7 +50,7 @@ if [ "$RC" -eq 0 ]; then ok "M1 exits 0 on a matching profile"; else bad "M1 exi
 BODY="$(cat "$WORK/out.json" 2>/dev/null)"
 contains "M1 the profile hub is kept"          '"onedroid"'     "$BODY"
 contains "M1 the profile's dev hub is kept"    '"onedroid-dev"' "$BODY"
-absent   "M1 another estate's hub is NOT kept" '"optima"'       "$BODY"
+absent   "M1 another estate's hub is NOT kept" '"hub-b"'        "$BODY"
 if printf '%s' "$BODY" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null
 then ok "M1 the written config is valid JSON"; else bad "M1 valid JSON" "parse failed"; fi
 

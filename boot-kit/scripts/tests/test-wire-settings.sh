@@ -153,8 +153,8 @@ absent   "H: and not the new wiring"                 "gate.py" "$(cat "$BK")"
 echo "=== I: the LOCKFILE is the authority, not the shared template ==="
 # ⛔ MEASURED ON THE POLAND CODER 2026-09-03, the day the wiring step shipped. The settings
 # template is SHARED across instances; the lockfile is PER-INSTANCE. Wiring the whole template
-# put three hooks into that box that its lockfile declares nowhere — it has no catalyst lane,
-# and its own $hookBumpNote records removing the catalyst hooks on 2026-08-31. lock-verify L9
+# put three hooks into that box that its lockfile declares nowhere — it has no <sibling-org-layer> lane,
+# and its own $hookBumpNote records removing the <sibling-org-layer> hooks on 2026-08-31. lock-verify L9
 # caught it from the other side: "wired in settings but NOT PRESENT on disk — the chain breaks
 # every session."
 #

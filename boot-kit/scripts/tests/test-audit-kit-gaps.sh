@@ -183,7 +183,7 @@ case "$OUT9" in *"up.sh -> upstream:dark-factory/hooks/up.sh DOES NOT EXIST"*)
 
 echo "=== H: a STALE vendor checkout is not a dead source ==="
 # ⚠️ THE BUG CLASS 4 SHIPPED WITH, CAUGHT THE SAME HOUR. The first version resolved every
-# upstream: source against the local vendor WORKING TREE, so this laptop's loom_storage-ESO
+# upstream: source against the local vendor WORKING TREE, so this laptop's <a sibling instance repo>
 # — vendor at 22e7064 while its lockfiles pin 6ebfbdc0, because this machine never installs
 # those instances — produced 18 findings for files that all exist at the pin.
 #
@@ -280,9 +280,9 @@ case "$OUTD" in *"t-should-be-skipped"*)
 
 echo "=== J: class 2 is a TIER-3 question and must not fire on a TIER-2 layer ==="
 # ⚠️ A layer is never installed to a machine — an instance lockfile composes it, and the
-# settings template belongs to that instance. Measured 2026-09-03: the ESO layer's recipe
-# lives in its minted kit at loom-dev-eso/boot-kit/settings.template.json, and neither
-# org.lock.json nor catalyst.lock.json carries one. Demanding a template there demands a
+# settings template belongs to that instance. Measured 2026-09-03: the second estate's recipe
+# lives in its minted kit at <a personal kit>/boot-kit/settings.template.json, and neither
+# org.lock.json nor <sibling-org-layer>.lock.json carries one. Demanding a template there demands a
 # file the tier model says must not be there. The discriminator is `instance`: an instance
 # lockfile names one machine, a layer names none.
 K9="$TMP/layer"

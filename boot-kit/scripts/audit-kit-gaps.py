@@ -82,7 +82,7 @@ def classify_source(root, vendordir, src, pins):
     ⚠️ `unknown` IS NOT A SYNONYM FOR `dead`, AND THE FIRST VERSION OF THIS FUNCTION
     COLLAPSED THEM TWICE. Measured 2026-09-03: it resolved every `upstream:` source against
     the LOCAL vendor checkout and called a miss "does not exist" -- producing 18 findings
-    against loom_storage-ESO whose vendor/dark-factory sat at 22e7064 while its lockfiles
+    against <a sibling instance repo> whose vendor/dark-factory sat at 22e7064 while its lockfiles
     pinned 6ebfbdc0. This laptop never installs those instances, so its checkout is simply
     old. Every one of the 18 files exists at the pin.
 
@@ -216,7 +216,7 @@ for repo, root in REPOS:
         # ---- class 2: declared, no wiring recipe, no exception ----
         # ⚠️ THE TEMPLATE LIVES AT DIFFERENT PATHS ON DIFFERENT KITS, and the first version
         # of this check looked at exactly one of them. Kits with no template were SKIPPED
-        # silently and reported clean; loom-dev-eso keeps its at boot-kit/settings.template
+        # silently and reported clean; <a personal kit> keeps its at boot-kit/settings.template
         # .json and was missed entirely. A detector that passes vacuously is worse than no
         # detector -- it is the same failure this audit exists to find, one level up.
         CANDS = [
@@ -229,9 +229,9 @@ for repo, root in REPOS:
         wired_text = ""
         # ⚠️ CLASS 2 IS A TIER-3 QUESTION AND DOES NOT APPLY TO A TIER-2 LAYER. A layer is
         # never installed to a machine -- it is composed by an instance lockfile, and the
-        # settings template belongs to that instance (measured: the ESO layer's recipe lives
-        # in its minted kit at loom-dev-eso/boot-kit/settings.template.json, not in
-        # catalyst.lock.json). Reporting a layer for shipping no wiring recipe demands a file
+        # settings template belongs to that instance (measured: the second estate's recipe lives
+        # in its minted kit at <a personal kit>/boot-kit/settings.template.json, not in
+        # <sibling-org-layer>.lock.json). Reporting a layer for shipping no wiring recipe demands a file
         # the tier model says must not be there.
         # The discriminator is `instance`: an instance lockfile names one machine, a layer
         # names none. ⚠️ AND THIS EXEMPTION IS PRINTED, NEVER SILENT -- an unannounced skip

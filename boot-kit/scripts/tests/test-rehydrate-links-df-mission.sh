@@ -2,7 +2,7 @@
 # test-rehydrate-links-df-mission.sh — the engine must be REACHABLE, not merely materialised.
 #
 # ⛔ WHY THIS EXISTS. Measured 2026-09-05, per kit installer: the four personal kits link
-# `df-mission` onto PATH in their own step 4; `loom_storage-ESO` and `loom-delia` DO NOT. Both
+# `df-mission` onto PATH in their own step 4; `<a sibling instance repo>` and `<a personal kit>` DO NOT. Both
 # copy the whole engine and then never link the single CLI entry point — so on those two the
 # engine is fully present and the command does not exist.
 #

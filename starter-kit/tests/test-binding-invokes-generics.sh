@@ -10,7 +10,7 @@
 #
 # Measured 2026-09-01 across all three estate bindings in the reference estate:
 #
-#     capability            onedroid  optima  catalyst
+#     capability            estate-a  estate-b  estate-c
 #     work-autonomously        --       --       --      <-- the escalation gate, in NONE
 #     critical-thinking        --       --       --
 #     df-preflight            yes      yes       --

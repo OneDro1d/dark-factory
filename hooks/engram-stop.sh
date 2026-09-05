@@ -4,7 +4,7 @@
 # [Engram](../starter-kit/instance/AUTHENTICATION.md#engram)
 # engram-stop.sh — TIER 1. Promoted 2026-09-02 from two instance repos that each kept their own copy.
 #
-# WHY THIS IS GENERIC, and it is measured rather than argued: `token-boss/loom-storage` and
+# WHY THIS IS GENERIC, and it is measured rather than argued: `<publisher>/<instance-repo>` and
 # `<second-account>/<instance-repo>` both carried this file as `local:` content, on different
 # estates, with different hubs and different git identities — and the two copies were
 # BYTE-IDENTICAL. Two independent estates converging on the same bytes is what
