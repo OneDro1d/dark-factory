@@ -27,6 +27,15 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/merge-gate.py\""
           }
         ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claim-gate.py\""
+          }
+        ]
       }
     ],
     "Stop": [
@@ -36,6 +45,17 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/handoff-completeness-gate.py\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*monday.*change_item_column_values",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claim-gate.py\""
           }
         ]
       }
