@@ -1,0 +1,9 @@
+{
+  "name": "probe-plugin",
+  "description": "Test fixture: a minimal plugin with four observable components (hook, bin, monitor, settings.agent), each emitting an unmistakable marker. Used by B4 to measure which plugin components actually load under each delivery path and launch mode.",
+  "version": "0.1.0",
+  "author": {
+    "name": "df-governed tests"
+  },
+  "license": "Apache-2.0"
+}

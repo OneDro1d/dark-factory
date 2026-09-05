@@ -510,10 +510,60 @@ fi
 echo ""
 if [ "$FAIL" -eq 0 ]; then
   echo "=== RESULT: CLEAN — safe to publish ==="
-  exit 0
+  GATE_RC=0
 else
   echo "=== RESULT: FINDINGS — DO NOT PUBLISH ==="
   echo "Fix by REMOVING the file from the selection, not by editing it in place:"
   echo "content that leaked in once is usually a signal the whole file is org-specific."
-  exit 1
+  GATE_RC=1
 fi
+
+# ── publish-gate.ok — a MECHANICAL record that a REAL local run just happened ──
+#
+# CI runs this gate too, but CI's landmarks.conf is gitignored and never reaches CI, so
+# CI always scans the placeholder patterns in landmarks.example.conf by design — a real
+# leak can sit on main, green, for days while the sentence "run the real gate locally
+# before merging" in CONTRIBUTING.md goes unexecuted. This record is the mechanism that
+# lets a merge gate downstream verify a real run actually happened at the PR's head sha,
+# instead of trusting a self-report.
+#
+# Written ONLY when: the result is CLEAN, and $LANDMARKS_SRC resolved to the real
+# landmarks.conf (never the example fallback) — reusing the same variable the gate
+# already prints its first line from, so "which config decided this" can never drift
+# between what is printed and what is recorded. On FINDINGS, or on a placeholder-conf
+# run, any existing record is DELETED: a stale CLEAN record must not outlive the run
+# that produced it, and a placeholder-conf run proves nothing about the real patterns.
+#
+# `git rev-parse --git-common-dir` (not --git-dir) so every worktree of this repo shares
+# one record — a run in any worktree at the shared HEAD satisfies the check for all of them.
+if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+  COMMON_DIR="$(cd "$REPO" && git rev-parse --git-common-dir 2>/dev/null)"
+  if [ -n "$COMMON_DIR" ]; then
+    case "$COMMON_DIR" in
+      /*) : ;;
+      *) COMMON_DIR="$REPO/$COMMON_DIR" ;;
+    esac
+    RECORD="$COMMON_DIR/publish-gate.ok"
+    REAL_CONF=0
+    case "$LANDMARKS_SRC" in
+      landmarks.conf) REAL_CONF=1 ;;
+    esac
+    if [ "$GATE_RC" -eq 0 ] && [ "$REAL_CONF" -eq 1 ]; then
+      HEAD_SHA="$(cd "$REPO" && git rev-parse HEAD 2>/dev/null)"
+      if [ -n "$HEAD_SHA" ]; then
+        if [ -n "$(cd "$REPO" && git status --porcelain 2>/dev/null)" ]; then
+          RECORD_DIRTY=true
+        else
+          RECORD_DIRTY=false
+        fi
+        RECORD_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '{"commit":"%s","dirty":%s,"conf":"real","ts":"%s"}\n' \
+          "$HEAD_SHA" "$RECORD_DIRTY" "$RECORD_TS" > "$RECORD" 2>/dev/null
+      fi
+    else
+      rm -f "$RECORD" 2>/dev/null
+    fi
+  fi
+fi
+
+exit "$GATE_RC"

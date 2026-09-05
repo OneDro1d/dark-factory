@@ -13,6 +13,12 @@
 # Env overrides (tests + operators):
 #   AGENT_NOTEPAD_NO_PULL=1          — skip the git pull entirely (hermetic tests)
 #   AGENT_NOTEPAD_PULL_TIMEOUT=<sec> — bound the pull (default 3s)
+#   AGENT_NOTEPAD_DRY_RUN=1          — no git pull/fetch and no writes of any kind; the full
+#                                      payload (including the NOTEPAD RESOLVED / OTHER NOTEPADS
+#                                      block below) is still emitted. Implies AGENT_NOTEPAD_NO_PULL.
+#   AGENT_NOTEPAD_ROOTS=a:b:c        — extra roots (colon-separated) to scan, one level deep,
+#                                      for sibling notepads. The resolved notepad's PARENT
+#                                      directory is always scanned too.
 set -u
 
 _DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -38,6 +44,12 @@ fi
 _bounded_pull() {
   local dir="$1" secs="${AGENT_NOTEPAD_PULL_TIMEOUT:-3}"
   [ "${AGENT_NOTEPAD_NO_PULL:-0}" = "1" ] && return 0
+  # ⛔ DRY RUN MEANS NO NETWORK AND NO WRITES, FULL STOP. This is the single call site in
+  # this file that ever touches the network or writes to the notepad's working tree (the
+  # three `git ... pull --ff-only` invocations below, across the timeout / gtimeout /
+  # portable-watchdog branches). Returning here before any of them run is the entire guard;
+  # nothing past this line executes under AGENT_NOTEPAD_DRY_RUN=1.
+  [ "${AGENT_NOTEPAD_DRY_RUN:-0}" = "1" ] && return 0
   [ -d "$dir/.git" ] || return 0
   case "$secs" in ''|*[!0-9]*) secs=3 ;; esac
   # only attempt a pull if at least one remote is configured
@@ -176,12 +188,63 @@ if [ -d "$np/handoffs" ]; then
 fi
 }
 
+# ---- other notepads on this machine: DISCLOSURE, not a gate ---------------
+# DESIGN §2 Objective 7: SessionStart hooks cannot block a session, and this does not try to
+# be one — it never fails, never exits nonzero, and never limits which notepad gets used. It
+# only names, in the transcript, which notepad `find_notepad` resolved and whether any other
+# notepad sits nearby, so an operator with two notepads on one laptop is not left to guess
+# which one a `/clear` restored into.
+#
+# Scans the resolved notepad's PARENT directory one level deep, plus every root named in
+# AGENT_NOTEPAD_ROOTS (colon-separated) if set — never the whole home directory, never a
+# hardcoded path.
+#
+# Defined at top level, like _emit_handoff above, so its comments sit outside the command
+# substitution below and the apostrophe/backtick hazard documented there does not apply here.
+_scan_other_notepads() {
+  local resolved="$1" parent roots root hit dir out seen
+  parent="$(dirname "$resolved")"
+  out=""
+  seen="|$resolved|"
+  # ${VAR//…} on an UNSET variable is an unbound-variable error under set -u on bash 5
+  # (Linux); bash 3.2 on macOS lets it through. Measured in CI 2026-09-05: the whole boot
+  # payload died on the Linux runner while every macOS run was green. Default first.
+  local extra="${AGENT_NOTEPAD_ROOTS:-}"
+  roots="$parent"$'\n'"${extra//:/$'\n'}"
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    [ -d "$root" ] || continue
+    while IFS= read -r hit; do
+      [ -n "$hit" ] || continue
+      dir="$(cd "$(dirname "$hit")" 2>/dev/null && pwd)"
+      [ -n "$dir" ] || continue
+      case "$seen" in *"|$dir|"*) continue ;; esac
+      seen="${seen}${dir}|"
+      out="${out}  ${dir}   — not chosen: cwd is not under it"$'\n'
+    done < <(find "$root" -maxdepth 2 -name NOTES.md 2>/dev/null)
+  done <<< "$roots"
+  printf '%s' "$out"
+}
+
 # --- build the combined context (file reads only) --------------------------
 name="$(basename "$np")"
 combined="$(
   printf '## agent-notepad — restored working memory (%s)\n' "$name"
   printf 'Objective-scoped working memory, auto-loaded on session start. Resume from '
   printf 'this instead of re-deriving state.\n'
+  # DISCLOSURE, NOT A GATE (DESIGN Objective 7). SessionStart cannot block a session and this
+  # block does not try to: it always emits, is unconditional, and never changes which notepad
+  # is used. It only names the ambiguity in the transcript when it exists, right at the top,
+  # before anything else in this payload.
+  printf '\n### NOTEPAD RESOLVED\n'
+  printf '  %s   (walked up from %s)\n' "$np" "$cwd"
+  printf '\n### OTHER NOTEPADS ON THIS MACHINE\n'
+  _other_notepads="$(_scan_other_notepads "$np")"
+  if [ -n "$_other_notepads" ]; then
+    printf '%s' "$_other_notepads"
+  else
+    printf '  (none found among the scanned roots)\n'
+  fi
   # ⛔ THE PAYLOAD MUST FIT, OR NONE OF IT ARRIVES. MEASURED 2026-09-05 on a REAL /clear.
   #
   # The harness externalises an oversized hook payload to a file and injects only a ~2 KB

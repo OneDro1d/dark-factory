@@ -42,6 +42,31 @@ _run_hook() { # cwd -> hook stdout (env: AGENT_NOTEPAD_NO_PULL honored by caller
   printf '{"hookEventName":"SessionStart","cwd":"%s"}' "$1" | bash "$HOOK"
 }
 
+# _hash_tree DIR -> one content signature (path + bytes, not mtime) for every file under DIR.
+# Used to prove a dry run wrote NOTHING under the notepad without relying on filesystem mtime
+# resolution, which can be coarse enough (whole seconds on some filesystems) to hide a
+# same-second write.
+_hash_tree() {
+  python3 - "$1" <<'PY'
+import hashlib, os, sys
+root = sys.argv[1]
+h = hashlib.sha256()
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames.sort()
+    for fn in sorted(filenames):
+        p = os.path.join(dirpath, fn)
+        rel = os.path.relpath(p, root)
+        try:
+            with open(p, 'rb') as f:
+                data = f.read()
+        except OSError:
+            continue
+        h.update(rel.encode())
+        h.update(data)
+print(h.hexdigest())
+PY
+}
+
 test_hook_exists_and_executable() {
   assert_file_exists "$HOOK" "session-start.sh exists"
   ASSERT_CASES=$((ASSERT_CASES + 1))
@@ -488,6 +513,112 @@ PY
   assert_not_contains "$out" "xxxxxxxxxxxxxxxxxxxx" "the top-level prose is NOT inlined"
   assert_contains "$out" "NOT injected -- they are for editing the file" \
     "and its absence is ANNOUNCED with the path, never silent"
+}
+
+# ============================================================================
+# B8 — NOTEPAD RESOLVED / OTHER NOTEPADS disclosure block, and AGENT_NOTEPAD_DRY_RUN.
+#
+# DESIGN Objective 7: two notepads can sit on one machine and nothing tells a fresh
+# session which one `/clear` resolved into. The fix is DISCLOSURE, not a gate — SessionStart
+# cannot block, so this block always emits, is unconditional, and never changes which
+# notepad gets used. It only names the resolved notepad and any siblings found nearby.
+# ============================================================================
+
+# ⛔ THE HEADING MUST ACTUALLY EXIST IN THE SCRIPT, NOT JUST IN THIS TEST'S FIXTURES.
+test_probe7_other_notepads_heading_present_in_hook_source() {
+  local n; n="$(grep -c "OTHER NOTEPADS ON THIS MACHINE" "$HOOK")"
+  ASSERT_CASES=$((ASSERT_CASES + 1))
+  if [ "${n:-0}" -ge 1 ]; then _pass
+  else _fail "hook source has ${n:-0} occurrences of the OTHER NOTEPADS heading, want >= 1"; fi
+}
+
+# Two temp notepads as SIBLINGS (same parent dir) and cwd inside one: the payload names the
+# resolved one and lists the other as not chosen. The scan walks the resolved notepad's
+# PARENT one level deep -- no AGENT_NOTEPAD_ROOTS needed for this case.
+test_two_sibling_notepads_names_resolved_and_lists_other() {
+  local np other out; np="$(_scaffold)"
+  other="$(dirname "$np")/proj-sibling"
+  mkdir -p "$other"
+  printf '# other notepad\n' > "$other/NOTES.md"
+
+  out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+
+  assert_contains "$out" "NOTEPAD RESOLVED" "the resolved-notepad heading is present"
+  assert_contains "$out" "$np" "the resolved notepad path is named"
+  assert_contains "$out" "walked up from" "the resolution is explained as a walk from cwd"
+  assert_contains "$out" "OTHER NOTEPADS ON THIS MACHINE" "the other-notepads heading is present"
+  assert_contains "$out" "$other" "the sibling notepad path is named"
+  assert_contains "$out" "not chosen" "the sibling is explicitly marked not chosen"
+  rm -rf "$(dirname "$np")"
+}
+
+# With only ONE notepad among the scanned roots, the block says so explicitly rather than
+# emitting an empty section a reader could mistake for an unfinished scan.
+test_single_notepad_reports_none_found() {
+  local np out; np="$(_scaffold)"
+  out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+  assert_contains "$out" "OTHER NOTEPADS ON THIS MACHINE" "the heading is present even with nothing to report"
+  assert_contains "$out" "none found" "absence of siblings is stated, not implied by a blank section"
+  rm -rf "$(dirname "$np")"
+}
+
+# AGENT_NOTEPAD_ROOTS extends the scan beyond the resolved notepad's own parent, without ever
+# touching the whole home directory or a hardcoded path.
+test_agent_notepad_roots_extends_the_scan() {
+  local np farbase far out; np="$(_scaffold)"
+  farbase="$(mktemp -d)"
+  far="$farbase/far-notepad"
+  mkdir -p "$far"
+  printf '# far notepad\n' > "$far/NOTES.md"
+
+  out="$(AGENT_NOTEPAD_NO_PULL=1 AGENT_NOTEPAD_ROOTS="$farbase" _run_hook "$np")"
+  assert_contains "$out" "$far" "a root named in AGENT_NOTEPAD_ROOTS is scanned and reported"
+
+  rm -rf "$(dirname "$np")" "$farbase"
+}
+
+# ⛔ DRY RUN MUST STOP THE ONLY WRITE/NETWORK CALL SITE IN THIS HOOK -- git pull -- AND STILL
+# EMIT THE WHOLE PAYLOAD. Proven two ways: (1) a git shim on PATH that logs every invocation,
+# so "pull was never even attempted" is measured rather than inferred from an exit code; (2) a
+# content hash of every file under the notepad taken before and after, so "nothing was written"
+# does not rely on mtime resolution (which can be coarse enough to hide a same-second write).
+test_dry_run_skips_pull_and_all_writes_but_still_emits_payload() {
+  local np out stub log before after
+  np="$(_scaffold)"
+  git -C "$np" init -q 2>/dev/null || true
+  git -C "$np" config user.email t@t 2>/dev/null || true
+  git -C "$np" config user.name t 2>/dev/null || true
+  git -C "$np" add -A 2>/dev/null || true
+  git -C "$np" commit -qm init 2>/dev/null || true
+  git -C "$np" remote add origin /nonexistent/dry-run-fake-origin 2>/dev/null || true
+
+  stub="$(mktemp -d)"
+  log="$stub/git-calls.log"
+  : > "$log"
+  cat > "$stub/git" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$log"
+exec /usr/bin/env -i PATH=/usr/bin:/bin:/usr/local/bin git "\$@"
+STUB
+  chmod +x "$stub/git"
+
+  before="$(_hash_tree "$np")"
+  out="$(PATH="$stub:$PATH" AGENT_NOTEPAD_DRY_RUN=1 _run_hook "$np")"
+  after="$(_hash_tree "$np")"
+
+  assert_contains "$out" "NOTES_SENTINEL_ARBBOT" "dry run still emits the full payload"
+  assert_contains "$out" "NOTEPAD RESOLVED" "dry run still emits the disclosure block"
+
+  ASSERT_CASES=$((ASSERT_CASES + 1))
+  if [ -s "$log" ]; then
+    _fail "git was invoked under AGENT_NOTEPAD_DRY_RUN=1: $(cat "$log")"
+  else
+    _pass
+  fi
+
+  assert_eq "$before" "$after" "no file under the notepad changed in dry-run"
+
+  rm -rf "$stub" "$(dirname "$np")"
 }
 
 run_tests
