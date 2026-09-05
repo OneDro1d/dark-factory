@@ -1,0 +1,11 @@
+{
+  "name": "df-governed",
+  "description": "The runtime half of the dark-factory tier model — the hooks, agents, skills, launchers and monitors that make the governed loop a mechanism.",
+  "version": "0.1.0",
+  "author": {
+    "name": "OneDro1d"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/OneDro1d/dark-factory",
+  "repository": "https://github.com/OneDro1d/dark-factory"
+}
