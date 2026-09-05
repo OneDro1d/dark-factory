@@ -298,6 +298,45 @@ test_budget_truncates_explicitly_and_says_so() {
   rm -rf "$(dirname "$np")"
 }
 
+# ⛔ THE ASSERTION EVERY EARLIER TEST WAS MISSING: SURVIVE THE PREVIEW.
+#
+# MEASURED 2026-09-05 on a REAL /clear: the harness externalises an oversized hook payload to a
+# file and injects only a ~2 KB PREVIEW. The laptop reported "Output too large (27.7KB)" and the
+# session received roughly the first 30 lines; everything after never entered its context.
+#
+# ⚠️ EVERY TEST ABOVE MEASURES THE EMITTER. The hook emitted 28,593 correct bytes and the
+# session received ~2,000 of them — so a green suite was a fact about the PRODUCER, not about
+# delivery. #102-#105 were each verified that way, and each shipped undelivered.
+#
+# The invariant that actually matters: THE FIRST ~2 KB MUST BE SELF-SUFFICIENT — the imperative
+# to open the files, their paths, and the one next action. Everything after that is a bonus.
+test_first_2kb_is_self_sufficient() {
+  local np out head total; np="$(_scaffold)"
+  mkdir -p "$np/handoffs"
+  printf '# Handoff\nPREVIEW_HANDOFF_BODY\n' > "$np/handoffs/2026-06-06-h.md"
+  # A pathological NOTES.md: the payload must STILL lead with the essentials.
+  awk 'BEGIN{ for(i=0;i<5000;i++) print "filler ......" }' >> "$np/NOTES.md"
+
+  out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+  head="$(printf '%s' "$out" | python3 -c "
+import sys, json
+try: print(json.load(sys.stdin).get('systemMessage','')[:2000])
+except Exception: pass
+")"
+
+  assert_contains "$head" "READ THESE FILES NOW" "the imperative is inside the first 2 KB"
+  assert_contains "$head" "$np/handoffs/2026-06-06-h.md" "the handoff PATH is inside the first 2 KB"
+  assert_contains "$head" "$np/NOTES.md" "the NOTES path is inside the first 2 KB"
+  assert_contains "$head" "TRUNCATED" "the reader is warned content may be cut"
+
+  # ⚠️ And the WHOLE payload must stay small enough to have a chance of arriving intact.
+  total="$(printf '%s' "$out" | wc -c | tr -d ' ')"
+  ASSERT_CASES=$((ASSERT_CASES + 1))
+  if [ "$total" -lt 20000 ]; then _pass
+  else _fail "payload is ${total} bytes — past the externalisation seen at 13.7 KB"; fi
+  rm -rf "$(dirname "$np")"
+}
+
 test_outside_notepad_emits_empty_object() {
   local sb out; sb="$(mktemp -d)"
   out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$sb")"

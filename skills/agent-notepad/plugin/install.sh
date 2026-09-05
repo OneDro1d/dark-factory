@@ -79,7 +79,35 @@ for d in hooks lib bin notepad-template; do
 done
 chmod +x "$DEST"/hooks/*.sh 2>/dev/null || true
 chmod +x "$DEST"/bin/*.py 2>/dev/null || true
+chmod +x "$DEST"/lib/*.py 2>/dev/null || true
 echo "agent-notepad:   runtime tree -> $DEST/{hooks,lib,bin,notepad-template}"
+
+# --- 1b) register the sessions/index.json merge driver -----------------------
+# ⚠️ .gitattributes only NAMES a driver; git will not run one it has no config for. Shipping
+# the attribute without this registration leaves the attribute INERT — declared, installed, and
+# never invoked, which is this estate's signature defect.
+#
+# ⚠️ Registered at USER scope on purpose: a notepad is a repo per objective and there will be
+# more of them, so per-repo registration would have to be repeated forever and would be
+# forgotten exactly once.
+#
+# ⚠️ FAIL-SAFE EITHER WAY. Without the config git falls back to an ordinary conflict — today's
+# behaviour — never to corruption. So this is a convenience, not a load-bearing guarantee, and
+# a machine that skips it is inconvenienced rather than broken.
+if command -v git >/dev/null 2>&1; then
+  if git config --global merge.loom-session-index.driver >/dev/null 2>&1; then
+    echo "agent-notepad:   merge driver already registered"
+  else
+    git config --global merge.loom-session-index.name \
+      "agent-notepad sessions/index.json union, keyed by sessionId" 2>/dev/null || true
+    if git config --global merge.loom-session-index.driver \
+         "python3 $DEST/lib/merge-session-index.py %O %A %B" 2>/dev/null; then
+      echo "agent-notepad:   merge driver registered (sessions/index.json)"
+    else
+      echo "agent-notepad: ! could not register the merge driver — index.json conflicts stay manual"
+    fi
+  fi
+fi
 
 # --- 2) install the skill ----------------------------------------------------
 if [ -f "$SKILL_SRC/SKILL.md" ]; then

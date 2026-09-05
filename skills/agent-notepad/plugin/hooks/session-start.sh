@@ -131,9 +131,13 @@ if [ -d "$np/handoffs" ]; then
   newest="$(ls -t "$np/handoffs"/*.md 2>/dev/null | head -1)"
   if [ -n "$newest" ]; then
     _hb="$(wc -c < "$newest" 2>/dev/null | tr -d ' ')"
-    # 24 KB, not 64: this cap and AGENT_NOTEPAD_MAX_BYTES are spent from the SAME harness
-    # budget (~67 KB), so two independently-reasonable limits must still sum below it.
-    _cap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-24576}"
+    # 3 KB. NOT 24, and not 64 either — both earlier numbers were sized against a budget that
+    # does not exist. MEASURED 2026-09-05: the harness externalises the whole payload past a few
+    # KB and injects a ~2 KB preview, so a 24 KB handoff is not "mostly delivered", it is
+    # delivered as far as the preview and no further. The head of a handoff is its state and its
+    # one next action, which is what 3 KB buys; the READ-THESE-FILES block above carries the
+    # path to the rest.
+    _cap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-3072}"
     printf '\n\n### ⛔ NEWEST HANDOFF — READ THIS FIRST\n\n'
     printf '  file: %s\n' "$newest"
     printf '  handoff written : %s\n' "$(date -u -r "$newest" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
@@ -174,6 +178,43 @@ combined="$(
   printf '## agent-notepad — restored working memory (%s)\n' "$name"
   printf 'Objective-scoped working memory, auto-loaded on session start. Resume from '
   printf 'this instead of re-deriving state.\n'
+  # ⛔ THE PAYLOAD MUST FIT, OR NONE OF IT ARRIVES. MEASURED 2026-09-05 on a REAL /clear.
+  #
+  # The harness externalises an oversized hook payload to a file and injects only a ~2 KB
+  # PREVIEW. Observed in one session at 13.7 KB and at 100.4 KB; the laptop /clear reported
+  # "Output too large (27.7KB)" and delivered the pointer plus roughly the first 30 lines.
+  # Everything after that never entered the session.
+  #
+  # ⚠️ THIS IS DOWNSTREAM OF EVERY EARLIER FIX, AND IT INVALIDATED THE WAY THEY WERE VERIFIED.
+  # #102-#105 measured the bytes the hook EMITS, and the hook emits them correctly. The cut
+  # happens at the step the proxy skipped, so a green proxy was a fact about the emitter and
+  # not about delivery. **Measure what the SESSION received, never what the hook produced.**
+  #
+  # ⚠️ PAST THE CAP, SHIPPING MORE BYTES SHIPS FEWER. Inlining the whole handoff and the whole
+  # NOTES.md is what pushed the block over the threshold and cost everything after the preview.
+  # So the head of this payload is a SMALL, SELF-SUFFICIENT DIGEST that survives any preview:
+  # the one next action, and an IMPERATIVE instruction naming the files to open.
+  #
+  # ⚠️ This is NOT a return to the #102 pointer. That pointer failed because it was CONDITIONAL
+  # ("read it IF the Notes do not already cover this") and buried at the END of a payload that
+  # was cut anyway. This is unconditional, first, and short enough to always arrive.
+  _first_line_after() { # <file> <regex> -- the first non-empty line following a match
+    awk -v pat="$2" 'matched && NF { print; exit } $0 ~ pat { matched=1 }' "$1" 2>/dev/null | head -c 400
+  }
+  printf '\n### ⛔ READ THESE FILES NOW, BEFORE YOUR FIRST ACTION\n\n'
+  _hf=""
+  if [ -d "$np/handoffs" ]; then _hf="$(ls -t "$np/handoffs"/*.md 2>/dev/null | head -1)"; fi
+  [ -n "$_hf" ] && printf '  1. %s   (%s bytes) — the deliberate checkpoint\n' \
+      "$_hf" "$(wc -c < "$_hf" 2>/dev/null | tr -d ' ')"
+  [ -f "$np/NOTES.md" ] && printf '  2. %s   (%s bytes) — live working memory\n' \
+      "$np/NOTES.md" "$(wc -c < "$np/NOTES.md" 2>/dev/null | tr -d ' ')"
+  printf '\n  Anything below this block may be TRUNCATED by the harness before you see it.\n'
+  printf '  Do not treat what follows as the whole document, and do not conclude a fact is\n'
+  printf '  absent because it is not here. Open the files above.\n'
+  if [ -f "$np/NOTES.md" ]; then
+    _na="$(_first_line_after "$np/NOTES.md" '[Nn]ext action')"
+    [ -n "$_na" ] && printf '\n  NEXT ACTION (from NOTES.md): %s\n' "$_na"
+  fi
   # ⚠️ SAY SO BEFORE THE NOTES, not after. If the auto-pull failed, everything below may be stale
   # and the reader needs to know that BEFORE reading it as current state.
   if [ -n "${PULL_NOTE:-}" ]; then
@@ -218,7 +259,7 @@ combined="$(
   # this budget to 36 KB: ~60 KB total against the ~67 KB the harness accepts. Two independent
   # limits that each look reasonable alone are how a budget gets blown — the same shape as a
   # glob that is not a superset of the name it derives from.
-  _budget="${AGENT_NOTEPAD_MAX_BYTES:-36000}"
+  _budget="${AGENT_NOTEPAD_MAX_BYTES:-2500}"
   _spent=0
   _emit_bounded() {   # <path> <heading> [fence]
     local f="$1" heading="$2" fence="${3:-}" sz left
