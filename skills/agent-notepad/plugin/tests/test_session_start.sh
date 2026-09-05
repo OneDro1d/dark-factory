@@ -461,4 +461,33 @@ except Exception: pass
   assert_not_contains "$head" "INLINED IN FULL" "it must not also claim the handoff is whole"
 }
 
+# ⛔ THE MANIFEST'S EDITORIAL MUST NOT STARVE ITS REPOS. Measured on the operator's /clear,
+# 2026-09-05: repos.manifest.json carried 2,090 bytes of top-level $-prefixed prose about how to
+# EDIT the file, placed FIRST, and the raw-file cap delivered all of that and ONE of three repo
+# entries, cut mid-word. A cold session learned the manifest's rewrite history and not which
+# repos it drives. The digest projects the repos array to its actionable keys; the prose is
+# pointed at, never dropped silently.
+test_manifest_repos_survive_its_own_prose() {
+  local np out; np="$(_scaffold)"
+  # 3 KB of $-prose FIRST, then three repos -- the real shape, exaggerated.
+  python3 - "$np/repos.manifest.json" <<'PY'
+import json, sys
+m = {"$comment": "x" * 3000, "$resolution": ["how to resolve"] * 10,
+     "repos": [{"name": "REPO_ALPHA", "remote": "o/a", "branch": "main", "role": "primary",
+                "note": "push as ACCOUNT_ALPHA"},
+               {"name": "REPO_BRAVO", "remote": "o/b", "branch": "dev", "role": "support"},
+               {"name": "REPO_CHARLIE", "remote": "o/c", "branch": "main", "role": "mirror",
+                "$pathNote": "y" * 800}]}
+json.dump(m, open(sys.argv[1], "w"), indent=2)
+PY
+  out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+  assert_contains "$out" "REPO_ALPHA"   "first repo arrives"
+  assert_contains "$out" "REPO_BRAVO"   "second repo arrives"
+  assert_contains "$out" "REPO_CHARLIE" "third repo arrives -- the one the raw cap used to cut"
+  assert_contains "$out" "ACCOUNT_ALPHA" "the per-repo note (a real caveat) is kept"
+  assert_not_contains "$out" "xxxxxxxxxxxxxxxxxxxx" "the top-level prose is NOT inlined"
+  assert_contains "$out" "NOT injected -- they are for editing the file" \
+    "and its absence is ANNOUNCED with the path, never silent"
+}
+
 run_tests
