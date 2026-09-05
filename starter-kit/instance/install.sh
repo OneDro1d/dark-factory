@@ -388,16 +388,32 @@ else
 fi
 
 # ---- 4. PATH -----------------------------------------------------------------
-step "df-mission on PATH"
+step "df-mission and df-preflight on PATH"
 # Overridable for the same reason rehydrate.sh takes LOOM_LIVE: a test that has to write
 # into the real ~/.local/bin is a test nobody runs twice.
+#
+# df-preflight is linked beside df-mission because of where it is RUN FROM. The preflight
+# scopes a mission to the notepad above the cwd (its repos.manifest.json) and reads the
+# machine from the kit its own file lives in. Documented as `<notepad>/boot-kit/scripts/
+# df-preflight.py`, an agent in a notepad that is not the kit looks there, finds nothing,
+# and reports "no df-preflight in this notepad" -- measured 2026-09-05 on a Coder
+# workspace. On PATH it is one command from any notepad, and the script resolves its kit
+# through the link (realpath). VALIDATE-INSTALL.md has expected `command -v df-preflight`
+# since it was written; this is the step that makes that line true.
 BINDIR="${LOOM_BIN:-$HOME/.local/bin}"
 if [ "$DRY" -eq 1 ]; then
-  say "would  link $BINDIR/df-mission"
-elif [ -f "$ENGINE_DST/df-mission" ]; then
-  mkdir -p "$BINDIR"
-  ln -sf "$ENGINE_DST/df-mission" "$BINDIR/df-mission"
-  say "ok    $BINDIR/df-mission"
+  say "would  link $BINDIR/df-mission and $BINDIR/df-preflight"
+else
+  for pair in "df-mission:df-mission" "df-preflight:df-preflight.py"; do
+    name="${pair%%:*}"; file="${pair#*:}"
+    if [ -f "$ENGINE_DST/$file" ]; then
+      mkdir -p "$BINDIR"
+      ln -sf "$ENGINE_DST/$file" "$BINDIR/$name"
+      say "ok    $BINDIR/$name"
+    else
+      say "WARN  $file not present in the pinned engine"
+    fi
+  done
   case ":$PATH:" in
     *":$BINDIR:"*) ;;
     # Installed-but-unreachable is not installed, and its failure mode -- "command not
@@ -405,8 +421,6 @@ elif [ -f "$ENGINE_DST/df-mission" ]; then
     *) say "WARN  $BINDIR is not on your PATH. df-mission is installed and will not resolve."
        say "      add it to your shell profile, then open a new shell." ;;
   esac
-else
-  say "WARN  df-mission not present in the pinned engine"
 fi
 
 # ---- 5. verify ---------------------------------------------------------------
