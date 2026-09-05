@@ -59,6 +59,36 @@ decide_scratch() { scratch "$1" "$2" "$3" | python3 -c "$CLASSIFY"; }
 claimcols()      { printf '%s' "$3" | env DF_TICKET="$1" DF_CLAIM_COLUMNS="$2" python3 "$HOOK"; }
 decide_claimcols() { claimcols "$1" "$2" "$3" | python3 -c "$CLASSIFY"; }
 
+# generic() layers DF_CLAIM_TOOL / DF_CLAIM_ITEM_KEYS / DF_CLAIM_VALUES_KEY (and, when
+# given, DF_CLAIM_COLUMNS) on top of an armed call — one tracker's shape, generalised.
+# vmode is "set" (export DF_CLAIM_VALUES_KEY even when vkey is the empty string — the
+# "match tool_input itself" case) or "unset" (do not export DF_CLAIM_VALUES_KEY at all).
+# This is the ONLY way the two are told apart, mirroring claim_values_key() itself.
+generic() {  # ticket claim_tool item_keys vkey vmode claim_columns event
+  local ticket="$1" tool="$2" keys="$3" vkey="$4" vmode="$5" cols="$6" ev="$7"
+  local envs=(DF_TICKET="$ticket")
+  [ -n "$tool" ] && envs+=(DF_CLAIM_TOOL="$tool")
+  [ -n "$keys" ] && envs+=(DF_CLAIM_ITEM_KEYS="$keys")
+  if [ "$vmode" = "set" ]; then envs+=(DF_CLAIM_VALUES_KEY="$vkey"); fi
+  [ -n "$cols" ] && envs+=(DF_CLAIM_COLUMNS="$cols")
+  printf '%s' "$ev" | env "${envs[@]}" python3 "$HOOK"
+}
+decide_generic() { generic "$1" "$2" "$3" "$4" "$5" "$6" "$7" | python3 -c "$CLASSIFY"; }
+
+ev_tool() {  # hook_event_name cwd tool_name tool_input_json [tool_response_json]
+  if [ -n "${5:-}" ]; then
+    printf '{"session_id":"t","hook_event_name":"%s","cwd":"%s","tool_name":"%s","tool_input":%s,"tool_response":%s}' "$1" "$2" "$3" "$4" "$5"
+  else
+    printf '{"session_id":"t","hook_event_name":"%s","cwd":"%s","tool_name":"%s","tool_input":%s}' "$1" "$2" "$3" "$4"
+  fi
+}
+
+# default_armed(): DF_TICKET set, but DF_CLAIM_TOOL / DF_CLAIM_ITEM_KEYS / DF_CLAIM_VALUES_KEY
+# / DF_CLAIM_COLUMNS explicitly UNSET — proves the three new vars change nothing when absent,
+# not merely that they happen not to have been set yet in this process.
+default_armed() { printf '%s' "$2" | env -u DF_CLAIM_TOOL -u DF_CLAIM_ITEM_KEYS -u DF_CLAIM_VALUES_KEY -u DF_CLAIM_COLUMNS DF_TICKET="$1" python3 "$HOOK"; }
+decide_default() { default_armed "$1" "$2" | python3 -c "$CLASSIFY"; }
+
 ev_bash() {   # cwd
   printf '{"session_id":"t","hook_event_name":"PreToolUse","cwd":"%s","tool_name":"Bash","tool_input":{"command":"ls"}}' "$1"
 }
@@ -189,6 +219,99 @@ equals "K7 columnValues as a decoded object (not a string) still matches" "absta
 CWD6="$WORK/scratch6"; mkdir -p "$CWD6"
 equals "K8 DF_CLAIM_COLUMNS unset: old behaviour (any write is the claim)" "abstain" \
   "$(decide_armed 303 "$(ev_write "$CWD6" 303)")"
+
+echo ""
+# ── 10. TRACKER-AGNOSTIC: the same claim, a different tracker's shape ──────────────────
+# ⛔ THE BUG THIS GUARDS (measured, second live estate). claim-gate.py recognised the claim
+# ONLY as tool_name matching the Monday regex, with the item id in itemId/item_id/itemID
+# and the values in columnValues. A Notion worker (tool `...notion-update-page`, item id in
+# `page_id`, claim fields nested under `properties`) or a Jira worker (tool
+# `...jira_update_issue`, item id in `issue_key`, claim fields — assignee/fields — at the
+# TOP LEVEL of tool_input, no nested values object at all) can never satisfy that shape and
+# is denied every tool call for the whole session.
+NOTION_TOOL='^mcp__.*notion.*notion-update-page$'
+NOTION_ITEM_KEYS='page_id'
+NOTION_VKEY='properties'
+NOTION_COLS='{"Claimed By": "dev/x", "Status": "Doing"}'
+NOTION_TOOL_NAME='mcp__hub__notion-example__notion-update-page'
+
+CWDN1="$WORK/scratchN1"; mkdir -p "$CWDN1"
+NOTION_MATCH_TI='{"page_id":"page-N1","command":"update_properties","properties":{"Claimed By":"dev/x","Status":"Doing"}}'
+equals "N1 Notion: a matching write abstains" "abstain" \
+  "$(decide_generic page-N1 "$NOTION_TOOL" "$NOTION_ITEM_KEYS" "$NOTION_VKEY" set "$NOTION_COLS" \
+      "$(ev_tool PreToolUse "$CWDN1" "$NOTION_TOOL_NAME" "$NOTION_MATCH_TI")")"
+generic page-N1 "$NOTION_TOOL" "$NOTION_ITEM_KEYS" "$NOTION_VKEY" set "$NOTION_COLS" \
+  "$(ev_tool PostToolUse "$CWDN1" "$NOTION_TOOL_NAME" "$NOTION_MATCH_TI" '{"ok":true}')" >/dev/null
+if [ -f "$CWDN1/.claim-done" ]; then ok "N2 Notion: PostToolUse on the matching write creates the marker"
+else bad "N2 Notion: PostToolUse on the matching write creates the marker" "no $CWDN1/.claim-done"; fi
+
+# claimed: a write to ANOTHER page_id is denied
+equals "N3 Notion: a write to another page_id is DENIED once claimed" "deny" \
+  "$(decide_generic page-N1 "$NOTION_TOOL" "$NOTION_ITEM_KEYS" "$NOTION_VKEY" set "$NOTION_COLS" \
+      "$(ev_tool PreToolUse "$CWDN1" "$NOTION_TOOL_NAME" '{"page_id":"page-OTHER","properties":{"Claimed By":"dev/x","Status":"Doing"}}')")"
+
+# unclaimed, same page_id, properties missing Status: DENIED, naming the expected values
+CWDN2="$WORK/scratchN2"; mkdir -p "$CWDN2"
+NOTION_MISS_TI='{"page_id":"page-N2","properties":{"Claimed By":"dev/x"}}'
+equals "N4 Notion: properties missing Status is DENIED" "deny" \
+  "$(decide_generic page-N2 "$NOTION_TOOL" "$NOTION_ITEM_KEYS" "$NOTION_VKEY" set "$NOTION_COLS" \
+      "$(ev_tool PreToolUse "$CWDN2" "$NOTION_TOOL_NAME" "$NOTION_MISS_TI")")"
+N4_REASON="$(generic page-N2 "$NOTION_TOOL" "$NOTION_ITEM_KEYS" "$NOTION_VKEY" set "$NOTION_COLS" \
+  "$(ev_tool PreToolUse "$CWDN2" "$NOTION_TOOL_NAME" "$NOTION_MISS_TI")" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["permissionDecisionReason"])')"
+contains "N5 the denial names the tool regex"   "$NOTION_TOOL"    "$N4_REASON"
+contains "N6 the denial names the item key"     "page_id"         "$N4_REASON"
+contains "N7 the denial names the expected values" "Status"       "$N4_REASON"
+contains "N8 the denial names the expected values (Doing)" "Doing" "$N4_REASON"
+generic page-N2 "$NOTION_TOOL" "$NOTION_ITEM_KEYS" "$NOTION_VKEY" set "$NOTION_COLS" \
+  "$(ev_tool PostToolUse "$CWDN2" "$NOTION_TOOL_NAME" "$NOTION_MISS_TI" '{"ok":true}')" >/dev/null
+if [ ! -e "$CWDN2/.claim-done" ]; then ok "N9 Notion: a mismatching write creates no marker"
+else bad "N9 Notion: a mismatching write creates no marker" "marker exists"; fi
+
+echo ""
+# Jira: item id in issue_key; claim fields (assignee) at the TOP LEVEL of tool_input, so
+# DF_CLAIM_VALUES_KEY="" — the empty string, EXPLICITLY SET — means "match tool_input itself".
+JIRA_TOOL='^mcp__.*jira_update_issue$'
+JIRA_ITEM_KEYS='issue_key'
+JIRA_COLS='{"assignee": "abc"}'
+JIRA_TOOL_NAME='mcp__onedroid__jira_update_issue'
+
+CWDJ1="$WORK/scratchJ1"; mkdir -p "$CWDJ1"
+JIRA_MATCH_TI='{"workspace_id":"ws1","issue_key":"TICK-J1","fields":{"foo":"bar"},"assignee":"abc"}'
+equals "J1 Jira: a matching write (values key '') abstains" "abstain" \
+  "$(decide_generic TICK-J1 "$JIRA_TOOL" "$JIRA_ITEM_KEYS" "" set "$JIRA_COLS" \
+      "$(ev_tool PreToolUse "$CWDJ1" "$JIRA_TOOL_NAME" "$JIRA_MATCH_TI")")"
+generic TICK-J1 "$JIRA_TOOL" "$JIRA_ITEM_KEYS" "" set "$JIRA_COLS" \
+  "$(ev_tool PostToolUse "$CWDJ1" "$JIRA_TOOL_NAME" "$JIRA_MATCH_TI" '{"ok":true}')" >/dev/null
+if [ -f "$CWDJ1/.claim-done" ]; then ok "J2 Jira: PostToolUse on the matching write creates the marker"
+else bad "J2 Jira: PostToolUse on the matching write creates the marker" "no $CWDJ1/.claim-done"; fi
+
+# a write to the same issue_key whose top-level assignee does not match: DENIED
+CWDJ2="$WORK/scratchJ2"; mkdir -p "$CWDJ2"
+JIRA_MISS_TI='{"workspace_id":"ws1","issue_key":"TICK-J2","fields":{},"assignee":"someone-else"}'
+equals "J3 Jira: a wrong top-level assignee is DENIED" "deny" \
+  "$(decide_generic TICK-J2 "$JIRA_TOOL" "$JIRA_ITEM_KEYS" "" set "$JIRA_COLS" \
+      "$(ev_tool PreToolUse "$CWDJ2" "$JIRA_TOOL_NAME" "$JIRA_MISS_TI")")"
+
+# DF_CLAIM_VALUES_KEY UNSET (not the empty string) with a Jira-shaped tool must NOT match
+# top level — it falls back to the "columnValues" default key, which Jira's shape has none
+# of, so parsed_values() finds nothing and the write cannot satisfy the claim.
+equals "J4 Jira: DF_CLAIM_VALUES_KEY UNSET does not fall back to top-level matching" "deny" \
+  "$(decide_generic TICK-J3 "$JIRA_TOOL" "$JIRA_ITEM_KEYS" "" unset "$JIRA_COLS" \
+      "$(ev_tool PreToolUse "$WORK/scratchJ3" "$JIRA_TOOL_NAME" '{"issue_key":"TICK-J3","assignee":"abc"}')")"
+
+echo ""
+# ── 11. THE DEFAULT, RE-CONFIRMED: no new env at all, a Monday write is unchanged ───────
+# DF_CLAIM_TOOL / DF_CLAIM_ITEM_KEYS / DF_CLAIM_VALUES_KEY / DF_CLAIM_COLUMNS explicitly
+# UNSET (not merely never-yet-set) — an unset environment must be byte-for-byte the old gate.
+CWDG="$WORK/scratchG"; mkdir -p "$CWDG"
+equals "G1 default: a Monday itemId/columnValues write still abstains as the claim" "abstain" \
+  "$(decide_default 777 "$(ev_write "$CWDG" 777)")"
+default_armed 777 "$(ev_post "$CWDG" 777)" >/dev/null
+if [ -f "$CWDG/.claim-done" ]; then ok "G2 default: PostToolUse still writes the marker"
+else bad "G2 default: PostToolUse still writes the marker" "no $CWDG/.claim-done"; fi
+equals "G3 default: a write to ANOTHER item is still DENIED" "deny" \
+  "$(decide_default 777 "$(ev_write "$CWDG" 888)")"
 
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"

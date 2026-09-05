@@ -304,6 +304,40 @@ if [ "$RC12" -ne 0 ]; then ok "CC7 malformed --claim-columns refuses (non-zero)"
 contains "CC8 the refusal names --claim-columns" "--claim-columns" "$OUT12"
 noline   "CC9 nothing was launched" "---- argv ----" "$OUT12"
 
+echo ""
+# ── case 13: --claim-tool / --claim-item-keys / --claim-values-key ─────────────────────
+# ⛔ THE REGRESSION THIS GUARDS. claim-gate.py used to recognise the claim ONLY as a
+# Monday-shaped tool_name with itemId/columnValues. These three flags are how a launcher
+# tells the gate a DIFFERENT tracker's shape (Notion, Jira, ...) — mirrored on
+# --claim-columns's own export-only-when-given, --dry-run-echoed pattern.
+CLAIMTOOL='^mcp__.*notion.*notion-update-page$'
+CLAIMKEYS='page_id'
+CLAIMVKEY='properties'
+OUT13="$(run_dry env WORKER_MCP_PROFILE=tp "$WORKER" dev 12345 "p" \
+        --claim-tool "$CLAIMTOOL" --claim-item-keys "$CLAIMKEYS" --claim-values-key "$CLAIMVKEY" --dry-run)"; RC13=$?
+if [ "$RC13" -eq 0 ]; then ok "CT1 the three claim-shape flags --dry-run exits 0"
+else bad "CT1 the three claim-shape flags --dry-run exits 0" "rc=$RC13: $OUT13"; fi
+hasline "CT2 --dry-run prints claim-tool: <regex>"       "claim-tool: $CLAIMTOOL"      "$OUT13"
+hasline "CT3 --dry-run prints claim-item-keys: <csv>"    "claim-item-keys: $CLAIMKEYS" "$OUT13"
+hasline "CT4 --dry-run prints claim-values-key: <name>"  "claim-values-key: $CLAIMVKEY" "$OUT13"
+hasline "CT5 env shows DF_CLAIM_TOOL"       "DF_CLAIM_TOOL=$CLAIMTOOL"       "$OUT13"
+hasline "CT6 env shows DF_CLAIM_ITEM_KEYS"  "DF_CLAIM_ITEM_KEYS=$CLAIMKEYS"  "$OUT13"
+hasline "CT7 env shows DF_CLAIM_VALUES_KEY" "DF_CLAIM_VALUES_KEY=$CLAIMVKEY" "$OUT13"
+
+# --claim-values-key '' is a real, distinct value (match tool_input itself) and must still
+# be exported — the presence of the flag, not the truthiness of its value, is what gates it.
+OUT14="$(run_dry env WORKER_MCP_PROFILE=tp "$WORKER" dev 12345 "p" --claim-values-key "" --dry-run)"
+hasline "CT8 --claim-values-key '' still prints the line (empty value)" "claim-values-key: " "$OUT14"
+hasline "CT9 env DF_CLAIM_VALUES_KEY='' is exported explicitly"         "DF_CLAIM_VALUES_KEY=" "$OUT14"
+
+# without any of the three flags (case 1's $OUT), none of the lines or env vars appear.
+noline "CT10 no claim-tool: line when not given"       "claim-tool: "       "$OUT"
+noline "CT11 no claim-item-keys: line when not given"  "claim-item-keys: "  "$OUT"
+noline "CT12 no claim-values-key: line when not given" "claim-values-key: " "$OUT"
+if printf '%s\n' "$OUT" | grep -q '^DF_CLAIM_TOOL='; then bad "CT13 no DF_CLAIM_TOOL when not given" "line present"; else ok "CT13 no DF_CLAIM_TOOL when not given"; fi
+if printf '%s\n' "$OUT" | grep -q '^DF_CLAIM_ITEM_KEYS='; then bad "CT14 no DF_CLAIM_ITEM_KEYS when not given" "line present"; else ok "CT14 no DF_CLAIM_ITEM_KEYS when not given"; fi
+if printf '%s\n' "$OUT" | grep -q '^DF_CLAIM_VALUES_KEY='; then bad "CT15 no DF_CLAIM_VALUES_KEY when not given" "line present"; else ok "CT15 no DF_CLAIM_VALUES_KEY when not given"; fi
+
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]
