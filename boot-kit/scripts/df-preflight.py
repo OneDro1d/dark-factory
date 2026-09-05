@@ -236,8 +236,8 @@ def find_lock():
     # KIT_ROOT, not NOTEPAD: the lockfile describes the MACHINE and lives with the kit.
     # A mission launched from any notepad still needs this machine's codeLayout.
     # ⚠️ THE ROOT RECORD IS NOT ALWAYS NAMED loom.lock.json, and assuming it is has already
-    # cost this estate three weeks. `loom-delia`'s record is `delia.lock.json`; the Catalyst
-    # layer's is `catalyst.lock.json`. A sweep that globbed the name marked three sibling kits
+    # cost this estate three weeks. `<a personal kit>`'s record is `<kit-name>.lock.json`; the
+    # sibling org layer's is `<sibling-org-layer>.lock.json`. A sweep that globbed the name marked three sibling kits
     # and silently skipped the fourth, and that kit's own record says why:
     # "A warning that lives only in prose does not stop a tool."
     #
@@ -400,9 +400,9 @@ def probe_github(manifest, scope):
             #
             # This used to be `owner = remote.split("/")[0]` alone — the identity was
             # inferred from the ORG NAME and matched against logged-in account names. That
-            # holds only while org == account. It is true for `Michal-Bacia_eso` and false
-            # for every org whose name is not also a username: `eso-development` is
-            # reachable ONLY as `Michal-Bacia_eso`, so the probe reported a repo the machine
+            # holds only while org == account. It is true for `<account-that-equals-its-org>` and false
+            # for every org whose name is not also a username: `<second-estate-org>` is
+            # reachable ONLY as `<account-that-equals-its-org>`, so the probe reported a repo the machine
             # can reach perfectly well as DRIFT — and per df-supervisor.sh the supervisor
             # treated drift as fatal when this was written, so one wrong guess here blocked
             # every unattended
@@ -439,7 +439,7 @@ def probe_github(manifest, scope):
             else:
                 hint = ""
                 if not owner_acct:
-                    # Name the account the MANIFEST asked for when there is one. "`eso-development`
+                    # Name the account the MANIFEST asked for when there is one. "`<second-estate-org>`
                     # is not among the logged-in accounts" sends the reader to look for an account
                     # by that name, which will never exist — the org is not a user. The actionable
                     # sentence is which declared identity is missing.

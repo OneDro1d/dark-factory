@@ -71,8 +71,11 @@ for h in $SUBJECTS; do
   else
     ok "D: $h carries no endpoint or credential"
   fi
-  # Hub names are an ESTATE binding and must not be committed upstream.
-  if grep -qE 'onedroid\.ai|esosuite|mcp__(onedroid|optima|claude_ai_ESO)' "$HOOKS/$h"; then
+  # Hub names are an ESTATE binding and must not be committed upstream. Checked by SHAPE, not
+  # by name: any MCP router prefix (`mcp__<hub>__...`) or bare SaaS-style domain token is an
+  # estate binding regardless of which estate minted it -- naming today's estates here would
+  # only catch today's estates.
+  if grep -qE 'mcp__[a-z0-9_]+__|\b[a-z0-9-]+\.(ai|net|io|com)\b' "$HOOKS/$h"; then
     bad "D: $h names no estate hub" "a hub name here is a binding in the generic tier"
   else
     ok "D: $h names no estate hub"

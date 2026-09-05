@@ -90,7 +90,7 @@ if [ "$rc" -eq 3 ]; then ok "D2: and exits 3 there too"; else bad "D2: and exits
 
 echo "=== D3: a host record survives the .local suffix and a case change ==="
 # ⛔ THIS REFUSED THE AUTHOR'S OWN LAPTOP, LIVE. `hostname` on macOS follows the NETWORK: it
-# returned `MacBook-Air-3.local` when the record was written and `Mac` an hour later, so the
+# returned `<Model>-<n>.local` when the record was written and `Mac` an hour later, so the
 # check blocked the CORRECT install — worse than the gap it closes.
 #
 # The fix reads `scutil --get LocalHostName` (the Bonjour name, unchanged by joining a network)
