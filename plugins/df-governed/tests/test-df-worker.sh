@@ -21,6 +21,12 @@
 # Usage: bash plugins/df-governed/tests/test-df-worker.sh
 # Exit:  0 = every case behaves   1 = at least one does not   2 = harness could not run
 set -uo pipefail
+# This suite asserts the launcher's DEFAULTS, so the launcher's own env knobs must not leak in.
+# Measured 2026-09-05 on the first live dispatch: the worker ran this suite from inside a
+# df-worker launch, inherited WORKER_PERMISSION_MODE=auto and WORKER_MAX_BUDGET_USD=15 from
+# the shim, and reported W4/W5/W22 red as "pre-existing". They were the environment, not the
+# code. A suite that depends on who runs it is not a suite.
+unset WORKER_PERMISSION_MODE WORKER_MAX_BUDGET_USD WORKER_MODEL WORKER_MCP_PROFILE WORKER_MISSION WORKER_DRY_RUN
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SELF/.." && pwd)"
@@ -253,6 +259,23 @@ contains "8a installed layout: engine found via df-mission on PATH" "--strict-mc
 if printf '%s' "$OUT8" | grep -q 'mcp-profile-config.py not found'; then bad "8b no refusal" "refused"; else ok "8b no refusal in the installed layout"; fi
 OUT8b="$(run_dry env PATH="/usr/bin:/bin" WORKER_MCP_PROFILE=tp "$IW" dev 12345 "p" --dry-run)"
 contains "8c installed layout WITHOUT df-mission on PATH still refuses (fails closed)" "mcp-profile-config.py not found" "$OUT8b"
+
+echo ""
+# ── case 9: --disallow-tool travels to the child as --disallowedTools ──────────────────
+# One flag, then every value as its own argv word (the docs' own example is a single
+# `--disallowedTools` followed by a space-separated list, never the flag repeated).
+OUT9="$(run_dry env WORKER_MCP_PROFILE=tp "$WORKER" dev 12345 "p" \
+        --disallow-tool "Edit" --disallow-tool "Bash(rm *)" --dry-run)"; RC9=$?
+if [ "$RC9" -eq 0 ]; then ok "T1 --disallow-tool --dry-run exits 0"; else bad "T1 --disallow-tool --dry-run exits 0" "rc=$RC9: $OUT9"; fi
+ARGV9="$(printf '%s\n' "$OUT9" | awk '/^---- argv ----$/{a=1;next} /^---- prompt ----$/{a=0} a')"
+pair "T2 --disallowedTools is followed by the first value"  "--disallowedTools" "Edit"          "$ARGV9"
+pair "T3 --disallowedTools is followed by the second value" "Edit"              "Bash(rm *)"    "$ARGV9"
+hasline "T4 --dry-run prints disallow: for the first value"  "disallow: Edit"        "$OUT9"
+hasline "T5 --dry-run prints disallow: for the second value" "disallow: Bash(rm *)"  "$OUT9"
+
+# ── case 10: without --disallow-tool, the flag is absent entirely ──────────────────────
+noline "T6 --disallowedTools is absent from argv when no --disallow-tool given" "--disallowedTools" "$ARGV"
+noline "T7 no disallow: line appears when no --disallow-tool given" "disallow: " "$OUT"
 
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
