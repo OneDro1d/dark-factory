@@ -81,6 +81,17 @@ EXCL=(
 # like a gate running on real ones unless it tells you.
 LANDMARKS="$SELF/landmarks.conf"
 LANDMARKS_SRC="landmarks.conf"
+# DF_LANDMARKS_CONF: read the REAL denylist from another checkout, in place. A git worktree
+# has no landmarks.conf (gitignored), so a gate run there could only ever use the placeholder
+# patterns and could never write the record the merge gate reads — every PR head would have
+# to be re-verified from the main clone. Copying the file into each worktree is the wrong
+# fix: it multiplies the one file that must not be published. Pointing at it is not.
+# The override counts as the real conf ONLY if the file it names exists; a dangling path
+# falls through to the placeholder, and the first output line says so, as always.
+if [ -n "${DF_LANDMARKS_CONF:-}" ] && [ -f "$DF_LANDMARKS_CONF" ]; then
+  LANDMARKS="$DF_LANDMARKS_CONF"
+  LANDMARKS_SRC="landmarks.conf"
+fi
 if [ ! -f "$LANDMARKS" ]; then
   LANDMARKS="$SELF/landmarks.example.conf"
   LANDMARKS_SRC="landmarks.example.conf (PLACEHOLDER PATTERNS — copy to landmarks.conf and edit)"
