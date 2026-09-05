@@ -36,7 +36,8 @@ That is expected, not a misconfiguration.
 | `pull_request`, 0 approvals required | Every change to the default branch arrives as a reviewable diff, but a solo maintainer is not blocked waiting for an approver who does not exist. The audit trail is the point, not the ceremony. |
 | `non_fast_forward` | No force-pushes. History rewrites on a published branch break every clone and can silently resurrect or destroy content. |
 | `deletion` | The default branch cannot be deleted. |
-| `required_status_checks` → `publish-gate` | The gate must actually run. Every gate failure in this repo's history was a check nobody ran, or one that ran and could not catch anything. |
+| `required_status_checks` → `publish-gate` | The gate must actually run. Every gate failure in this repo's history was a check nobody ran, or one that ran and could not catch anything. ⚠️ This is the CI run, which uses PLACEHOLDER patterns by design (the real denylist is gitignored) — it proves the gate is well-formed, not that the branch is clean. |
+| `required_status_checks` → `publish-gate/real` | The REAL run. Only `boot-kit/scripts/publish-gate.sh` posts this status, and only when the tree is CLEAN under the real `landmarks.conf` and not dirty — so a PR cannot merge unless a maintainer ran the real gate on exactly that head. Added 2026-09-05 after a client-side merge hook was measured being walked around by `env --chdir=… gh pr merge` (F-MG1): a Bash-pattern gate is a floor; a required status is the ceiling, because it does not care how the merge command was spelled. |
 | `strict_required_status_checks_policy` | Branches must be up to date before merging, so the gate result reflects the merged state rather than a stale base. |
 
 ### Why the bypass is `pull_request`, not `always`

@@ -152,10 +152,74 @@ def find_flag_value(tokens, names):
     return None
 
 
+SHELLS = ("bash", "sh", "zsh", "dash", "ksh")
+
+
+def gh_argvs(tokens):
+    """Every gh argv reachable from this token list.
+
+    ⚠️ F-MG1, measured 2026-09-05 on a Linux instance: `env --chdir=<repo> gh pr merge N`
+    walked past this gate and reached GitHub, because detection asked whether tokens[0] was
+    `gh`. Any prefix wrapper — env, nice, nohup, time, timeout, sudo, an absolute or relative
+    path to gh — puts `gh` somewhere other than position 0. So: the FIRST token whose basename
+    is `gh` starts the argv, wherever it sits. And a shell wrapper (`bash -c "gh pr merge N"`,
+    `eval "…"`) carries the real command inside a string, which is re-split and searched.
+    This is still a Bash-pattern gate and therefore a FLOOR — the docs say argument-matching
+    patterns are fragile, and they are right: an alias, a script file, or python -c can still
+    carry a merge past any hook. The ceiling is server-side: the publish gate posts a commit
+    status the branch ruleset REQUIRES. This hook exists to make the honest mistake impossible,
+    not the determined one.
+    """
+    out = []
+    chdir = None
+    for i, tok in enumerate(tokens):
+        base = tok.rsplit("/", 1)[-1]
+        # `env --chdir=DIR gh …` / `env -C DIR gh …` runs gh IN DIR: that directory, not the
+        # hook's cwd, is where gh resolves the repo when no --repo is given. F-MG1 was exactly
+        # this spelling. Any wrapper that relocates the command relocates the repo inference.
+        if tok.startswith("--chdir="):
+            chdir = tok[len("--chdir="):]
+            continue
+        if tok in ("-C", "--chdir") and i + 1 < len(tokens):
+            chdir = tokens[i + 1]
+            continue
+        if base == "gh":
+            out.append((tokens[i:], chdir))
+            break
+        if base in SHELLS or base == "eval":
+            # bash -c "<script>" (any short flag cluster containing c), or eval "<script>".
+            # Inside the script a leading `cd DIR` relocates the later commands the same way.
+            for j in range(i + 1, len(tokens)):
+                nxt = tokens[j]
+                if base == "eval" or (nxt.startswith("-") and "c" in nxt and j + 1 < len(tokens)):
+                    script = nxt if base == "eval" else tokens[j + 1]
+                    try:
+                        inner_cd = chdir
+                        for sub in split_commands(script):
+                            if len(sub) >= 2 and sub[0] == "cd":
+                                inner_cd = sub[1]
+                                continue
+                            for argv, cd2 in gh_argvs(sub):
+                                out.append((argv, cd2 or inner_cd))
+                    except ValueError:
+                        pass
+                    break
+            break
+    return out
+
+
 def detect_merge(tokens):
-    """Return (pr_number_or_None, repo_flag_or_None) if these tokens invoke a PR merge,
-    else None."""
-    if not tokens or tokens[0] != "gh":
+    """Return (pr_number_or_None, repo_flag_or_None, chdir_or_None) if these tokens invoke a
+    PR merge, else None. Wrapper-tolerant: see gh_argvs."""
+    for argv, chdir in gh_argvs(tokens):
+        hit = _detect_gh_merge(argv)
+        if hit:
+            return (hit[0], hit[1], chdir)
+    return None
+
+
+def _detect_gh_merge(tokens):
+    if not tokens or tokens[0].rsplit("/", 1)[-1] != "gh":
         return None
 
     if len(tokens) >= 3 and tokens[1] == "pr" and tokens[2] == "merge":
@@ -267,7 +331,12 @@ def evaluate(event):
         allow()
 
     merge_hit = None
+    top_cd = None
     for tokens in split_commands(command):
+        # `cd DIR && gh pr merge N` relocates the merge the same way env --chdir does.
+        if len(tokens) >= 2 and tokens[0] == "cd":
+            top_cd = tokens[1]
+            continue
         hit = detect_merge(tokens)
         if hit:
             merge_hit = hit
@@ -276,11 +345,16 @@ def evaluate(event):
     if merge_hit is None:
         allow()
 
-    pr_number, repo_flag = merge_hit
+    pr_number, repo_flag, chdir = merge_hit
     if not pr_number:
         deny("merge-gate: could not determine the PR number from the merge command")
 
     cwd = event.get("cwd") or ""
+    # The directory gh will actually run in: an explicit relocation wins over the hook's cwd.
+    # Relative relocations resolve against the hook's cwd, as the shell would.
+    eff = chdir or top_cd
+    if eff:
+        cwd = eff if os.path.isabs(eff) else os.path.join(cwd, eff)
 
     # cwd's own checkout, if it has one. This is used two ways below: to resolve a target
     # repo slug when the command carries no --repo/-R, and to decide whether the
