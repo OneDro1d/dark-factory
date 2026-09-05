@@ -836,6 +836,14 @@ if [ "$DRIFT" -eq 0 ]; then
   else
     echo "=== RESULT: LOCKED — this instance matches its lockfile ==="
   fi
+  # ⚠️ NAME THE PIN IN THE VERDICT. Operator request 2026-09-05, and it closes a real gap:
+  # "a run on this laptop is not hermetic", so two LOCKED results taken at different times
+  # against DIFFERENT Tier-1 pins are indistinguishable on their face. A validation report that
+  # says LOCKED without saying WHICH commit it measured cannot be compared with another one —
+  # and this estate spent a whole day on results that were true of one pin and quoted about
+  # another. The verdict now carries its own subject.
+  _lv_pin="$(jq -r '(.upstreams["dark-factory"].commit // empty)' "$LOCK" 2>/dev/null)"
+  [ -n "$_lv_pin" ] && echo "    measured against dark-factory ${_lv_pin:0:12}  (lock: $LOCK)"
   # EXIT 0, DELIBERATELY, AND THIS IS THE JUDGEMENT CALL WORTH ARGUING WITH.
   # An unknown is not a failure: nothing has been shown to differ, so blocking here would
   # re-create the exact bug this change removes, one layer up. It stays 0 rather than

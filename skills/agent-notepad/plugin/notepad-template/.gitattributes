@@ -1,0 +1,37 @@
+# agent-notepad — merge behaviour for files two machines write concurrently.
+#
+# ⚠️ WHY THIS FILE EXISTS. A notepad is pushed from more than one machine: each box's Stop hook
+# commits its own journal, so `sessions/index.json` collides on almost every repin. MEASURED
+# repeatedly on 2026-09-04/05 — the publish helper correctly refuses to checkpoint through a
+# `UU`, so the collision costs a manual resolution every time.
+#
+# ⛔ NOT `merge=union`. That is the obvious one-liner and it CORRUPTS THIS FILE. git's union
+# driver is LINE-BASED and does not know it is looking at JSON, so it concatenates both sides
+# and drops the comma between them:
+#
+#     [                                      -> Expecting ',' delimiter: line 4 column 3
+#       {"sessionId": "shared"},
+#       {"sessionId": "laptop"}
+#       {"sessionId": "poland"}
+#     ]
+#
+# Measured, not assumed. Removing a visible conflict that way would produce an invisible
+# corruption in the one file this estate has already destroyed twice.
+#
+# So: a CUSTOM driver that parses JSON, unions by sessionId, keeps the later measurement, and
+# REFUSES (leaving a normal conflict) on an unparseable side, a shrinking union, or duplicates.
+#
+# ⚠️ REGISTRATION IS PER-CLONE, AND FAIL-SAFE. This attribute only NAMES the driver. Each clone
+# must also run:
+#
+#     git config merge.loom-session-index.driver \
+#       'python3 ~/.claude/hooks/agent-notepad/lib/merge-session-index.py %O %A %B'
+#
+# On a clone where that has not run, git falls back to an ordinary conflict — exactly today's
+# behaviour — never to corruption. That is why shipping the attribute ahead of the config is
+# safe, and why a missing registration is a nuisance rather than a hazard.
+sessions/index.json merge=loom-session-index
+
+# ⚠️ NOTES.md is deliberately NOT given a driver. Two machines editing prose is not a union:
+# keeping both sides verbatim is right for append-only records and wrong for a rewritten
+# section, and no mechanical rule can tell those apart. It stays a human (or agent) decision.
