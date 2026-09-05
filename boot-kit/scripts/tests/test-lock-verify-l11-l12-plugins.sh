@@ -76,6 +76,18 @@ contains "A1 clean copy passes"           "PASS"                          "$B"
 contains "A1 names the plugin"            "df-governed"                   "$B"
 absent   "A1 no drift reported"           "DRIFT"                         "$B"
 
+echo "=== L10 x plugins: a declared, materialised plugin is NOT an undeclared opaque skill ==="
+# Measured on the first real install (2026-09-05): L11 PASS, L12 PASS, L10 DRIFT over the same
+# directory, because L10 only knew install.skills. The declaration kind must be recognised.
+B10="$(blk "$O" L10)"
+absent   "A2 L10 does not flag the plugin dest"   "df-governed"                  "$B10"
+absent   "A2 L10 reports no DRIFT for it"          "DRIFT"                        "$B10"
+mk a3 '{"plugins":[]}'
+plugin_dest a3 stray-copy .claude-plugin/plugin.json '{"name":"stray-copy"}'
+O3="$(run a3)"; B3="$(blk "$O3" L10)"
+contains "A3 an UNDECLARED real directory is still DRIFT" "DRIFT"                "$B3"
+contains "A3 and is named"                                "stray-copy"           "$B3"
+
 echo "=== L11-B: the materialised copy has been hand-edited — DRIFT, and named ==="
 mk b1 "$DECL_OK"
 plugin_pin  b1 plugins/df-governed .claude-plugin/plugin.json '{"name":"df-governed"}'

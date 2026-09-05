@@ -757,6 +757,15 @@ else
   L10FOREIGN=""
   L10OPAQUE=""
   DECLARED_SKILLS="$(jq -r '(.install.skills // [])[]' "$LOCK")"
+  # A materialised plugin (install.plugins[]) is a REAL DIRECTORY under $LIVE/skills — the
+  # personal skills-directory loader scans nothing else — so by shape it is OPAQUE. But it is
+  # not undeclared: install.plugins names it, and L11 attests its provenance by diffing the
+  # copy against the pin, which is stronger than the symlink target L10 reads for a skill.
+  # Measured 2026-09-05 on the first laptop install that carried a plugin: L11 PASS, L12
+  # PASS, and L10 DRIFT over the same directory — a check that lists what is present learnt
+  # nothing when a new KIND of declaration was added beside it. The dest basename is the
+  # declared name here.
+  DECLARED_PLUGIN_DIRS="$(jq -r '(.install.plugins // [])[] | (.dest // "") | split("/") | last' "$LOCK")"
   # Resolve the two trees this instance owns ONCE. Both may be absent — a lockfile does not
   # require a checkout — and an empty prefix must never match, or every foreign skill would
   # be misreported as this instance's own.
@@ -768,6 +777,7 @@ else
     if is_not_an_entry "$b"; then L10SKIP=$((L10SKIP + 1)); continue; fi
     L10SEEN=$((L10SEEN + 1))
     printf '%s\n' "$DECLARED_SKILLS" | grep -qxF "$b" && continue
+    printf '%s\n' "$DECLARED_PLUGIN_DIRS" | grep -qxF "$b" && continue
     if [ ! -L "$LIVE/skills/$b" ]; then
       L10OPAQUE="$L10OPAQUE$b"$'\n'
       continue
