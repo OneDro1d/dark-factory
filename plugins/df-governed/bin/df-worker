@@ -83,6 +83,22 @@ PLUGIN_ROOT="$(cd "$SELF/.." && pwd)"
 # root — true both in a Tier-1 checkout and in a vendored copy at <kit>/vendor/dark-factory.
 KIT_ROOT="$(cd "$PLUGIN_ROOT/../.." && pwd)"
 MCP_TOOL="${MCP_PROFILE_CONFIG:-$KIT_ROOT/boot-kit/scripts/mcp-profile-config.py}"
+# ⚠️ THE INSTALLED LAYOUT IS A THIRD SHAPE. Measured on the first laptop install (2026-09-05):
+# install.plugins[] materialises this plugin under ~/.claude/skills/df-governed, so KIT_ROOT
+# above is ~/.claude and there is no boot-kit/ there — the engine is materialised into the
+# INSTANCE repo's boot-kit/scripts/, wherever that repo lives. The one thing the installer
+# guarantees about that directory is that rehydrate.sh links df-mission from it onto PATH.
+# So the engine dir is: where df-mission really lives. Resolved through the symlink with
+# python3 (readlink -f is not portable to macOS).
+if [ ! -f "$MCP_TOOL" ]; then
+  _dm="$(command -v df-mission 2>/dev/null || true)"
+  if [ -n "$_dm" ]; then
+    _eng="$(python3 -c 'import os,sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$_dm" 2>/dev/null || true)"
+    if [ -n "$_eng" ] && [ -f "$_eng/mcp-profile-config.py" ]; then
+      MCP_TOOL="$_eng/mcp-profile-config.py"
+    fi
+  fi
+fi
 
 die() { printf 'df-worker: %s\n' "$1" >&2; exit 2; }
 

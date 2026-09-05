@@ -234,6 +234,26 @@ OUT4="$(run_dry env WORKER_MCP_PROFILE=tp "$WORKER" dev 12345 "p" --dry-run)"
 hasline "W26 two RUNNING missions leaves DF_MISSION empty" "DF_MISSION=" "$OUT4"
 
 echo ""
+# ── case 8: the INSTALLED layout — plugin under ~/.claude/skills, engine elsewhere ────────
+# Measured on the first laptop install (2026-09-05): install.plugins[] put this launcher at
+# ~/.claude/skills/df-governed/bin/df-worker, so KIT_ROOT resolved to ~/.claude, which has no
+# boot-kit/, and the launcher REFUSED every worker. The engine is wherever the installer
+# materialised it — and rehydrate.sh links df-mission from that directory onto PATH. So the
+# engine dir is: where df-mission really lives, through the symlink.
+INST="$WORK/installed"
+mkdir -p "$INST/home/.claude/skills" "$INST/engine" "$INST/bin"
+cp -R "$(cd "$(dirname "$WORKER")/.." && pwd)" "$INST/home/.claude/skills/df-governed"
+cp "$(cd "$(dirname "$WORKER")/../../.." && pwd)/boot-kit/scripts/mcp-profile-config.py" "$INST/engine/mcp-profile-config.py"
+printf '#!/usr/bin/env bash\necho df-mission-stub\n' > "$INST/engine/df-mission"
+chmod +x "$INST/engine/df-mission"
+ln -s "$INST/engine/df-mission" "$INST/bin/df-mission"
+IW="$INST/home/.claude/skills/df-governed/bin/df-worker"
+OUT8="$(run_dry env PATH="$INST/bin:$PATH" WORKER_MCP_PROFILE=tp "$IW" dev 12345 "p" --dry-run)"
+contains "8a installed layout: engine found via df-mission on PATH" "--strict-mcp-config" "$OUT8"
+if printf '%s' "$OUT8" | grep -q 'mcp-profile-config.py not found'; then bad "8b no refusal" "refused"; else ok "8b no refusal in the installed layout"; fi
+OUT8b="$(run_dry env PATH="/usr/bin:/bin" WORKER_MCP_PROFILE=tp "$IW" dev 12345 "p" --dry-run)"
+contains "8c installed layout WITHOUT df-mission on PATH still refuses (fails closed)" "mcp-profile-config.py not found" "$OUT8b"
+
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]
