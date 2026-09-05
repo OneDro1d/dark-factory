@@ -206,7 +206,11 @@ _scan_other_notepads() {
   parent="$(dirname "$resolved")"
   out=""
   seen="|$resolved|"
-  roots="$parent"$'\n'"${AGENT_NOTEPAD_ROOTS//:/$'\n'}"
+  # ${VAR//…} on an UNSET variable is an unbound-variable error under set -u on bash 5
+  # (Linux); bash 3.2 on macOS lets it through. Measured in CI 2026-09-05: the whole boot
+  # payload died on the Linux runner while every macOS run was green. Default first.
+  local extra="${AGENT_NOTEPAD_ROOTS:-}"
+  roots="$parent"$'\n'"${extra//:/$'\n'}"
   while IFS= read -r root; do
     [ -n "$root" ] || continue
     [ -d "$root" ] || continue

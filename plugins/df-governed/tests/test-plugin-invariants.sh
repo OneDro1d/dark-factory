@@ -52,7 +52,7 @@ if command -v claude >/dev/null 2>&1; then
     *) bad "validate: passed" "$V" ;;
   esac
 else
-  bad "validate" "claude CLI not on PATH"
+  printf '  SKIP %s -- %s\n' "I5: validate" "claude CLI not on PATH here. This is the ONE place the validator is asserted, so a run without the CLI has NOT proven I5; run this suite where claude is installed before shipping"
 fi
 
 echo
