@@ -274,6 +274,66 @@ if [ -d "$LIVE/skills" ]; then
 fi
 [ "$PRUNED" -eq 0 ] || say "  pruned $PRUNED undeclared skill link(s) belonging to this instance"
 
+# ---- 2c. plugins -> $LIVE/skills (personal skills-directory plugins) ----------
+# The same step the two instance installers carry (starter-kit/instance/install.sh, and the
+# reference instance), placed HERE so every kit that delegates to rehydrate.sh inherits it BY
+# MOVING A PIN — the whole promise of the tier model. Without this step a kit could DECLARE
+# install.plugins and lock-verify L11 would report "not installed" forever: honest, useless.
+#
+# A plugin is a REAL DIRECTORY under $LIVE/skills (the personal skills-directory loader scans
+# nothing else), COPIED from the vendored pin — not symlinked, because $LIVE may be redirected
+# but the loader is not. rsync --delete when available, else rm -rf + cp -R, but ONLY after the
+# destination has been proven to sit under $LIVE/skills/ — the one place an rm -rf here is
+# allowed to land. Refusals: a source that is not `upstream:<path>` (an unpinned copy under the
+# "one pin" banner), a dest outside $LIVE/skills/, a source with no .claude-plugin/plugin.json.
+# ⚠️ `upstream:plugins/<name>` resolves against $VENDOR/dark-factory/<path> — a plugin has one
+# home, Tier 1 — NOT through resolve_src(), which would look in $VENDOR/plugins/<name> and miss.
+# ⚠️ settings.json at the plugin root must never carry `agent` (a headless worker becomes that
+# agent and reports success); lock-verify L12 runs the plugin's own invariants suite for that.
+say ""
+say "== plugins =="
+PLUGIN_N="$(jq -r '(.install.plugins // []) | length' "$LOCK")"
+PLUGIN_FAIL=0
+if [ "$PLUGIN_N" -eq 0 ]; then
+  say "  plugins: none declared"
+else
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    PNAME="$(jq -r '.name // "<unnamed>"' <<<"$p")"
+    PSRC="$(jq -r '.source // empty' <<<"$p")"
+    PDEST="$(jq -r '.dest // empty' <<<"$p")"
+    case "$PSRC" in
+      upstream:*) : ;;
+      *) say "  REFUSED plugin $PNAME: source '$PSRC' is not upstream:<path>"; PLUGIN_FAIL=$((PLUGIN_FAIL+1)); continue ;;
+    esac
+    case "$PDEST" in
+      "~/.claude/skills/"*) PDEST_ABS="$LIVE/skills/${PDEST#\~/.claude/skills/}" ;;
+      *) say "  REFUSED plugin $PNAME: dest '$PDEST' is outside ~/.claude/skills/"; PLUGIN_FAIL=$((PLUGIN_FAIL+1)); continue ;;
+    esac
+    if src_escapes "$PSRC" || src_escapes "$PDEST"; then
+      say "  REFUSED plugin $PNAME: a path climbs out of its tree"; PLUGIN_FAIL=$((PLUGIN_FAIL+1)); continue
+    fi
+    PSRC_ABS="$VENDOR/dark-factory/${PSRC#upstream:}"
+    if [ "$DRY" -eq 1 ]; then
+      say "would  materialise plugin $PNAME <- ${PSRC#upstream:} -> $PDEST_ABS"
+      continue
+    fi
+    if [ ! -f "$PSRC_ABS/.claude-plugin/plugin.json" ]; then
+      say "  REFUSED plugin $PNAME: no .claude-plugin/plugin.json at $PSRC_ABS"; PLUGIN_FAIL=$((PLUGIN_FAIL+1)); continue
+    fi
+    mkdir -p "$(dirname "$PDEST_ABS")"
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a --delete "$PSRC_ABS/" "$PDEST_ABS/" || { say "  REFUSED plugin $PNAME: rsync failed"; PLUGIN_FAIL=$((PLUGIN_FAIL+1)); continue; }
+    else
+      rm -rf "$PDEST_ABS"; mkdir -p "$PDEST_ABS"
+      cp -R "$PSRC_ABS/." "$PDEST_ABS/" || { say "  REFUSED plugin $PNAME: copy failed"; PLUGIN_FAIL=$((PLUGIN_FAIL+1)); continue; }
+    fi
+    PPIN="$(jq -r '.upstreams["dark-factory"].commit // "unpinned"' "$LOCK")"
+    say "  plugin $PNAME: materialised from ${PPIN:0:8} -> $PDEST_ABS"
+  done < <(jq -c '(.install.plugins // [])[]' "$LOCK")
+fi
+[ "$PLUGIN_FAIL" -eq 0 ] || say "  ⚠️ $PLUGIN_FAIL plugin(s) REFUSED — not materialised; lock-verify L11 will name them"
+
 # ---- 3. install hooks --------------------------------------------------------
 # Hooks are COPIED, not symlinked: they must survive a wipe of the disk the links
 # would live on, and __HOME__ has to be rehydrated per machine.
