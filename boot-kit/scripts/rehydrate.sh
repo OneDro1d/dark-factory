@@ -350,6 +350,25 @@ else
     || say "  WARN  wire-settings refused — see above"
 fi
 
+# ⚠️ Same shape as section 4, and for the same reason. `.gitattributes` in a notepad only NAMES
+# a merge driver; git will not run one it has no config for. The registration first shipped
+# inside the agent-notepad PLUGIN's installer — which nothing on this fleet executes — so it
+# was declared, installed and never invoked. It lives in boot-kit/scripts now, and is invoked
+# from here, so every kit inherits it by moving a pin.
+# ⚠️ NEVER FATAL. Without the registration git conflicts exactly as it does today; that is a
+# nuisance, not a hazard, so this step warns and carries on.
+say ""
+say "== 5. register notepad merge drivers =="
+RMD="$SELFDIR/register-merge-drivers.sh"
+if [ ! -f "$RMD" ]; then
+  say "  WARN  register-merge-drivers.sh not beside this script — sessions/index.json"
+  say "        conflicts stay manual (fail-safe: git conflicts as before, never corrupts)"
+elif [ "$DRY" -eq 1 ]; then
+  bash "$RMD" --home "$HOME" --dry-run || true
+else
+  bash "$RMD" --home "$HOME" || true
+fi
+
 say ""
 say "== summary =="
 # Printed on every run, including zero. "No overrides" and "nobody looked" are different

@@ -94,7 +94,39 @@ if [ -f "$PIDFILE" ]; then
   log "stale pidfile (pid $old not running) — taking over"
 fi
 echo $$ > "$PIDFILE"
-trap 'rm -f "$PIDFILE"' EXIT
+# ⛔ MCP FOR THE ITERATIONS. `--setting-sources project` below loads only project-scoped
+# settings, and MCP servers are configured at USER scope (~/.claude.json) — so that flag was
+# silently removing EVERY MCP server from every worker. A worker booted clean with no tracker,
+# no memory and no observability, and had no way to say so: it simply wrote nothing.
+#
+# ⚠️ THE FLAG IS RIGHT AND STAYS. It keeps ~114KB of user-level SessionStart hooks out of each
+# child, which over twenty iterations is the single largest avoidable cost in the loop.
+# Re-enabling user settings to get MCP back would drag the hooks back with it. MCP is passed
+# EXPLICITLY instead, which composes with it.
+#
+# ⚠️ THE CONFIG GOES IN A PRIVATE TEMP DIR, NEVER THE MISSION DIR. It can contain LITERAL
+# bearer tokens — measured on the laptop 2026-09-05, where ~/.claude.json holds real tokens and
+# not the `${SYNAPSE_..._TOKEN}` references the estate's notes claim. The mission dir sits
+# inside the notepad, and the notepad is pushed every session. mcp-profile-config.py refuses to
+# write inside a git work tree for exactly this reason; this is the matching half.
+MCPDIR="$(mktemp -d)"
+chmod 700 "$MCPDIR" 2>/dev/null || true
+MCP_CFG="$MCPDIR/mcp-$PROFILE.json"
+MCP_OK=0
+if [ -f "$SCRIPTS/mcp-profile-config.py" ]; then
+  if python3 "$SCRIPTS/mcp-profile-config.py" --profile "$PROFILE" --out "$MCP_CFG"; then
+    MCP_OK=1
+  else
+    # ⚠️ LOUD, NEVER SILENT. Running on with no MCP is a legitimate choice for a mission that
+    # needs none; leaving the operator to discover it from an empty tracker is not.
+    log "WARN  no MCP config for profile '$PROFILE' — iterations run with NO MCP servers."
+    log "WARN  Tracker, memory and observability calls will all fail. See stderr above."
+  fi
+else
+  log "WARN  mcp-profile-config.py not in the pinned engine — iterations run with NO MCP."
+fi
+
+trap 'rm -f "$PIDFILE"; rm -rf "$MCPDIR"' EXIT
 
 # ── preflight — INFORMATIONAL on drift, and still never self-heals ───────────
 # The headless loop has nobody to confirm a proposal with, and a loop that rewrites its
@@ -182,6 +214,9 @@ while : ; do
   # context + full notepad restore) into every child. Twenty iterations would pay ~600k
   # tokens for context the resume prompt names explicitly anyway. Explicit beats implicit.
   set -- "$@" --setting-sources project
+  # ⚠️ Quoted, as separate words. A split string would break on a TMPDIR containing a space,
+  # and would look like a config error rather than a quoting one.
+  [ "$MCP_OK" -eq 1 ] && set -- "$@" --mcp-config "$MCP_CFG" --strict-mcp-config
   set -- "$@" --output-format json
   [ -n "$MAX_USD" ] && set -- "$@" --max-budget-usd "$MAX_USD"
   [ -n "$MODEL" ]   && set -- "$@" --model "$MODEL"

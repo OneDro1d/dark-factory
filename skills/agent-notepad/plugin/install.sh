@@ -114,6 +114,18 @@ echo "agent-notepad:   runtime tree -> $DEST/{hooks,lib,bin,notepad-template}"
 # actually lives at the XDG path (~/.config/git/config) — and git reads XDG only when
 # ~/.gitconfig is absent, so creating it would silently shadow every global setting the user
 # has. On the real HOME, plain `--global` lets git resolve its own file.
+# ⛔ AND THIS INSTALLER WAS THE WRONG HOME FOR ALL OF IT. Measured 2026-09-05, on the machine
+# it was built for: NOTHING ON THIS FLEET RUNS THIS SCRIPT. A Tier-3 instance installer copies
+# hook files by declaration and invokes T1 engine scripts from its vendored pin; it never
+# executes the plugin's own installer. So the driver was declared, installed and NEVER INVOKED
+# — the same defect the two blocks above were fixing, one layer further out.
+#
+# The mechanism now lives in `boot-kit/scripts/register-merge-drivers.sh` and is invoked by
+# `rehydrate.sh`, so every kit inherits it by MOVING A PIN. This installer CALLS that one
+# script. ⚠️ Two implementations of one rule is the one-artifact-two-homes failure, and the
+# value here is a PATH — precisely the thing this estate has watched drift in every file that
+# kept a second copy of it. The inline block below survives ONLY as the standalone-plugin
+# fallback, for an install with no boot-kit beside it.
 _git_cfg() { # run `git config --global ...` against the TARGET's global config
   if [ "$TARGET_HOME" = "${HOME:-}" ]; then
     git config --global "$@"
@@ -121,7 +133,11 @@ _git_cfg() { # run `git config --global ...` against the TARGET's global config
     GIT_CONFIG_GLOBAL="$TARGET_HOME/.gitconfig" git config --global "$@"
   fi
 }
-if command -v git >/dev/null 2>&1; then
+_RMD="$SRC/../../../boot-kit/scripts/register-merge-drivers.sh"
+if [ -f "$_RMD" ]; then
+  bash "$_RMD" --home "$TARGET_HOME" --lib-dir "$DEST/lib" 2>&1 \
+    | sed 's/^/agent-notepad: /' || true
+elif command -v git >/dev/null 2>&1; then
   _want="python3 $DEST/lib/merge-session-index.py %O %A %B"
   _have="$(_git_cfg merge.loom-session-index.driver 2>/dev/null || true)"
   if [ "$_have" = "$_want" ]; then
