@@ -86,7 +86,14 @@ import time
 import urllib.error
 import urllib.request
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# realpath, not abspath: the installers put this script on PATH as a SYMLINK
+# (~/.local/bin/df-preflight -> <kit>/boot-kit/scripts/df-preflight.py), the same way
+# df-mission travels. abspath keeps the link's own directory, so KIT_ROOT below became
+# ~/.. and find_lock() found no lockfile at all -- the preflight ran, printed a report, and
+# described no machine. Measured 2026-09-05 on the laptop: via a symlink kitRoot resolved
+# to the temp dir's parent and lockfile to null; invoked by path it resolved the kit.
+# df-mission already does `readlink -f "$0"` for exactly this reason.
+HERE = os.path.dirname(os.path.realpath(__file__))
 
 # TWO ROOTS, and conflating them is what made this gate over-broad.
 #

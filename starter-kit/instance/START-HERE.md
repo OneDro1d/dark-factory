@@ -237,7 +237,7 @@ depends on it, and steps 5 through 7 all still work.
 ## 5 · Prove it, rather than assuming it
 
 ```sh
-python3 boot-kit/scripts/df-preflight.py --report
+df-preflight --report          # on PATH after install.sh; the same file as boot-kit/scripts/df-preflight.py
 ```
 
 This makes a **live call** against every configured hub and probes every binary, identity
