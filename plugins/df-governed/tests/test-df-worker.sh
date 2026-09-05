@@ -159,6 +159,7 @@ else bad "W18 the holdout is NOT copied in" "holdout.md reached the scratch"; fi
 hasline "W19 env DF_TICKET is exported"  "DF_TICKET=12345"    "$OUT"
 hasline "W20 env DF_ROLE is exported"    "DF_ROLE=dev"        "$OUT"
 hasline "W21 env DF_MISSION resolves the single RUNNING mission" "DF_MISSION=M-TEST" "$OUT"
+hasline "W27 env DF_SCRATCH is exported and equals the scratch dir" "DF_SCRATCH=$SCRATCH" "$OUT"
 
 # ── case 3b: --rules travels VERBATIM into the brief and onto disk ──────────────────────
 # ⛔ THE REGRESSION THIS GUARDS. The per-role git policy and the estate's deploy/cluster
@@ -276,6 +277,32 @@ hasline "T5 --dry-run prints disallow: for the second value" "disallow: Bash(rm 
 # ── case 10: without --disallow-tool, the flag is absent entirely ──────────────────────
 noline "T6 --disallowedTools is absent from argv when no --disallow-tool given" "--disallowedTools" "$ARGV"
 noline "T7 no disallow: line appears when no --disallow-tool given" "disallow: " "$OUT"
+
+echo ""
+# ── case 11: --claim-columns travels to the child as DF_CLAIM_COLUMNS ──────────────────
+# ⛔ THE REGRESSION THIS GUARDS. claim-gate.py used to accept ANY write to DF_TICKET as the
+# claim. A worker wrote an email into one text column and left DF Status untouched, and the
+# gate could not tell that apart from a real claim. --claim-columns is how a launcher tells
+# the gate the exact columnValues shape that counts.
+CLAIMCOLS='{"text_mm5vefjv": "w@example.invalid", "color_mm5v40tp": {"label": "Doing"}}'
+OUT11="$(run_dry env WORKER_MCP_PROFILE=tp "$WORKER" dev 12345 "p" \
+        --claim-columns "$CLAIMCOLS" --dry-run)"; RC11=$?
+if [ "$RC11" -eq 0 ]; then ok "CC1 --claim-columns --dry-run exits 0"; else bad "CC1 --claim-columns --dry-run exits 0" "rc=$RC11: $OUT11"; fi
+hasline "CC2 --dry-run prints claim-columns: <json>" "claim-columns: $CLAIMCOLS" "$OUT11"
+hasline "CC3 env shows DF_CLAIM_COLUMNS" "DF_CLAIM_COLUMNS=$CLAIMCOLS" "$OUT11"
+contains "CC4 env shows DF_SCRATCH" "DF_SCRATCH=" "$OUT11"
+
+# without --claim-columns, neither the dry-run line nor the env line appears at all.
+noline "CC5 no claim-columns: line when --claim-columns is not given" "claim-columns: " "$OUT"
+if printf '%s\n' "$OUT" | grep -q '^DF_CLAIM_COLUMNS='; then bad "CC6 no DF_CLAIM_COLUMNS when not given" "line present"; else ok "CC6 no DF_CLAIM_COLUMNS when not given"; fi
+
+# a malformed --claim-columns is a REFUSAL, same shape as a missing --rules file: caught
+# before a scratch dir or MCP config exists, not left for claim-gate.py to fail closed on.
+OUT12="$(run_dry env WORKER_MCP_PROFILE=tp "$WORKER" dev 12345 "p" \
+        --claim-columns 'not json' --dry-run)"; RC12=$?
+if [ "$RC12" -ne 0 ]; then ok "CC7 malformed --claim-columns refuses (non-zero)"; else bad "CC7 malformed --claim-columns refuses" "rc=0"; fi
+contains "CC8 the refusal names --claim-columns" "--claim-columns" "$OUT12"
+noline   "CC9 nothing was launched" "---- argv ----" "$OUT12"
 
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"

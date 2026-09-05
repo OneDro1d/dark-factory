@@ -106,6 +106,7 @@ ROLE=""; TICKET=""; PROMISE=""; REPO=""; NOTEPAD=""
 RULES_LIST=""
 DENY_LIST=""
 DISALLOW_LIST=""
+CLAIM_COLUMNS=""
 DRY="${WORKER_DRY_RUN:-0}"
 
 POS=0
@@ -165,6 +166,18 @@ while [ $# -gt 0 ]; do
       DISALLOW_LIST="$DISALLOW_LIST$2
 "
       shift 2 ;;
+    # ── --claim-columns: what counts as THE claim, not just a write to this ticket ────
+    # claim-gate.py used to accept ANY change_item_column_values write to DF_TICKET as the
+    # claim. Measured on the first live dispatch (2026-09-05): a worker wrote an email
+    # address into one text column and left DF Status untouched, and the gate could not
+    # tell that apart from a real claim. This value is exported verbatim as
+    # DF_CLAIM_COLUMNS — a JSON object of {columnId: expectedValue}, values a string or an
+    # object like {"label": "Doing"} — and claim-gate.py then requires a write's
+    # columnValues to match every key before treating it as the claim.
+    --claim-columns)
+      [ $# -ge 2 ] || die "--claim-columns needs a JSON object"
+      CLAIM_COLUMNS="$2"
+      shift 2 ;;
     --dry-run) DRY=1; shift ;;
     -h|--help) sed -n '2,4p' "$0"; exit 0 ;;
     -*) die "unknown option $1" ;;
@@ -183,6 +196,17 @@ done
 [ -n "$ROLE" ]    || die "missing <role>"
 [ -n "$TICKET" ]  || die "missing <item-id> (the tracker item id)"
 [ -n "$PROMISE" ] || die "missing <promise> — state the deliverable AND the exact unforgeable evidence"
+
+# A malformed --claim-columns would arm claim-gate.py with a value it can only fail closed
+# on — refused here, before a scratch dir or MCP config exists, same as a missing --rules
+# file: a worker that silently launched with unusable claim columns is worse than one that
+# never started.
+if [ -n "$CLAIM_COLUMNS" ]; then
+  python3 -c 'import json,sys
+obj = json.loads(sys.argv[1])
+assert isinstance(obj, dict)' "$CLAIM_COLUMNS" 2>/dev/null \
+    || die "--claim-columns is not a JSON object: $CLAIM_COLUMNS"
+fi
 
 # ── the notepad: walk up from $PWD, exactly as df-mission and df-preflight do ────────────
 if [ -z "$NOTEPAD" ]; then
@@ -370,6 +394,14 @@ set -- "$@" --output-format json
 export DF_TICKET="$TICKET"
 export DF_ROLE="$ROLE"
 export DF_MISSION="$MISSION"
+# DF_SCRATCH is the one directory that does not move for the worker's whole life — unlike
+# the hook event's own cwd, which moves the moment the worker `cd`s into the repo it was
+# told to edit. claim-gate.py keys its marker on this when set.
+export DF_SCRATCH="$SCRATCH"
+# DF_CLAIM_COLUMNS, when given, is what claim-gate.py requires a write to DF_TICKET to
+# carry before treating it as the claim — exported only when the caller passed one, so a
+# worker launched without --claim-columns is unaffected (old behaviour).
+[ -n "$CLAIM_COLUMNS" ] && export DF_CLAIM_COLUMNS="$CLAIM_COLUMNS"
 
 if [ "$DRY" = "1" ]; then
   printf 'scratch: %s\n' "$SCRATCH"
@@ -385,10 +417,13 @@ if [ "$DRY" = "1" ]; then
   printf '%s' "$DISALLOW_LIST" | while IFS= read -r dn; do
     [ -n "$dn" ] && printf 'disallow: %s\n' "$dn"
   done
+  [ -n "$CLAIM_COLUMNS" ] && printf 'claim-columns: %s\n' "$CLAIM_COLUMNS"
   printf -- '---- env ----\n'
   printf 'DF_TICKET=%s\n' "$DF_TICKET"
   printf 'DF_ROLE=%s\n' "$DF_ROLE"
   printf 'DF_MISSION=%s\n' "$DF_MISSION"
+  printf 'DF_SCRATCH=%s\n' "$DF_SCRATCH"
+  [ -n "$CLAIM_COLUMNS" ] && printf 'DF_CLAIM_COLUMNS=%s\n' "$DF_CLAIM_COLUMNS"
   printf -- '---- argv ----\n'
   printf 'claude\n'
   for a in "$@"; do printf '%s\n' "$a"; done
