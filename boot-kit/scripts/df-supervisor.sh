@@ -50,6 +50,26 @@ SCRIPTS="$KIT_ROOT/boot-kit/scripts"
 NOTEPAD="${NOTEPAD:-$KIT_ROOT}"
 export NOTEPAD
 
+# ── the governed plugin, resolved the same way the engine finds its siblings ─────────────
+# MEASURED, not inferred: a plugin's hooks and bin/ reach a headless child on exactly ONE
+# delivery path — the `--plugin-dir` COMMAND-LINE FLAG. A project `.claude/settings.json`
+# declaring `enabledPlugins` delivers NOTHING to `claude -p`, in either default or
+# `--setting-sources project` mode, and it fails SILENTLY: no stdout warning, no stderr,
+# `--debug` adds zero bytes. A worker on that path cannot tell it is ungoverned.
+# `--setting-sources project` below cannot exclude a command-line flag, which is exactly
+# why this path survives the narrow settings scope the loop depends on.
+#
+# The engine is COPIED into a kit by install.sh, so the plugin is found relative to the kit
+# root the same way $SCRIPTS is: either this IS the Tier-1 tree (plugins/ beside boot-kit/),
+# or the kit vendored Tier 1 (vendor/dark-factory/plugins/). $DF_PLUGIN_ROOT overrides both.
+PLUGIN_ROOT="${DF_PLUGIN_ROOT:-}"
+if [ -z "$PLUGIN_ROOT" ]; then
+  for cand in "$KIT_ROOT/plugins/df-governed" \
+              "$KIT_ROOT/vendor/dark-factory/plugins/df-governed"; do
+    if [ -d "$cand" ]; then PLUGIN_ROOT="$cand"; break; fi
+  done
+fi
+
 MISSION_DIR=""
 INTERVAL=0                 # 0 = run back-to-back (finite mission)
 MAX_ITER=25
@@ -124,6 +144,19 @@ if [ -f "$SCRIPTS/mcp-profile-config.py" ]; then
   fi
 else
   log "WARN  mcp-profile-config.py not in the pinned engine — iterations run with NO MCP."
+fi
+
+if [ -n "$PLUGIN_ROOT" ]; then
+  log "plugin root: $PLUGIN_ROOT (passed as --plugin-dir to every iteration)"
+else
+  # ⚠️ LOUD, AND STILL NOT FATAL. The loop's job is to run the mission; refusing to start
+  # because governance is missing would trade a governed-but-stopped mission for nothing.
+  # But an UNGOVERNED iteration is invisible from the inside — no hook fires, and no
+  # diagnostic says so — so the one place it can be said is here, before any of it runs.
+  log "WARN  no df-governed plugin root found under $KIT_ROOT — iterations run UNGOVERNED."
+  log "WARN  Every plugin hook (claim, dispatch, handoff, escalation gates) is ABSENT and"
+  log "WARN  nothing downstream will report that. Set DF_PLUGIN_ROOT, or install a kit"
+  log "WARN  whose vendored Tier 1 carries plugins/df-governed."
 fi
 
 trap 'rm -f "$PIDFILE"; rm -rf "$MCPDIR"' EXIT
@@ -214,6 +247,9 @@ while : ; do
   # context + full notepad restore) into every child. Twenty iterations would pay ~600k
   # tokens for context the resume prompt names explicitly anyway. Explicit beats implicit.
   set -- "$@" --setting-sources project
+  # …and the governance the flag above would otherwise strip, restored on the one delivery
+  # path that is not a setting and so cannot be excluded by it.
+  [ -n "$PLUGIN_ROOT" ] && set -- "$@" --plugin-dir "$PLUGIN_ROOT"
   # ⚠️ Quoted, as separate words. A split string would break on a TMPDIR containing a space,
   # and would look like a config error rather than a quoting one.
   [ "$MCP_OK" -eq 1 ] && set -- "$@" --mcp-config "$MCP_CFG" --strict-mcp-config

@@ -1,0 +1,389 @@
+#!/usr/bin/env bash
+# df-worker — the ONE launcher for a single-shot headless worker.
+#
+#   df-worker <role> <item-id> "<promise>" [--repo <path>] [--notepad <path>]
+#             [--rules <file>]... [--deny "<rule>"]... [--dry-run]
+#
+# WHAT THIS IS. A worker is an untrusted promiser: it resolves ONE tracker item and exits.
+# It does not loop, does not chart a map, does not dispatch further workers. A LOOP over
+# many iterations of one mission is a different job and stays in df-supervisor.sh; this is
+# the single shot. What collapses into this file is the LAUNCH CONTRACT the two disagreed
+# on — settings scope, MCP shape, permission mode, budget, and what the child can reach.
+#
+# ── THE MEASUREMENT THIS FILE IS BUILT ON ───────────────────────────────────────────────
+# A plugin's hooks, bin/ and agents reach a headless child on exactly ONE delivery path:
+# the `--plugin-dir` COMMAND-LINE FLAG. Measured, not inferred:
+#
+#   * `--plugin-dir <root>` + `-p`                      -> hooks fire, bin is on PATH
+#   * `--plugin-dir <root>` + `-p --setting-sources project` -> same, and this is the cell
+#     that was at risk: a plugin Stop hook genuinely BLOCKED a headless turn from a cwd
+#     with no `.claude` directory at all.
+#   * a project `.claude/settings.json` declaring `enabledPlugins` (+ extraKnownMarketplaces)
+#     -> delivers NOTHING headlessly. Not the hooks, not bin, not the agent, not a monitor.
+#     And it fails SILENTLY: stdout carries no warning, stderr is 0 bytes, `--debug` adds
+#     0 bytes. A worker on that path cannot tell it is ungoverned.
+#
+# So `--plugin-dir` is passed ALWAYS, from this script's own location, and it is not
+# optional or configurable: `--setting-sources` cannot exclude a command-line flag, which
+# is precisely why this path survives the narrow settings scope. Docs, cli-reference:
+# "--plugin-dir  Load a plugin from a directory or `.zip` archive for this session only.
+# Each flag takes one path."  and  "--setting-sources  Comma-separated list of setting
+# sources to load (`user`, `project`, `local`)".
+#
+# ⚠️ NEVER put an `agent` key in the plugin's settings.json. Measured: a plugin
+# settings.json `{"agent": ...}` HIJACKS the main thread of a headless run — the worker
+# becomes that agent, never calls the tool it was asked to call, and still exits 0 with
+# is_error false. It is invisible from the outside.
+#
+# ── SIDE EFFECT, DELIBERATE: the compound-Bash gate stops loading ───────────────────────
+# `--setting-sources project` loads only project-scoped settings, so USER-level hooks are
+# not loaded in the child. The compound-Bash gate is one of them. It is an operator-
+# ergonomics gate (it keeps an interactive transcript reviewable), not a governance gate —
+# nothing about correctness, safety or evidence depends on it — and it has cost real
+# workers blocked tool calls. Under this launch contract it simply stops loading, and that
+# is the correct outcome arrived at deliberately rather than by accident. The hooks that DO
+# matter headlessly must therefore live in the PLUGIN's hooks.json, never at user level.
+#
+# ── WHAT THE WORKER CAN REACH ───────────────────────────────────────────────────────────
+# The scratch dir is the child's cwd and carries its own `.claude/settings.json`, so
+# `--setting-sources project` resolves THERE. `--add-dir` names the scratch and (when
+# given) the target repo — and NEVER the notepad root. The notepad holds the mission's
+# holdout cases; the worker's inability to read them is a property of the sandbox, not of
+# its good behaviour. What the worker legitimately needs from the notepad is COPIED in by
+# this launcher (copied, so the copy can be redacted; not linked, so the tree cannot be
+# walked out of).
+#
+# ── MCP: ALLOW-LIST, AND REFUSE IF IT CANNOT BE BUILT ───────────────────────────────────
+# `--setting-sources project` also removes every MCP server, because MCP is configured at
+# USER scope. They are handed back EXPLICITLY and scoped to one profile's hub with
+# `--mcp-config <file> --strict-mcp-config`. A deny-list is open by default (the next hub
+# added defeats it silently); an allow-list fails closed. If the profile cannot be built we
+# REFUSE TO LAUNCH: a worker with no tracker cannot report that it has none, so the failure
+# would be silent by construction — which is the exact shape of bug this estate keeps
+# paying for.
+# The config goes in a private mktemp dir, never under the notepad: it can hold LITERAL
+# bearer tokens, and mcp-profile-config.py refuses to write inside a git work tree for that
+# reason. This is the matching half of that refusal.
+#
+# Env:
+#   WORKER_PERMISSION_MODE  default bypassPermissions (a hardcoded bypass is a guarantee
+#                           you cannot lower; this is the default value, not the only one)
+#   WORKER_MAX_BUDGET_USD   default 100 — a RUNAWAY BACKSTOP, not a cost control
+#   WORKER_MODEL            model alias; the tier is a launch-profile decision, so no model
+#                           name is ever hardcoded in this file
+#   WORKER_MISSION          mission id override (otherwise resolved from the notepad state)
+#   WORKER_MCP_PROFILE      MCP profile name (otherwise the mission's `profile` file)
+#   WORKER_MCP_SOURCE       source MCP config to scope (default ~/.claude.json)
+#   WORKER_DRY_RUN=1        same as --dry-run
+set -uo pipefail
+
+SELF="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "$SELF/.." && pwd)"
+# The plugin ships inside the Tier-1 tree, so the engine is two levels up from the plugin
+# root — true both in a Tier-1 checkout and in a vendored copy at <kit>/vendor/dark-factory.
+KIT_ROOT="$(cd "$PLUGIN_ROOT/../.." && pwd)"
+MCP_TOOL="${MCP_PROFILE_CONFIG:-$KIT_ROOT/boot-kit/scripts/mcp-profile-config.py}"
+
+die() { printf 'df-worker: %s\n' "$1" >&2; exit 2; }
+
+ROLE=""; TICKET=""; PROMISE=""; REPO=""; NOTEPAD=""
+RULES_LIST=""
+DENY_LIST=""
+DRY="${WORKER_DRY_RUN:-0}"
+
+POS=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo)    [ $# -ge 2 ] || die "--repo needs a path";    REPO="$2";    shift 2 ;;
+    --notepad) [ $# -ge 2 ] || die "--notepad needs a path"; NOTEPAD="$2"; shift 2 ;;
+    # ── --rules: the LAUNCHER's binding text, verbatim, repeatable ──────────────────────
+    # Estate policy (branch rules, deploy and cluster hard stops) is Tier-2 knowledge: it
+    # names clusters and branches that a PUBLIC Tier-1 file must never carry. So this
+    # launcher does not author it — it TRANSPORTS it, unread and unedited, from whoever
+    # launched the worker into the worker's brief and onto its disk.
+    # ⛔ A MISSING RULES FILE IS A REFUSAL, NOT A WARNING. Rules that silently fail to load
+    # produce a worker that is confidently ungoverned and reports success — the exact
+    # shape of failure this whole ticket exists to end. Checked here, at parse time, so
+    # the refusal happens before a scratch dir, an MCP config or a child exists.
+    --rules)
+      [ $# -ge 2 ] || die "--rules needs a path"
+      [ -f "$2" ] || die "--rules file not found: $2 — REFUSING to launch. A worker that silently loses its rules is worse than one that never started."
+      RULES_LIST="$RULES_LIST$2
+"
+      shift 2 ;;
+    # ── --deny: the same policy, as a MECHANISM ────────────────────────────────────────
+    # --rules is text a model reads and may skim. --deny is a permission rule the tool
+    # layer enforces whether or not the worker ever reads anything. Each value goes
+    # VERBATIM into permissions.deny of the scratch settings.json below; the child runs
+    # with `--setting-sources project` from that scratch dir, so the file is loaded.
+    # Docs (permissions): rules are written `Bash(git push *)`; "`Bash(git * main)`"
+    # matches "`git push origin main`"; "The `:*` suffix is an equivalent way to write a
+    # trailing wildcard"; and deny beats allow — "A broad deny rule like `Bash(aws *)`
+    # blocks every matching call, including calls that also match a narrower allow rule".
+    # Deny rules also "apply when any subcommand matches them, including a command nested
+    # inside a subshell, a command substitution, or a control-flow body", and match "past
+    # any leading assignment".
+    # ⚠️ AND THE DOCS' OWN CAVEAT, CARRIED not buried: "Bash permission patterns that try
+    # to constrain command arguments are fragile." A deny on `Bash(git push * main)` does
+    # not catch every spelling of the same act (`git push origin HEAD:main`, a push run
+    # from a script). These rules RAISE THE FLOOR; they are not a proof of impossibility,
+    # which is exactly why --rules travels alongside and says why the floor is there.
+    --deny)
+      [ $# -ge 2 ] || die "--deny needs a permission rule"
+      DENY_LIST="$DENY_LIST$2
+"
+      shift 2 ;;
+    --dry-run) DRY=1; shift ;;
+    -h|--help) sed -n '2,4p' "$0"; exit 0 ;;
+    -*) die "unknown option $1" ;;
+    *)
+      POS=$((POS + 1))
+      case "$POS" in
+        1) ROLE="$1" ;;
+        2) TICKET="$1" ;;
+        3) PROMISE="$1" ;;
+        *) die "unexpected argument '$1'" ;;
+      esac
+      shift ;;
+  esac
+done
+
+[ -n "$ROLE" ]    || die "missing <role>"
+[ -n "$TICKET" ]  || die "missing <item-id> (the tracker item id)"
+[ -n "$PROMISE" ] || die "missing <promise> — state the deliverable AND the exact unforgeable evidence"
+
+# ── the notepad: walk up from $PWD, exactly as df-mission and df-preflight do ────────────
+if [ -z "$NOTEPAD" ]; then
+  _d="$PWD"
+  while [ "$_d" != "/" ]; do
+    if [ -f "$_d/NOTES.md" ]; then NOTEPAD="$_d"; break; fi
+    _d="$(dirname "$_d")"
+  done
+fi
+[ -n "$NOTEPAD" ] || die "no notepad found (no NOTES.md at or above \$PWD); pass --notepad"
+[ -d "$NOTEPAD" ] || die "notepad is not a directory: $NOTEPAD"
+NOTEPAD="$(cd "$NOTEPAD" && pwd)"
+
+if [ -n "$REPO" ]; then
+  [ -d "$REPO" ] || die "--repo is not a directory: $REPO"
+  REPO="$(cd "$REPO" && pwd)"
+fi
+
+# ── which mission is running ────────────────────────────────────────────────────────────
+# Exactly one RUNNING state, or nothing. Two running missions means the scope is ambiguous
+# and a guess would attach the worker's evidence to the wrong mission; empty is honest.
+MISSION="${WORKER_MISSION:-}"
+if [ -z "$MISSION" ]; then
+  _n=0; _found=""
+  for st in "$NOTEPAD"/.df/missions/*/state; do
+    [ -f "$st" ] || continue
+    if [ "$(tr -d '[:space:]' < "$st" 2>/dev/null)" = "RUNNING" ]; then
+      _n=$((_n + 1))
+      _found="$(basename "$(dirname "$st")")"
+    fi
+  done
+  [ "$_n" -eq 1 ] && MISSION="$_found"
+fi
+
+# ── the worker scratch: the child's cwd, and its own project settings scope ─────────────
+TS="$(date -u +%Y%m%dT%H%M%SZ)"
+SCRATCH="$NOTEPAD/workers/$ROLE/$TICKET-$TS"
+mkdir -p "$SCRATCH/.claude" || die "cannot create scratch dir $SCRATCH"
+
+# `--setting-sources project` resolves against the child's cwd. This file is what it finds:
+# an empty hook set, so nothing from any other project scope reaches the worker; plus the
+# `--deny` rules, which is what makes this file load-bearing rather than a placeholder.
+# Governance arrives via --plugin-dir, which no settings scope can remove.
+#
+# Written by python3 rather than by string concatenation: a settings file is "strict JSON"
+# and a rule containing a quote would otherwise produce a file Claude Code reports as a
+# Settings Error — i.e. a worker whose deny rules silently did not load.
+printf '%s' "$DENY_LIST" | python3 -c '
+import json, sys
+rules = [ln for ln in sys.stdin.read().splitlines() if ln.strip()]
+json.dump({"hooks": {}, "permissions": {"deny": rules}}, sys.stdout, indent=2)
+sys.stdout.write("\n")
+' > "$SCRATCH/.claude/settings.json" || die "cannot write the scratch settings.json"
+
+# ── the launcher's rules, VERBATIM ──────────────────────────────────────────────────────
+# Concatenated in the order given, never parsed, never reworded. This launcher is public
+# Tier-1 method and must not know an estate's branch names or clusters; it carries them.
+RULES_TEXT=""
+if [ -n "$RULES_LIST" ]; then
+  while IFS= read -r rf; do
+    [ -n "$rf" ] || continue
+    RULES_TEXT="$RULES_TEXT$(cat "$rf")
+"
+  done <<RULESEOF
+$RULES_LIST
+RULESEOF
+  printf '%s' "$RULES_TEXT" > "$SCRATCH/RULES.md"
+fi
+
+{
+  printf '# PROMISE — %s / item %s\n\n' "$ROLE" "$TICKET"
+  printf 'Mission: %s\n\n' "${MISSION:-(none resolved)}"
+  printf '%s\n' "$PROMISE"
+} > "$SCRATCH/PROMISE.md"
+
+# ── the frame, COPIED (never linked) ────────────────────────────────────────────────────
+# A symlink into the mission dir would let the worker walk back out into the notepad and
+# read the holdout. `cp` cannot be followed anywhere.
+FRAME=""
+if [ -n "$MISSION" ]; then
+  MDIR="$NOTEPAD/.df/missions/$MISSION"
+  for f in MISSION.md HARD-STOPS.md; do
+    if [ -f "$MDIR/$f" ]; then
+      cp "$MDIR/$f" "$SCRATCH/$f" || die "cannot copy $MDIR/$f"
+      FRAME="$FRAME $f"
+    fi
+  done
+fi
+
+# ── MCP allow-list, or refuse ───────────────────────────────────────────────────────────
+PROFILE="${WORKER_MCP_PROFILE:-}"
+if [ -z "$PROFILE" ] && [ -n "$MISSION" ] && [ -f "$NOTEPAD/.df/missions/$MISSION/profile" ]; then
+  PROFILE="$(tr -d '[:space:]' < "$NOTEPAD/.df/missions/$MISSION/profile")"
+fi
+[ -n "$PROFILE" ] || PROFILE="default"
+
+[ -f "$MCP_TOOL" ] || die "mcp-profile-config.py not found at $MCP_TOOL — refusing to launch a worker with no MCP allow-list (a worker with no tracker cannot report that it has none)"
+
+MCPDIR="$(mktemp -d "${TMPDIR:-/tmp}/df-worker.XXXXXX")" || die "mktemp failed"
+chmod 700 "$MCPDIR" 2>/dev/null || true
+trap 'rm -rf "$MCPDIR"' EXIT
+MCP_CFG="$MCPDIR/mcp-$PROFILE.json"
+
+if ! python3 "$MCP_TOOL" --profile "$PROFILE" --out "$MCP_CFG" \
+        --config "${WORKER_MCP_SOURCE:-$HOME/.claude.json}" >&2; then
+  die "no MCP config for profile '$PROFILE' — REFUSING to launch. A worker with no tracker cannot report that it has none, so this failure would be silent by construction."
+fi
+
+# ── the brief ───────────────────────────────────────────────────────────────────────────
+# Compact on purpose. The frame is on disk beside the worker; repeating it here would pay
+# for the same bytes twice.
+#
+# ⚠️ DEVIATION FROM THE TICKET TEXT, DECLARED. The ticket's prompt sketch says to tell the
+# worker "the launcher has already claimed the ticket". This launcher does NOT claim: it
+# has no tracker credentials of its own (MCP belongs to the child), and the claim is made
+# MECHANICAL one layer down instead — claim-gate.py denies every tool call until the claim
+# write lands. Telling the worker the claim is already done would be false AND would
+# deadlock it against that gate. So the brief states the mechanism as it actually is.
+HARDSTOP_LINE="Hard stops: none supplied with this mission frame — if an action looks irreversible or outward-facing, stop and return blocked-with-evidence."
+case "$FRAME" in
+  *HARD-STOPS.md*) HARDSTOP_LINE="Hard stops: read ./HARD-STOPS.md in this directory FIRST. They are absolute." ;;
+esac
+
+# The rules block sits AFTER the promise and BEFORE the evidence contract: a worker reads
+# what it must deliver, then the bounds it must deliver inside, then how to prove it.
+RULES_BLOCK=""
+if [ -n "$RULES_TEXT" ]; then
+  RULES_BLOCK="
+## Rules from the launcher (binding)
+${RULES_TEXT}
+Some of these are also enforced at the tool layer as permission deny rules (see
+./.claude/settings.json). A blocked command is not a puzzle to route around: it is the
+rule. Route-arounds are a hard stop, not a workaround.
+"
+fi
+
+PROMPT="You are a Dark Factory WORKER. Role: ${ROLE}. Tracker item: ${TICKET}.${MISSION:+ Mission: ${MISSION}.}
+
+PROMISE (the deliverable AND the exact unforgeable evidence you must return):
+${PROMISE}
+
+CLAIM — mechanical, not advisory. Your FIRST tool call must be the tracker write that
+claims item ${TICKET}. Every other tool call is DENIED until that write lands; the denial
+names the tool and the item id. You may never write to any other item's columns.
+
+SCOPE — you resolve exactly ONE item, then stop. Do not chart a map, do not rule anything
+out of scope, do not dispatch further agents. If the item is mis-scoped, say so and stop.
+
+WORKSPACE — your cwd is your scratch dir. Write every artefact here.${REPO:+ The repo you were given is ${REPO}; edit only there.}
+${HARDSTOP_LINE}
+${RULES_BLOCK}
+EVIDENCE — raw, never prose. file:line, diffs, exit codes, verbatim command output. Never
+\"done\" / \"all passing\" / \"looks correct\": a confident summary is indistinguishable from a
+correct one and will be rejected as UNVERIFIED. If you could not obtain the evidence you
+were asked for, that is BLOCKED, not done — a skipped check is not a pass.
+
+BEFORE YOU STOP — write the Verification column on the tracker item: the raw evidence
+itself, not a summary of it. Then stop."
+
+# ── argv ────────────────────────────────────────────────────────────────────────────────
+# The prompt goes on stdin, not in argv, so the dry-run argv below is exactly the launch
+# contract and nothing else.
+set -- -p
+set -- "$@" --plugin-dir "$PLUGIN_ROOT"
+set -- "$@" --setting-sources project
+set -- "$@" --add-dir "$SCRATCH"
+[ -n "$REPO" ] && set -- "$@" --add-dir "$REPO"
+set -- "$@" --mcp-config "$MCP_CFG" --strict-mcp-config
+set -- "$@" --permission-mode "${WORKER_PERMISSION_MODE:-bypassPermissions}"
+set -- "$@" --max-budget-usd "${WORKER_MAX_BUDGET_USD:-100}"
+set -- "$@" --output-format json
+[ -n "${WORKER_MODEL:-}" ] && set -- "$@" --model "${WORKER_MODEL}"
+
+# Hooks inherit the parent environment ("A hook process inherits the parent environment"),
+# so these are how claim-gate.py knows which item this worker owns — and, by their absence,
+# how it stays inert in every session that df-worker did not launch.
+export DF_TICKET="$TICKET"
+export DF_ROLE="$ROLE"
+export DF_MISSION="$MISSION"
+
+if [ "$DRY" = "1" ]; then
+  printf 'scratch: %s\n' "$SCRATCH"
+  printf 'plugin-root: %s\n' "$PLUGIN_ROOT"
+  printf 'mcp-profile: %s\n' "$PROFILE"
+  printf 'frame:%s\n' "${FRAME:- (none)}"
+  printf '%s' "$RULES_LIST" | while IFS= read -r rf; do
+    [ -n "$rf" ] && printf 'rules: %s\n' "$rf"
+  done
+  printf '%s' "$DENY_LIST" | while IFS= read -r dr; do
+    [ -n "$dr" ] && printf 'deny: %s\n' "$dr"
+  done
+  printf -- '---- env ----\n'
+  printf 'DF_TICKET=%s\n' "$DF_TICKET"
+  printf 'DF_ROLE=%s\n' "$DF_ROLE"
+  printf 'DF_MISSION=%s\n' "$DF_MISSION"
+  printf -- '---- argv ----\n'
+  printf 'claude\n'
+  for a in "$@"; do printf '%s\n' "$a"; done
+  printf -- '---- prompt ----\n%s\n' "$PROMPT"
+  exit 0
+fi
+
+CHILD="$SCRATCH/child.json"
+( cd "$SCRATCH" && printf '%s' "$PROMPT" | claude "$@" ) > "$CHILD" 2> "$SCRATCH/child.err"
+RC=$?
+
+# ── the envelope ────────────────────────────────────────────────────────────────────────
+# Loom reads THIS, not the worker's prose. A non-zero is_error or a non-empty
+# permission_denials is UNVERIFIED work, never a summary to believe.
+python3 - "$CHILD" "$SCRATCH/envelope.json" "$RC" <<'PY'
+import json, sys
+src, dst, rc = sys.argv[1], sys.argv[2], int(sys.argv[3])
+env = {"exit_code": rc}
+try:
+    with open(src, encoding="utf-8") as fh:
+        raw = fh.read()
+    doc = json.loads(raw)
+    if isinstance(doc, list):
+        doc = doc[-1] if doc else {}
+    if not isinstance(doc, dict):
+        doc = {}
+    for k in ("is_error", "num_turns", "total_cost_usd", "permission_denials",
+              "subtype", "terminal_reason"):
+        if k in doc:
+            env[k] = doc[k]
+except Exception as e:
+    # An unreadable envelope is itself a finding: it means the child produced no JSON.
+    env["envelope_error"] = "%s: %s" % (type(e).__name__, e)
+    env["is_error"] = True
+with open(dst, "w", encoding="utf-8") as fh:
+    json.dump(env, fh, indent=2)
+    fh.write("\n")
+PY
+
+cat "$CHILD"
+exit "$RC"
