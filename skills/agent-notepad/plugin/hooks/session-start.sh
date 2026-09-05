@@ -135,9 +135,13 @@ if [ -d "$np/handoffs" ]; then
     # does not exist. MEASURED 2026-09-05: the harness externalises the whole payload past a few
     # KB and injects a ~2 KB preview, so a 24 KB handoff is not "mostly delivered", it is
     # delivered as far as the preview and no further. The head of a handoff is its state and its
-    # one next action, which is what 3 KB buys; the READ-THESE-FILES block above carries the
+    # one next action, which is what the cap buys; the WHAT-IS-BELOW block above says whether it is whole, and carries the
     # path to the rest.
-    _cap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-3072}"
+    # ⚠️ 3072 was sized when the payload was 28 KB and externalised regardless. Measured 2026-09-05
+    # after the right-sizing: the whole 4,486-byte handoff fits at 9,187 bytes total, 4.5 KB under
+    # the cliff. A cap that cut the handoff INSIDE its next-action section, mid-word, was the cap
+    # doing damage rather than preventing it.
+    _cap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-5120}"
     printf '\n\n### ⛔ NEWEST HANDOFF — READ THIS FIRST\n\n'
     printf '  file: %s\n' "$newest"
     printf '  handoff written : %s\n' "$(date -u -r "$newest" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
@@ -213,16 +217,32 @@ combined="$(
       $0 ~ pat { matched=1 }
     ' "$1" 2>/dev/null | head -c 600
   }
-  printf '\n### ⛔ READ THESE FILES NOW, BEFORE YOUR FIRST ACTION\n\n'
+  # ⛔ SAY WHAT IS BELOW, NEVER ORDER A READ THAT IS ALREADY DONE. This block used to say
+  # "READ THESE FILES NOW" unconditionally. When the handoff is inlined in full (it is, since
+  # the cap was raised) that is an instruction contradicting reality, and this estate measured
+  # on 2026-04-24 what that produces: the agent follows the RULE over the reality. So each line
+  # is decided from the actual byte counts at emit time -- inlined whole, or cut and by how much.
+  printf '\n### ⛔ WHAT IS BELOW, AND WHAT IS NOT\n\n'
   _hf=""
   if [ -d "$np/handoffs" ]; then _hf="$(ls -t "$np/handoffs"/*.md 2>/dev/null | head -1)"; fi
-  [ -n "$_hf" ] && printf '  1. %s   (%s bytes) — the deliberate checkpoint\n' \
-      "$_hf" "$(wc -c < "$_hf" 2>/dev/null | tr -d ' ')"
-  [ -f "$np/NOTES.md" ] && printf '  2. %s   (%s bytes) — live working memory\n' \
-      "$np/NOTES.md" "$(wc -c < "$np/NOTES.md" 2>/dev/null | tr -d ' ')"
-  printf '\n  Anything below this block may be TRUNCATED by the harness before you see it.\n'
-  printf '  Do not treat what follows as the whole document, and do not conclude a fact is\n'
-  printf '  absent because it is not here. Open the files above.\n'
+  _hcap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-5120}"
+  if [ -n "$_hf" ]; then
+    _hsz="$(wc -c < "$_hf" 2>/dev/null | tr -d ' ')"
+    if [ "${_hsz:-0}" -le "$_hcap" ]; then
+      printf '  1. HANDOFF — INLINED IN FULL below (%s bytes). No read needed; it is already in\n' "$_hsz"
+      printf '     your context.  %s\n' "$_hf"
+    else
+      printf '  1. HANDOFF — CUT: only %s of %s bytes are below. ⛔ OPEN THIS FILE before acting:\n' "$_hcap" "$_hsz"
+      printf '     %s\n' "$_hf"
+    fi
+  fi
+  if [ -f "$np/NOTES.md" ]; then
+    printf '  2. NOTES.md — NOT inlined (%s bytes; too large for the budget). Open it when the\n' \
+        "$(wc -c < "$np/NOTES.md" 2>/dev/null | tr -d ' ')"
+    printf '     handoff points you there, or when you need current state beyond it.  %s\n' "$np/NOTES.md"
+  fi
+  printf '\n  Anything below may still be TRUNCATED by the harness. Every cut is ANNOUNCED where\n'
+  printf '  it happens; do not conclude a fact is absent because it is not here.\n'
   if [ -f "$np/NOTES.md" ]; then
     _na="$(_para_after "$np/NOTES.md" '[Nn]ext action')"
     if [ -n "$_na" ]; then
