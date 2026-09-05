@@ -2,7 +2,7 @@
 # df-worker — the ONE launcher for a single-shot headless worker.
 #
 #   df-worker <role> <item-id> "<promise>" [--repo <path>] [--notepad <path>]
-#             [--rules <file>]... [--deny "<rule>"]... [--dry-run]
+#             [--rules <file>]... [--deny "<rule>"]... [--disallow-tool <name>]... [--dry-run]
 #
 # WHAT THIS IS. A worker is an untrusted promiser: it resolves ONE tracker item and exits.
 # It does not loop, does not chart a map, does not dispatch further workers. A LOOP over
@@ -105,6 +105,7 @@ die() { printf 'df-worker: %s\n' "$1" >&2; exit 2; }
 ROLE=""; TICKET=""; PROMISE=""; REPO=""; NOTEPAD=""
 RULES_LIST=""
 DENY_LIST=""
+DISALLOW_LIST=""
 DRY="${WORKER_DRY_RUN:-0}"
 
 POS=0
@@ -147,6 +148,21 @@ while [ $# -gt 0 ]; do
     --deny)
       [ $# -ge 2 ] || die "--deny needs a permission rule"
       DENY_LIST="$DENY_LIST$2
+"
+      shift 2 ;;
+    # ── --disallow-tool: passed to the CHILD, not the deny-permission layer ────────────
+    # Docs, cli-reference, verbatim:
+    #   "--disallowedTools, --disallowed-tools | Deny rules. A bare tool name removes the
+    #   matching tools from Claude's context: `"Edit"` removes Edit, `"*"` removes every
+    #   tool, and `"mcp__*"` removes every MCP tool. A scoped rule such as `Bash(rm *)`
+    #   leaves the tool available and denies only matching calls. ... |
+    #   `"Bash(git log *)" "Bash(git diff *)" "Edit"`"
+    # One flag, then every value as its own argv word — the docs' own example shows a
+    # SINGLE `--disallowedTools` followed by a space-separated list, never the flag
+    # repeated once per value.
+    --disallow-tool)
+      [ $# -ge 2 ] || die "--disallow-tool needs a tool name"
+      DISALLOW_LIST="$DISALLOW_LIST$2
 "
       shift 2 ;;
     --dry-run) DRY=1; shift ;;
@@ -335,6 +351,14 @@ set -- "$@" --setting-sources project
 set -- "$@" --add-dir "$SCRATCH"
 [ -n "$REPO" ] && set -- "$@" --add-dir "$REPO"
 set -- "$@" --mcp-config "$MCP_CFG" --strict-mcp-config
+if [ -n "$DISALLOW_LIST" ]; then
+  set -- "$@" --disallowedTools
+  while IFS= read -r dn; do
+    [ -n "$dn" ] && set -- "$@" "$dn"
+  done <<DISALLOWEOF
+$DISALLOW_LIST
+DISALLOWEOF
+fi
 set -- "$@" --permission-mode "${WORKER_PERMISSION_MODE:-bypassPermissions}"
 set -- "$@" --max-budget-usd "${WORKER_MAX_BUDGET_USD:-100}"
 set -- "$@" --output-format json
@@ -357,6 +381,9 @@ if [ "$DRY" = "1" ]; then
   done
   printf '%s' "$DENY_LIST" | while IFS= read -r dr; do
     [ -n "$dr" ] && printf 'deny: %s\n' "$dr"
+  done
+  printf '%s' "$DISALLOW_LIST" | while IFS= read -r dn; do
+    [ -n "$dn" ] && printf 'disallow: %s\n' "$dn"
   done
   printf -- '---- env ----\n'
   printf 'DF_TICKET=%s\n' "$DF_TICKET"
