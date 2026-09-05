@@ -544,6 +544,47 @@ if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
       *) COMMON_DIR="$REPO/$COMMON_DIR" ;;
     esac
     RECORD="$COMMON_DIR/publish-gate.ok"
+
+    # ── the SAME record, ALSO keyed by repo slug ────────────────────────────────
+    #
+    # $RECORD answers "did THIS CHECKOUT just run clean", and only a process whose cwd is
+    # inside this checkout can ever read it. That excludes the normal caller of a merge
+    # gate downstream: an orchestrator merging a PR by `--repo owner/name` from its own
+    # session directory, nowhere near this clone. This registry entry is the identical
+    # JSON, filed under a name a --repo flag alone can look up:
+    #   <registry-dir>/<owner>__<repo>.json
+    # It is additive, never a replacement -- $RECORD stays the authority for "this exact
+    # worktree ran clean"; this is a second, slug-addressable copy for a reader that has
+    # no checkout to be inside.
+    #
+    # DF_PUBLISH_GATE_REGISTRY overrides the directory. A test must never write into a
+    # real operator's ~/.claude as a side effect of exercising this script.
+    #
+    # Only attempted when origin looks like an actual hosted remote (scheme:// or
+    # user@host:path) -- a bare filesystem path (the shape a scratch/bare-repo test origin
+    # takes) is not addressable via `gh --repo`, so it is deliberately not extracted into a
+    # slug at all, rather than filed under whatever its last two path segments happen to be.
+    REGISTRY_DIR="${DF_PUBLISH_GATE_REGISTRY:-$HOME/.claude/df-governed/publish-gate}"
+    REGISTRY_FILE=""
+    ORIGIN_URL="$(cd "$REPO" && git remote get-url origin 2>/dev/null)"
+    case "$ORIGIN_URL" in
+      http://*|https://*|ssh://*|git://*|*@*:*)
+        _o="${ORIGIN_URL%/}"
+        _o="${_o%.git}"
+        # Same shape as merge-gate.py's parse_owner_repo: the last two `[:/]`-separated
+        # path segments, so an https:// clone URL and a git@host: SSH URL agree.
+        _slug="$(printf '%s' "$_o" | sed -E 's#^.*[:/]([^/:]+/[^/:]+)$#\1#')"
+        case "$_slug" in
+          */*)
+            case "$_slug" in
+              *:*) : ;;  # a colon survived extraction -- not a clean owner/repo, skip
+              *) REGISTRY_FILE="$REGISTRY_DIR/${_slug//\//__}.json" ;;
+            esac
+            ;;
+        esac
+        ;;
+    esac
+
     REAL_CONF=0
     case "$LANDMARKS_SRC" in
       landmarks.conf) REAL_CONF=1 ;;
@@ -557,11 +598,17 @@ if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
           RECORD_DIRTY=false
         fi
         RECORD_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        printf '{"commit":"%s","dirty":%s,"conf":"real","ts":"%s"}\n' \
-          "$HEAD_SHA" "$RECORD_DIRTY" "$RECORD_TS" > "$RECORD" 2>/dev/null
+        RECORD_JSON="$(printf '{"commit":"%s","dirty":%s,"conf":"real","ts":"%s"}' \
+          "$HEAD_SHA" "$RECORD_DIRTY" "$RECORD_TS")"
+        printf '%s\n' "$RECORD_JSON" > "$RECORD" 2>/dev/null
+        if [ -n "$REGISTRY_FILE" ]; then
+          mkdir -p "$REGISTRY_DIR" 2>/dev/null
+          printf '%s\n' "$RECORD_JSON" > "$REGISTRY_FILE" 2>/dev/null
+        fi
       fi
     else
       rm -f "$RECORD" 2>/dev/null
+      [ -n "$REGISTRY_FILE" ] && rm -f "$REGISTRY_FILE" 2>/dev/null
     fi
   fi
 fi

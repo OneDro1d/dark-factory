@@ -33,6 +33,7 @@ PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s -- %s\n' "$1" "$2"; }
 contains() { case "$3" in *"$2"*) ok "$1" ;; *) bad "$1" "'$2' not in output: $3" ;; esac; }
+not_contains() { case "$3" in *"$2"*) bad "$1" "'$2' unexpectedly in output: $3" ;; *) ok "$1" ;; esac; }
 equals()   { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected '$2' got '$3'"; fi; }
 
 [ -f "$HOOK" ] || { echo "FAIL  merge-gate.py does not exist at $HOOK"; exit 1; }
@@ -93,6 +94,19 @@ write_record() {  # write_record <repo> <commit> <dirty:true|false> <conf>
     "$2" "$3" "$4" > "$d/.git/publish-gate.ok"
 }
 
+# ── per-user registry ────────────────────────────────────────────────────────────────
+# A scratch directory, never the real ~/.claude/df-governed/publish-gate -- exported so
+# every run_hook call below (and publish-gate.sh itself, in Part A) reads/writes here.
+REG="$T/registry"
+mkdir -p "$REG"
+DF_PUBLISH_GATE_REGISTRY="$REG"
+export DF_PUBLISH_GATE_REGISTRY
+
+write_registry() {  # write_registry <owner/repo slug> <commit> <dirty:true|false> <conf>
+  printf '{"commit":"%s","dirty":%s,"conf":"%s","ts":"2026-09-05T00:00:00Z"}\n' \
+    "$2" "$3" "$4" > "$REG/${1//\//__}.json"
+}
+
 run_hook() {  # run_hook <cwd> <command> -- builds the event JSON with python (so paths and
   # commands need no manual shell/JSON escaping), pipes it to the hook, prints the hook's
   # stdout, and returns the hook's own exit code.
@@ -108,11 +122,21 @@ sys.exit(p.returncode)
 ' "$1" "$2" "$HOOK"
 }
 
-echo "=== A: the hook exists and answers a merge command with a permission decision ==="
+echo "=== A: the hook exists and answers a merge command with a well-formed decision ==="
 # The exact probe from the ticket: a merge command against a repo/PR that cannot be
-# verified (no matching local checkout) must still come back as a well-formed decision.
+# verified (no matching local checkout, no registry entry) must still come back as a
+# well-formed decision -- never a crash, never unparseable output.
+#
+# It is NOT a permissionDecision key specifically: x/y has no local checkout AND no
+# registry entry, which used to be denied outright ("run the merge from inside the
+# checkout") without the record ever being consulted -- the MEASURED DEFECT this ticket
+# fixes. The correct answer now is an abstain-with-systemMessage (see test I), since a
+# repo the hook has never heard of may simply not be gated at all.
 O="$(printf '{"hook_event_name":"PreToolUse","cwd":"%s","tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --repo x/y"}}' "$T" | python3 "$HOOK")"; rc=$?
-contains "A: answers with a permissionDecision key" "permissionDecision" "$O"
+case "$O" in
+  *permissionDecision*|*systemMessage*) ok "A: answers with a permissionDecision or a systemMessage" ;;
+  *) bad "A: answers with a permissionDecision or a systemMessage" "neither key in output: $O" ;;
+esac
 equals   "A: always exits 0 (decision is in the JSON, not the exit code)" "0" "$rc"
 
 echo "=== B: a non-merge Bash command is not this hook's business ==="
@@ -166,11 +190,38 @@ echo "=== H2: the SAME record satisfies gh api .../pulls/<n>/merge too ==="
 O="$(run_hook "$REPO_MATCH" "gh api -X PUT repos/$ORIGIN_REPO/pulls/1/merge")"
 equals "H2: gh api merge form is recognised and allowed" "{}" "$O"
 
-echo "=== I: cwd not inside a matching checkout -- deny ==="
+echo "=== I: cwd not inside any checkout, no registry entry -- abstain, not deny ==="
+# MEASURED DEFECT this covers: cwd outside the checkout used to be an automatic deny
+# ("run the merge from inside the checkout"), and the registry/checkout record was never
+# even consulted. Now cwd being elsewhere is not itself a reason to deny -- with nothing
+# recorded anywhere for this repo, the hook cannot tell "never gated" from "gated, never
+# run here", so it abstains and says so, rather than assuming either way.
 OUTSIDE="$(mktemp -d "${TMPDIR:-/tmp}/mgoutside.XXXXXX")"
 O="$(run_hook "$OUTSIDE" "gh pr merge 1 --repo $ORIGIN_REPO")"
-contains "I: denies" "permissionDecision" "$O"
-contains "I: reason says run it from inside the checkout" "checkout" "$O"
+contains     "I: surfaces a systemMessage" "systemMessage" "$O"
+not_contains "I: does not deny merely for being outside the checkout" "permissionDecision" "$O"
+contains     "I: names the target repo it found no record for" "$ORIGIN_REPO" "$O"
+
+echo "=== I2: registry entry matches the PR head, cwd OUTSIDE the checkout -- allow ==="
+write_registry "$ORIGIN_REPO" "$STUB_SHA" false real
+O="$(run_hook "$OUTSIDE" "gh pr merge 1 --repo $ORIGIN_REPO")"
+equals "I2: a matching registry entry allows with {} even though cwd is outside" "{}" "$O"
+
+echo "=== I3: registry entry's commit mismatches the PR head, cwd OUTSIDE -- deny, both shas ==="
+OTHER_SHA2="2222222deadbeef2222222deadbeef22222222"
+write_registry "$ORIGIN_REPO" "$OTHER_SHA2" false real
+O="$(run_hook "$OUTSIDE" "gh pr merge 1 --repo $ORIGIN_REPO")"
+contains "I3: denies" "permissionDecision" "$O"
+contains "I3: reason names the mismatch" "commit mismatch" "$O"
+contains "I3: shows the registry's sha (7 chars)" "${OTHER_SHA2:0:7}" "$O"
+contains "I3: shows the PR head's sha (7 chars)" "${STUB_SHA:0:7}" "$O"
+
+echo "=== I4: registry entry is dirty, cwd OUTSIDE the checkout -- deny ==="
+write_registry "$ORIGIN_REPO" "$STUB_SHA" true real
+O="$(run_hook "$OUTSIDE" "gh pr merge 1 --repo $ORIGIN_REPO")"
+contains "I4: denies" "permissionDecision" "$O"
+contains "I4: reason names the dirty tree" "dirty" "$O"
+rm -f "$REG/${ORIGIN_REPO//\//__}.json"
 
 echo "=== J: malformed stdin -- deny, internal error, never a crash ==="
 O="$(printf 'not json at all' | python3 "$HOOK")"; rc=$?
@@ -285,6 +336,44 @@ if [ -f "$D/.git/publish-gate.ok" ]; then
   equals "A4: record.dirty is true"                                          "true"    "$(jq -r .dirty  "$D/.git/publish-gate.ok")"
 else
   bad "A4: publish-gate.ok was written despite the dirty tree" "no record file"
+fi
+
+echo "=== A5: CLEAN + real conf + a real-shaped origin -- writes the registry; FINDINGS deletes it ==="
+# DF_PUBLISH_GATE_REGISTRY points at ITS OWN scratch dir here, separate from $REG above --
+# proving the override works standalone, not just because $REG happens to be exported for
+# the whole file.
+D="$(mk_gate_repo)"
+gate_conf_body > "$D/boot-kit/scripts/landmarks.conf"
+git -C "$D" remote add origin "https://example.com/reg-owner/reg-repo.git"
+git -C "$D" add -A >/dev/null
+git -C "$D" commit -qm "add real landmarks + origin" >/dev/null
+HEAD_A5="$(git -C "$D" rev-parse HEAD)"
+REGDIR_A5="$T/a5-registry"
+REGFILE_A5="$REGDIR_A5/reg-owner__reg-repo.json"
+OUT="$(cd "$D" && DF_PUBLISH_GATE_REGISTRY="$REGDIR_A5" bash boot-kit/scripts/publish-gate.sh 2>&1)"; RC=$?
+equals "A5: gate itself still exits 0 on CLEAN" "0" "$RC"
+if [ -f "$REGFILE_A5" ]; then
+  ok "A5: registry file was written"
+  equals "A5: registry record.commit is HEAD" "$HEAD_A5" "$(jq -r .commit "$REGFILE_A5")"
+  equals "A5: registry record.dirty is false" "false"    "$(jq -r .dirty  "$REGFILE_A5")"
+  equals "A5: registry record.conf is real"   "real"     "$(jq -r .conf   "$REGFILE_A5")"
+  # The two records are additive copies of the SAME run -- they must agree, not merely
+  # both exist.
+  equals "A5: registry record matches the git-common-dir record" \
+    "$(jq -Sc . "$D/.git/publish-gate.ok")" "$(jq -Sc . "$REGFILE_A5")"
+else
+  bad "A5: registry file was written" "no file at $REGFILE_A5"
+fi
+
+echo 'zzqxalfa in a sentence' > "$D/docs/canary2.md"
+git -C "$D" add -A >/dev/null
+git -C "$D" commit -qm "add canary" >/dev/null
+OUT="$(cd "$D" && DF_PUBLISH_GATE_REGISTRY="$REGDIR_A5" bash boot-kit/scripts/publish-gate.sh 2>&1)"; RC=$?
+equals "A5: gate itself exits 1 on FINDINGS" "1" "$RC"
+if [ -f "$REGFILE_A5" ]; then
+  bad "A5: registry file is deleted on FINDINGS" "$REGFILE_A5 still exists"
+else
+  ok "A5: registry file is deleted on FINDINGS (git-common-dir record deleted too, per A3)"
 fi
 
 echo ""
