@@ -198,8 +198,20 @@ combined="$(
   # ⚠️ This is NOT a return to the #102 pointer. That pointer failed because it was CONDITIONAL
   # ("read it IF the Notes do not already cover this") and buried at the END of a payload that
   # was cut anyway. This is unconditional, first, and short enough to always arrive.
-  _first_line_after() { # <file> <regex> -- the first non-empty line following a match
-    awk -v pat="$2" 'matched && NF { print; exit } $0 ~ pat { matched=1 }' "$1" 2>/dev/null | head -c 400
+  # ⛔ THE WHOLE PARAGRAPH, NOT ONE LINE, AND THE CUT IS ANNOUNCED.
+  # The one-line version (awk print-then-exit) injected "All four queued next-actions DISCHARGED
+  # 2026-09-05 (Poland Coder session, uncommitted —" and stopped there. The line that followed
+  # said "commit needs operator approval. What remains open is the Blockers table only." A cut
+  # at an em-dash INVERTED the meaning: the session read "everything is done" and did not open
+  # the files this very block had just ordered it to open. Measured on a real operator /clear,
+  # 2026-09-05, on both machines.
+  _para_after() { # <file> <regex> -- the paragraph following a match, to the first blank line
+    awk -v pat="$2" '
+      started && !NF { exit }
+      matched && NF { started=1 }
+      started { print }
+      $0 ~ pat { matched=1 }
+    ' "$1" 2>/dev/null | head -c 600
   }
   printf '\n### ⛔ READ THESE FILES NOW, BEFORE YOUR FIRST ACTION\n\n'
   _hf=""
@@ -212,8 +224,20 @@ combined="$(
   printf '  Do not treat what follows as the whole document, and do not conclude a fact is\n'
   printf '  absent because it is not here. Open the files above.\n'
   if [ -f "$np/NOTES.md" ]; then
-    _na="$(_first_line_after "$np/NOTES.md" '[Nn]ext action')"
-    [ -n "$_na" ] && printf '\n  NEXT ACTION (from NOTES.md): %s\n' "$_na"
+    _na="$(_para_after "$np/NOTES.md" '[Nn]ext action')"
+    if [ -n "$_na" ]; then
+      # WARN Framed as a QUOTE, never as the verdict of THIS session. It is copied from a file
+      # may be stale, and the reader has to be able to tell those apart.
+      printf '\n  NOTES.md quotes its Next action section as:\n'
+      printf '%s\n' "$_na" | sed 's/^/    | /'
+      if [ "$(printf '%s' "$_na" | wc -c | tr -d ' ')" -ge 600 ]; then
+        printf '    | …[CUT at 600 bytes — this quote is INCOMPLETE, open NOTES.md]\n'
+      fi
+      # ⛔ THE GUARD THAT WAS MISSING. A next-action reading as finished is exactly what stops
+      # a session opening the files, and a stale one reads as finished forever.
+      printf '\n  ⚠️ That quote may be STALE, and even if it says the work is DONE that is NOT\n'
+      printf '     a reason to skip the files above. It is a copy; they are the authority.\n'
+    fi
   fi
   # ⚠️ SAY SO BEFORE THE NOTES, not after. If the auto-pull failed, everything below may be stale
   # and the reader needs to know that BEFORE reading it as current state.

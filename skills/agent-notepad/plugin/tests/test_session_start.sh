@@ -377,4 +377,61 @@ test_completes_fast() {
   rm -rf "$(dirname "$np")"
 }
 
+# ⛔ THE BLOCK ARGUED AGAINST ITS OWN IMPERATIVE. Measured on a real operator /clear, both
+# machines, 2026-09-05: the payload arrived intact, said "READ THESE FILES NOW", and three
+# lines later quoted NOTES.md as
+#     "All four queued next-actions DISCHARGED 2026-09-05 (Poland Coder session, uncommitted —"
+# cut mid-sentence at an em-dash, because the extractor took ONE line. The line that followed
+# ("commit needs operator approval. What remains open is the Blockers table only.") never
+# arrived. A cold session weighing an imperative against a specific factual-looking quote takes
+# the quote — and did not open the files. The operator observed exactly that.
+#
+# ⚠️ TWO PROPERTIES, AND THE SECOND IS THE ONE THAT MATTERS. The paragraph must arrive WHOLE,
+# and a next-action that reads as finished must NOT be usable as permission to skip the files.
+# A quote can always go stale; the guard is what keeps a stale one from cancelling the order.
+test_next_action_quote_is_whole_and_cannot_cancel_the_imperative() {
+  local np out ctx; np="$(_scaffold)"
+  mkdir -p "$np/handoffs"
+  printf '# Handoff\nBODY\n' > "$np/handoffs/2026-06-06-h.md"
+  # ⚠️ The real shape: a BLANK LINE after the heading (every template notepad has one — the
+  # first fix regressed on exactly this and printed nothing), then a TWO-LINE paragraph whose
+  # FIRST line reads as "everything is done".
+  # ⚠️ WRITTEN, not appended. The scaffold's NOTES.md already carries a `## Next action`
+  # heading, and the extractor takes the FIRST match — correctly. Appending a second one tests
+  # nothing, and the payload still contained the strings because NOTES.md is injected further
+  # down, so a whole-payload assertion passed for the WRONG REASON.
+  {
+    printf '# NOTES\n\n## Next action\n\n'
+    printf 'ALL QUEUED WORK DISCHARGED 2026-09-05 (uncommitted —\n'
+    printf 'SECONDLINE_APPROVAL_NEEDED). What remains open is the Blockers table.\n\n'
+    printf '## Something after\nunrelated\n'
+  } > "$np/NOTES.md"
+
+  out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+  ctx="$(printf '%s' "$out" | python3 -c "
+import sys, json
+try: print(json.load(sys.stdin).get('systemMessage',''))
+except Exception: pass
+")"
+
+  assert_contains "$ctx" "ALL QUEUED WORK DISCHARGED" "the first line of the paragraph arrives"
+  # ⛔ THE ASSERTION THAT WOULD HAVE CAUGHT THE ORIGINAL BUG.
+  assert_contains "$ctx" "SECONDLINE_APPROVAL_NEEDED" \
+    "the SECOND line arrives too — a cut at the em-dash inverts the meaning"
+  # ⚠️ Read the QUOTE BLOCK ONLY — the lines the hook prefixes with "| ". NOTES.md is also
+  # injected further down, so asserting over the whole payload measures the wrong scope and
+  # fails on content that is legitimately there.
+  local quoted
+  quoted="$(printf '%s\n' "$ctx" | sed -n 's/^    | //p')"
+  assert_contains "$quoted" "ALL QUEUED WORK DISCHARGED" "the quote block holds line 1"
+  assert_contains "$quoted" "SECONDLINE_APPROVAL_NEEDED" "the quote block holds line 2"
+  assert_not_contains "$quoted" "unrelated" \
+    "the QUOTE stops at the blank line — it does not run on into the next section"
+  # ⛔ AND THE GUARD, so a stale 'discharged' cannot be read as permission to skip.
+  assert_contains "$ctx" "not" "the guard is present"
+  assert_contains "$ctx" "a reason to skip the files above" \
+    "a next action reading as DONE is explicitly NOT permission to skip the files"
+  assert_contains "$ctx" "READ THESE FILES NOW" "the imperative still leads"
+}
+
 run_tests
