@@ -1,1 +1,8 @@
-[]
+[
+  {
+    "name": "mission-tick",
+    "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/mission-tick.sh\"",
+    "description": "unfinished-mission tick",
+    "when": "always"
+  }
+]

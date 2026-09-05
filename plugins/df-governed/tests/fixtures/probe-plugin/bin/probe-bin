@@ -1,0 +1,4 @@
+#!/bin/sh
+# Probe for: "bin/ -- Plugin root -- Executables added to the Bash tool's PATH
+# while the plugin is enabled." (code.claude.com/docs/en/plugins)
+echo PROBE-BIN-ON-PATH

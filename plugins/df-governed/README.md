@@ -5,13 +5,13 @@ the generic method; the plugin is the mechanism that makes an installed instance
 **active** rather than merely declared — a hook that ships in `hooks/hooks.json` fires with no
 separate wiring step, a skill in `skills/` namespaces itself, an executable in `bin/` joins the
 Bash tool's `PATH` while the plugin is enabled, an entry in `monitors/monitors.json` starts
-itself, and `settings.json` can set the main-thread agent. None of that requires an installer to
-hand-copy files and then have a separate check confirm the copy was wired correctly.
+itself, and an agent in `agents/` is available to any launcher by name. None of that requires an
+installer to hand-copy files and then have a separate check confirm the copy was wired correctly.
 
 ## The seam: plugin is runtime, the lockfile is the pin
 
 ```
-WHAT the agent is       →  this plugin: skills, hooks, agents, bin/, monitors, settings.agent
+WHAT the agent is       →  this plugin: skills, hooks, agents, bin/, monitors
 WHICH machine this is   →  a Tier-3 lockfile: identity, codeRoot, codeLayout, probed paths,
                             notRestorable — none of which may ever appear in this directory
 ```
@@ -38,14 +38,28 @@ Tier-3 lockfile never carries the plugin's content — each side owns exactly on
 directory as an agent definition and warns on a file without frontmatter, and a warning that
 ships is a warning people learn to ignore. What the directory is for:
 
-It will hold the orchestrator agent that the main thread starts as once a Tier-3
-lockfile pins a `sha` for this plugin — the agent's `model` (and its system prompt and tool
-restrictions) arrive with that pin rather than being told to the session, and it is activated by
-the `agent` key in `../settings.json`. Per the plugin docs, plugin-shipped agents cannot carry
+It holds `df-orchestrator`, the agent a launcher opts into by name (`--agent df-orchestrator`);
+see the next section for why it is not activated for every session by default. Per the plugin
+docs, plugin-shipped agents cannot carry
 `hooks`, `mcpServers`, or `permissionMode` frontmatter ("For security reasons, `hooks`,
 `mcpServers`, and `permissionMode` are not supported for plugin-shipped agents") — an agent that
 needs any of those three lives outside this plugin, beside it in a project's `.claude/agents/`,
 never here.
+
+## Why `settings.agent` is NOT set
+
+`agents/df-orchestrator.md` ships, but `settings.json` is `{}` and `plugin.json` declares no
+`settings`. The design asked for `{"agent": "df-orchestrator"}` so the orchestrator's model would
+arrive with the pin. Measured against the docs before shipping (code.claude.com/docs/en/sub-agents):
+"The subagent's system prompt replaces the default Claude Code system prompt entirely, the same way
+`--system-prompt` does." Activating `agent` here would therefore make every session on every machine
+with this plugin enabled run on an eight-line doctrine as its ENTIRE system prompt. That is a
+regression wearing a mechanism.
+
+What ships instead: the agent definition, with `model: inherit`, for a launcher that opts in
+explicitly (`claude --agent df-orchestrator`, or a supervisor profile that passes `--model` per
+role). The tier is then a launch-profile decision — visible, per role, reversible — and no model
+name is frozen into a public file, where it would age into a silent downgrade.
 
 ## Developing this plugin
 

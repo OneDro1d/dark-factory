@@ -1,0 +1,8 @@
+[
+  {
+    "name": "probe-monitor",
+    "command": "echo PROBE-MONITOR-LINE; sleep 5",
+    "description": "Probe monitor: emits one marker line, then idles.",
+    "when": "always"
+  }
+]
