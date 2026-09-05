@@ -339,7 +339,35 @@ combined="$(
   # That is a property of the template, not a law — if that layout changes, this ordering has
   # to be revisited rather than trusted.
   _emit_bounded "$np/DIGEST.md"           "DIGEST.md (cross-scope, derived)"
-  _emit_bounded "$np/repos.manifest.json" "repos.manifest.json (code repos in scope)" json
+  # WARN THE REPOS, NOT THE EDITORIAL. Measured 2026-09-05: the manifest is 4,504 bytes and 2,090
+  # of them are top-level $-prefixed prose about how to EDIT it, placed FIRST. The raw-file cap
+  # delivered all of that and ONE of three repo entries, cut mid-word. The repos array projected
+  # to its actionable keys is 1,966 bytes for all three. The prose is pointed at, not dropped.
+  _emit_manifest() {
+    local f="$np/repos.manifest.json" left digest dsz
+    [ -f "$f" ] || return 0
+    if ! command -v jq >/dev/null 2>&1; then
+      _emit_bounded "$f" "repos.manifest.json (code repos in scope)" json; return 0
+    fi
+    digest="$(jq -c '{repos: [ (.repos // [])[] | {name, path, remote, branch, role, note} | with_entries(select(.value != null)) ]}' "$f" 2>/dev/null)"
+    if [ -z "$digest" ] || [ "$digest" = "null" ]; then
+      _emit_bounded "$f" "repos.manifest.json (code repos in scope)" json; return 0
+    fi
+    dsz="$(printf '%s' "$digest" | wc -c | tr -d ' ')"
+    left=$(( _budget - _spent ))
+    if [ "$dsz" -gt "$left" ]; then
+      _emit_bounded "$f" "repos.manifest.json (code repos in scope)" json; return 0
+    fi
+    printf '\n\n### repos.manifest.json — the repos in scope (DIGEST: name/path/remote/branch/role/note)\n\n'
+    printf '```json\n'
+    printf '%s' "$digest" | jq . 2>/dev/null || printf '%s\n' "$digest"
+    printf '```\n'
+    printf '  The top-level $-prefixed notes (how to RESOLVE a path, why there is no path key) are\n'
+    printf '  NOT injected -- they are for editing the file. Open %s for them.\n' "$f"
+    _spent=$(( _spent + dsz ))
+    return 0
+  }
+  _emit_manifest
   _emit_bounded "$np/NOTES.md"            "NOTES.md"
 )"
 
