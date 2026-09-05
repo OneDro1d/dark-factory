@@ -400,9 +400,9 @@ def probe_github(manifest, scope):
             #
             # This used to be `owner = remote.split("/")[0]` alone — the identity was
             # inferred from the ORG NAME and matched against logged-in account names. That
-            # holds only while org == account. It is true for `Michal-Bacia_eso` and false
+            # holds only while org == account. It is true for `<account-that-equals-its-org>` and false
             # for every org whose name is not also a username: `eso-development` is
-            # reachable ONLY as `Michal-Bacia_eso`, so the probe reported a repo the machine
+            # reachable ONLY as `<account-that-equals-its-org>`, so the probe reported a repo the machine
             # can reach perfectly well as DRIFT — and per df-supervisor.sh the supervisor
             # treated drift as fatal when this was written, so one wrong guess here blocked
             # every unattended

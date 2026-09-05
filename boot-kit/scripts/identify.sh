@@ -58,7 +58,7 @@ done
 
 # ---- the fingerprint -------------------------------------------------------
 # ⛔ `hostname` IS NOT STABLE ON macOS EITHER, and the first version of this file said it was.
-# Measured 2026-09-03, hours apart on ONE machine: `hostname` returned `MacBook-Air-3.local`,
+# Measured 2026-09-03, hours apart on ONE machine: `hostname` returned `<Model>-<n>.local`,
 # then `Mac`. macOS takes a DHCP-supplied name when a network offers one, so a record keyed on
 # it REFUSES THE CORRECT INSTALL after the laptop changes Wi-Fi. That happened live — this
 # file's own author's laptop was refused by its own record, minutes after the record was written.
