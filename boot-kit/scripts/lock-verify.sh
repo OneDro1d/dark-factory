@@ -823,6 +823,99 @@ else
 fi
 
 echo ""
+
+# ---- L11: plugins — the materialised copy still matches the pin -------------
+# ADDED for M-KITV2 B15. A personal skills-directory plugin (docs: "a
+# .claude-plugin/plugin.json under ~/.claude/skills/<name>/ loads in every project")
+# is a COPY, not a symlink — install.sh rsyncs/cp's the pinned plugin tree into
+# $LIVE/skills/<name>/, and a copy can drift from its source silently in a way a
+# symlink cannot: L5's `phys()` comparison, built for symlinks, would report a
+# materialised plugin as "present" the instant it was installed and never again.
+# This layer is the copy's honesty check — does the tree on disk still equal the
+# tree at the pin, byte for byte, right now.
+#
+# Resolution mirrors install.sh's own, on purpose: only `upstream:<path>` is
+# accepted as a source (a malformed lockfile is a finding here, not a shrug), and
+# `dest` must resolve under `$LIVE/skills/` — the one directory the personal
+# skills-directory loader scans. Two tools disagreeing about what a plugin
+# declaration means is exactly the class of defect this whole file exists to catch.
+echo "[L11] plugins materialise a copy that still matches the pin"
+L11_PLUGIN_N="$(jq -r '(.install.plugins // []) | length' "$LOCK")"
+if [ "$L11_PLUGIN_N" -eq 0 ]; then
+  pass "L11 no plugins declared — nothing to check"
+else
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    pname="$(jq -r '.name // empty' <<<"$p")"
+    psrc="$(jq -r '.source // empty' <<<"$p")"
+    pdest="$(jq -r '.dest // empty' <<<"$p")"
+    case "$psrc" in
+      upstream:*) srcpath="$VENDOR/dark-factory/${psrc#upstream:}" ;;
+      *) drift "L11 plugin $pname: source '$psrc' is not upstream:<path> — cannot verify"; continue ;;
+    esac
+    case "$pdest" in
+      "~/.claude/skills/"*) destpath="$LIVE/skills/${pdest#\~/.claude/skills/}" ;;
+      *) drift "L11 plugin $pname: dest '$pdest' is outside ~/.claude/skills/ — cannot verify"; continue ;;
+    esac
+    if [ ! -d "$destpath" ]; then
+      drift "L11 plugin $pname: not installed ($destpath missing)"
+      continue
+    fi
+    if [ ! -d "$srcpath" ]; then
+      drift "L11 plugin $pname: pin source missing ($srcpath) — cannot verify"
+      continue
+    fi
+    L11DIFF="$(diff -r --brief "$srcpath" "$destpath" 2>&1)"
+    if [ -n "$L11DIFF" ]; then
+      drift "L11 plugin $pname: materialised copy does NOT match the pin:"
+      printf '%s\n' "$L11DIFF" | head -5 | while IFS= read -r l; do note "$l"; done
+      L11N="$(printf '%s\n' "$L11DIFF" | wc -l | tr -d ' ')"
+      [ "$L11N" -gt 5 ] && note "... and $((L11N - 5)) more"
+      note "run install.sh to re-materialise, or bump the pin if this is deliberate"
+    else
+      pass "L11 plugin $pname: materialised copy matches the pin"
+    fi
+  done < <(jq -c '(.install.plugins // [])[]' "$LOCK")
+fi
+
+echo ""
+
+# ---- L12: plugin invariants suites -------------------------------------------
+# ADDED for M-KITV2 B15. A materialised plugin CAN ship its own self-check —
+# `tests/test-plugin-invariants.sh` at its root — for the properties this file
+# cannot see from outside, e.g. "settings.json does not carry an `agent` key" (S-1
+# in the kitv2/b4 measurement: an `agent` key there hijacks the main thread of a
+# HEADLESS run too, silently, and exits 0). Running it is not optional if it ships:
+# absent is reported, not assumed benign, and it is `unknown` rather than a pass —
+# a plugin that ships no suite is not thereby proven to have no invariants.
+echo "[L12] plugin invariants suites"
+if [ "$L11_PLUGIN_N" -eq 0 ]; then
+  unknown "L12 skipped: no plugins declared"
+else
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    pname="$(jq -r '.name // empty' <<<"$p")"
+    pdest="$(jq -r '.dest // empty' <<<"$p")"
+    case "$pdest" in
+      "~/.claude/skills/"*) destpath="$LIVE/skills/${pdest#\~/.claude/skills/}" ;;
+      *) unknown "L12 plugin $pname: dest is outside ~/.claude/skills/ — cannot locate a suite"; continue ;;
+    esac
+    L12SUITE="$destpath/tests/test-plugin-invariants.sh"
+    if [ ! -f "$L12SUITE" ]; then
+      unknown "L12 skipped: plugin $pname ships no invariants suite"
+      continue
+    fi
+    L12OUT="$(bash "$L12SUITE" 2>&1)"; L12RC=$?
+    if [ "$L12RC" -eq 0 ]; then
+      pass "L12 plugin $pname: invariants suite passed"
+    else
+      drift "L12 plugin $pname: invariants suite FAILED (exit $L12RC):"
+      printf '%s\n' "$L12OUT" | tail -3 | while IFS= read -r l; do note "$l"; done
+    fi
+  done < <(jq -c '(.install.plugins // [])[]' "$LOCK")
+fi
+
+echo ""
 if [ "$DRIFT" -eq 0 ]; then
   if [ "$UNVERIFIED" -gt 0 ] || [ "$UNKNOWN" -gt 0 ]; then
     # Not the same claim as LOCKED: everything checkable passed, but something was never
