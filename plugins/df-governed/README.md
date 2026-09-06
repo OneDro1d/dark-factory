@@ -76,6 +76,15 @@ these flags is unaffected. A Monday tracker needs none of them; a Notion tracker
 (item id in `issue_key`, claim fields like `assignee` at the top level of `tool_input`, with
 no nested values object) sets `DF_CLAIM_VALUES_KEY` to the empty string.
 
+## df-worker: MCP scoping, two ways
+
+When the instance lockfile declares `mcp.profiles.<profile>` as `kind: "connector"`, `df-worker`
+does not pass `--mcp-config`/`--strict-mcp-config` at all — a claude.ai connector is not a
+file-based server, so there is nothing to allow-list into one. Instead it denies every other
+server's tools (and `mcp__plugin_*`) via `--disallowedTools`, exports `DF_MCP_MODE=connector`,
+and leaves the connector reachable as-is; a `kind: "hubs"` entry, or no entry at all, keeps the
+original allow-list behaviour unchanged.
+
 ## Developing this plugin
 
 Load it directly from a working tree, without installing it:

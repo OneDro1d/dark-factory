@@ -892,11 +892,83 @@ def expand_env(value):
     return re.sub(r"\$\{(\w+)\}|\$(\w+)", sub, value or ""), missing
 
 
-def probe_mcp(profile=None, scope=None, notes=None):
+def sanitise_mcp_name(name):
+    """Every non-alphanumeric char in an MCP server name becomes `_` -- the SAME rule
+    mcp-profile-config.py applies (measured: a connector named "claude.ai ESO" exposes tools
+    named `mcp__claude_ai_ESO__<upstream>__<tool>`). Kept as a second, independent copy on
+    purpose: this file and that one are never imported into each other (each stays runnable
+    standalone), so the rule is duplicated rather than shared, and a proposal this function
+    writes must produce the identical prefix mcp-profile-config.py will later act on.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "_", name or "")
+
+
+def probe_one_mcp_server(name, s):
+    """One hub's tools/list probe. Factored out so the mcp.profiles-declared `hubs` path and
+    the name-prefix fallback below can share it -- same request, same verdict rules, whichever
+    told this function which servers to look at.
+    """
+    url = s.get("url")
+    auth = (s.get("headers") or {}).get("Authorization")
+    if not url:
+        return finding("mcp", name, "unknown", "no url (transport %s)" % s.get("type"))
+    if not auth:
+        return finding("mcp", name, "drift", "no Authorization header configured")
+
+    auth, unset = expand_env(auth)
+    if unset:
+        # Report and STOP for this hub: posting an unexpanded template yields a 401 that
+        # would be indistinguishable from a revoked token.
+        return finding(
+            "mcp-env", name, "drift",
+            "auth references %s, which is UNSET in this environment — the hub is probably "
+            "fine; this process (and any headless child it spawns) cannot authenticate to it"
+            % ", ".join("$" + u for u in unset),
+            expected="env var set", actual=unset)
+
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "Authorization": auth,
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as r:
+            raw = r.read().decode("utf-8", "replace")
+        n = raw.count('"name"')
+        return finding("mcp", name, "ok", "live — tools/list returned ~%d entries" % n, actual=url)
+    except urllib.error.HTTPError as e:
+        verdict = "drift" if e.code in (401, 403, 404) else "unknown"
+        note = " (token expired or revoked)" if e.code in (401, 403) else ""
+        return finding("mcp", name, verdict, "HTTP %s%s" % (e.code, note), actual=url)
+    except Exception as e:
+        # Network failure is UNKNOWN. The hub may be perfectly healthy.
+        return finding("mcp", name, "unknown", "unreachable: %s" % e, actual=url)
+
+
+def probe_claude_mcp_list():
+    """(rc, lines) from `claude mcp list`. rc=None means the probe itself could not run."""
+    rc, so, se = run(["claude", "mcp", "list"], timeout=20)
+    if rc is None:
+        return None, []
+    return rc, (so if rc == 0 else (so + "\n" + se)).splitlines()
+
+
+def probe_mcp(profile=None, scope=None, notes=None, lock=None):
     """Bearer tokens expire. A header that exists proves nothing; a tools/list does.
 
     Never prints the token -- only the env var NAME it came from, and the transport
     status. Names are not secrets; values never leave this function.
+
+    B24: when the instance lockfile DECLARES `mcp.profiles.<profile>`, that record is used
+    INSTEAD of the name-prefix guess below -- a `hubs` entry names exactly which servers to
+    probe (and drifts if one it names is gone), a `connector` entry probes a LIVE
+    `claude mcp list` instead of `tools/list` (a claude.ai connector is not a `mcpServers`
+    entry -- measured: it appears in no file). Absent a declaration, the ORIGINAL
+    name-prefix rule runs unchanged, and (new) a PROPOSAL is offered when a live connector
+    visibly matches the requested profile by name -- so a machine that never declared its
+    MCP source can be walked to one, the same way an uncloned repo is walked to
+    `scope.excludedRepos`.
     """
     out = []
     cfg_path = os.path.expanduser("~/.claude.json")
@@ -906,79 +978,114 @@ def probe_mcp(profile=None, scope=None, notes=None):
         return [finding("mcp", cfg_path, "unknown", "could not read config: %s" % e)]
 
     servers = cfg.get("mcpServers") or {}
+    mcp_profiles = ((lock or {}).get("mcp") or {}).get("profiles") or {}
+    prof_entry = mcp_profiles.get(profile) if profile else None
+
+    if prof_entry:
+        kind = prof_entry.get("kind")
+        want = prof_entry.get("servers") or []
+        if kind == "hubs":
+            if not servers:
+                return [finding("mcp", "mcpServers", "drift",
+                                "no MCP servers configured in %s" % cfg_path)]
+            for name in want:
+                s = servers.get(name)
+                if s is None:
+                    out.append(finding(
+                        "mcp", name, "drift",
+                        "declared in mcp.profiles.%s but not present in %s mcpServers"
+                        % (profile, cfg_path)))
+                    continue
+                out.append(probe_one_mcp_server(name, s))
+            skipped = sorted(n for n in servers if n not in want)
+            if notes is not None and skipped:
+                notes.append(
+                    "MCP probes restricted to mcp.profiles.%s (hubs): %d hub(s) NOT probed "
+                    "and NOT counted — %s. Declared out of scope for this estate."
+                    % (profile, len(skipped), ", ".join(skipped)))
+            return out
+        if kind == "connector":
+            name = want[0] if want else None
+            if not name:
+                return [finding("mcp", profile, "drift",
+                                "mcp.profiles.%s (connector) declares no server name" % profile)]
+            rc, lines = probe_claude_mcp_list()
+            if rc is None:
+                return [finding("mcp", name, "unknown",
+                                "claude not on PATH or `claude mcp list` unavailable")]
+            found = any(ln.startswith(name) and "Connected" in ln for ln in lines)
+            if found:
+                return [finding("mcp", name, "ok", "connector Connected (claude mcp list)")]
+            return [finding("mcp", name, "drift",
+                            "no line starting with %r and containing Connected in "
+                            "`claude mcp list`" % name)]
+        return [finding("mcp", profile, "drift",
+                        "mcp.profiles.%s has unrecognised kind %r (expected 'hubs' or "
+                        "'connector')" % (profile, kind))]
+
+    # ---- no declaration: the ORIGINAL name-prefix rule, unchanged ----------------------
     if not servers:
-        return [finding("mcp", "mcpServers", "drift", "no MCP servers configured in %s" % cfg_path)]
+        out.append(finding("mcp", "mcpServers", "drift", "no MCP servers configured in %s" % cfg_path))
+    else:
+        # A DENOMINATOR THAT SHRINKS IN SILENCE IS A LIE THE REPORT TELLS BY OMISSION.
+        # `--profile onedroid` skips every hub whose name lacks that prefix. That filtering
+        # is correct -- an instance should not be judged on hubs it does not bind -- but it
+        # used to be a bare `continue`, so the skipped hubs left no trace at all and `ok=25`
+        # read as "25 of 25 probed" when it was "25 of 27, and I will not say which two".
+        #
+        # This is the same class as `unknown`: NOT PROBED is not a fact about the world. The
+        # repo path already had this right (`excluded by instance scope` is emitted as a
+        # real finding); the MCP path did not, and the gap produced two validation runs that
+        # DISAGREED about whether the shrink was reported -- 2026-09-04, Poland read it as
+        # "printed as excluded", the laptop as "silently shrinks". The laptop was right.
+        #
+        # A note, not a finding: these hubs are correctly out of scope, so they must not
+        # move the ok/drift/unknown counts. The reader just has to be able to SEE the
+        # filter ran.
+        skipped_by_profile = []
+        for name, s in sorted(servers.items()):
+            if profile and not name.startswith(profile):
+                skipped_by_profile.append(name)
+                continue
+            out.append(probe_one_mcp_server(name, s))
 
-    # A DENOMINATOR THAT SHRINKS IN SILENCE IS A LIE THE REPORT TELLS BY OMISSION.
-    # `--profile onedroid` skips every hub whose name lacks that prefix. That filtering is
-    # correct -- an instance should not be judged on hubs it does not bind -- but it used to
-    # be a bare `continue`, so the skipped hubs left no trace at all and `ok=25` read as
-    # "25 of 25 probed" when it was "25 of 27, and I will not say which two".
-    #
-    # This is the same class as `unknown`: NOT PROBED is not a fact about the world. The
-    # repo path already had this right (`excluded by instance scope` is emitted as a real
-    # finding); the MCP path did not, and the gap produced two validation runs that
-    # DISAGREED about whether the shrink was reported -- 2026-09-04, Poland read it as
-    # "printed as excluded", the laptop as "silently shrinks". The laptop was right.
-    #
-    # A note, not a finding: these hubs are correctly out of scope, so they must not move
-    # the ok/drift/unknown counts. The reader just has to be able to SEE the filter ran.
-    skipped_by_profile = []
-    for name, s in sorted(servers.items()):
-        if profile and not name.startswith(profile):
-            skipped_by_profile.append(name)
-            continue
-        url = s.get("url")
-        auth = (s.get("headers") or {}).get("Authorization")
-        if not url:
-            out.append(finding("mcp", name, "unknown", "no url (transport %s)" % s.get("type")))
-            continue
-        if not auth:
-            out.append(finding("mcp", name, "drift", "no Authorization header configured"))
-            continue
+        # Absence of a whole estate's hub is a finding only where that estate is actually in
+        # scope for THIS deployment, and which estates exist at all is a Tier-2/3 fact this
+        # engine does not hardcode. A profile-specific wrapper that DOES know its estate
+        # names can add that advisory on top of these per-server findings; the shared engine
+        # only reports what it can observe about the servers actually configured.
+        if skipped_by_profile and notes is not None:
+            notes.append("MCP probes restricted to --profile %r: %d hub(s) NOT probed and NOT "
+                         "counted — %s. Correctly out of scope; named here so the denominator "
+                         "is never smaller than it looks."
+                         % (profile, len(skipped_by_profile), ", ".join(skipped_by_profile)))
 
-        auth, unset = expand_env(auth)
-        if unset:
-            # Report and STOP for this hub: posting an unexpanded template yields a 401
-            # that would be indistinguishable from a revoked token.
-            out.append(finding(
-                "mcp-env", name, "drift",
-                "auth references %s, which is UNSET in this environment — the hub is "
-                "probably fine; this process (and any headless child it spawns) cannot "
-                "authenticate to it" % ", ".join("$" + u for u in unset),
-                expected="env var set", actual=unset))
-            continue
-
-        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
-        req = urllib.request.Request(url, data=body, method="POST", headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-            "Authorization": auth,
-        })
-        try:
-            with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as r:
-                raw = r.read().decode("utf-8", "replace")
-            n = raw.count('"name"')
-            out.append(finding("mcp", name, "ok", "live — tools/list returned ~%d entries" % n,
-                               actual=url))
-        except urllib.error.HTTPError as e:
-            verdict = "drift" if e.code in (401, 403, 404) else "unknown"
-            note = " (token expired or revoked)" if e.code in (401, 403) else ""
-            out.append(finding("mcp", name, verdict, "HTTP %s%s" % (e.code, note), actual=url))
-        except Exception as e:
-            # Network failure is UNKNOWN. The hub may be perfectly healthy.
-            out.append(finding("mcp", name, "unknown", "unreachable: %s" % e, actual=url))
-
-    # Absence of a whole estate's hub is a finding only where that estate is actually in
-    # scope for THIS deployment, and which estates exist at all is a Tier-2/3 fact this
-    # engine does not hardcode. A profile-specific wrapper that DOES know its estate names
-    # can add that advisory on top of these per-server findings; the shared engine only
-    # reports what it can observe about the servers actually configured.
-    if skipped_by_profile is not None and notes is not None and skipped_by_profile:
-        notes.append("MCP probes restricted to --profile %r: %d hub(s) NOT probed and NOT "
-                     "counted — %s. Correctly out of scope; named here so the denominator "
-                     "is never smaller than it looks."
-                     % (profile, len(skipped_by_profile), ", ".join(skipped_by_profile)))
+    # ---- PROPOSAL: no hub matches the profile, but a connector visibly does ------------
+    # SELF-CURATION, the MCP-shaped sibling of the uncloned-repo proposal above: a
+    # deployment can name its estate as a --profile without ever having declared HOW that
+    # estate's MCP is reached. If a live connector's name plainly names the same estate,
+    # propose the declaration rather than leaving the operator to author lockfile JSON by
+    # hand. Never auto-applied -- same contract as every other proposal in this file.
+    if profile and not any(n.startswith(profile) for n in servers):
+        rc, lines = probe_claude_mcp_list()
+        if rc == 0:
+            match = None
+            for ln in lines:
+                candidate = ln.split(":", 1)[0].strip()
+                if candidate and profile.lower() in candidate.lower():
+                    match = candidate
+                    break
+            if match:
+                sanit = sanitise_mcp_name(match)
+                out.append(finding(
+                    "mcp", profile, "drift",
+                    "no hub name starts with %r, but `claude mcp list` shows a connector "
+                    "named %r — confirming this proposal declares mcp.profiles.%s as that "
+                    "connector, so it becomes the verifiable source instead of the "
+                    "name-prefix guess" % (profile, match, profile),
+                    proposal={"path": "mcp.profiles.%s" % profile,
+                              "value": {"kind": "connector", "servers": [match],
+                                        "toolPrefix": "mcp__%s__" % sanit}}))
     return out
 
 
@@ -1037,7 +1144,7 @@ def build_report(profile):
     findings += probe_cloud()
     findings += probe_repos(manifest, lock, probed, scope)
     findings += probe_layout(lock)
-    findings += probe_mcp(profile, scope, notes)
+    findings += probe_mcp(profile, scope, notes, lock)
 
     drift = [f for f in findings if f["verdict"] == "drift"]
     unknown = [f for f in findings if f["verdict"] == "unknown"]

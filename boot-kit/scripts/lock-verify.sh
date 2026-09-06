@@ -16,6 +16,9 @@
 #   L8  every hook ON THE MACHINE is declared here     (the reverse direction, for hooks)
 #   L9  every declared hook is WIRED in the live settings, and every wired path exists
 #   L10 every skill ON THE MACHINE is declared here    (the reverse direction, for skills)
+#   L11 every materialised plugin still matches its pin (a copy, not a symlink)
+#   L12 every plugin's own invariants suite, if it ships one, still passes
+#   L13 every estate's declared MCP source (a hub set, or a claude.ai connector) is present
 #
 # L8/L9 added 2026-08-29. L1..L7 could all pass on a machine that boots with no identity and
 # no memory, because the hooks supplying those were in no lockfile (L8) or in one and wired
@@ -929,6 +932,89 @@ else
       printf '%s\n' "$L12OUT" | tail -3 | while IFS= read -r l; do note "$l"; done
     fi
   done < <(jq -c '(.install.plugins // [])[]' "$LOCK")
+fi
+
+echo ""
+
+# ---- L13: estate MCP declared and present ------------------------------------
+# ADDED for M-KITV2 B24. Which servers in ~/.claude.json (or which claude.ai CONNECTOR)
+# actually serve a given estate is a MACHINE fact -- recorded, when known, as
+# `mcp.profiles.<estate>` in this lockfile (see the starter-kit template's `$comment`). Before
+# this layer, nothing verified that record against reality: a stale `hubs` list, or a
+# connector that had quietly disconnected, would sit in the lockfile looking authoritative
+# forever, because df-worker's own NAME-PREFIX fallback would keep finding SOMETHING to
+# launch with and never say the declared source was wrong.
+#
+# ⚠️ THE THREE-WAY VERDICT MATTERS MORE HERE THAN ANYWHERE ELSE IN THIS FILE. `kind: hubs` is
+# checked purely from the lockfile and ~/.claude.json -- no network, so its verdict is always
+# ok/drift, never unknown. `kind: connector` needs a LIVE `claude mcp list`, so a machine with
+# no `claude` on PATH (or one where the listing itself fails) can say NOTHING about whether the
+# connector is actually connected -- that is UNKNOWN, never a silent pass and never drift.
+#
+# `LOCK_VERIFY_CLAUDE_BIN` exists for the same reason `LOOM_LIVE` does: a suite must not shell
+# out to the real `claude` on the machine running the tests, so a stub binary can be named by
+# this variable exactly as `LOOM_LIVE` redirects the hooks/skills root.
+echo "[L13] estate MCP declared and present"
+CLAUDE_JSON="${LOOM_CLAUDE_JSON:-$HOME/.claude.json}"
+CLAUDE_BIN="${LOCK_VERIFY_CLAUDE_BIN:-claude}"
+L13_PROFILES="$(jq -r '(.mcp.profiles // {}) | keys[] | select(startswith("$") | not)' "$LOCK")"
+if [ -z "$L13_PROFILES" ]; then
+  note "L13 mcp.profiles undeclared — prefix rule in force; declare it to make each estate's MCP source verifiable"
+else
+  L13_LISTED=0
+  L13_LIST_OUT=""
+  L13_LIST_OK=0
+  while IFS= read -r prof; do
+    [ -n "$prof" ] || continue
+    kind="$(jq -r --arg p "$prof" '.mcp.profiles[$p].kind // empty' "$LOCK")"
+    case "$kind" in
+      hubs)
+        L13BAD=""
+        while IFS= read -r srv; do
+          [ -n "$srv" ] || continue
+          if [ -f "$CLAUDE_JSON" ] && jq -e --arg s "$srv" '.mcpServers[$s]' "$CLAUDE_JSON" >/dev/null 2>&1
+          then :
+          else L13BAD="$L13BAD$srv"$'\n'
+          fi
+        done < <(jq -r --arg p "$prof" '(.mcp.profiles[$p].servers // [])[]' "$LOCK")
+        if [ -n "$L13BAD" ]; then
+          drift "L13 profile $prof (hubs): server(s) missing from $CLAUDE_JSON mcpServers:"
+          printf '%s' "$L13BAD" | while read -r n; do [ -n "$n" ] && note "$n"; done
+        else
+          pass "L13 profile $prof (hubs): every declared server is present"
+        fi
+        ;;
+      connector)
+        if [ "$L13_LISTED" -eq 0 ]; then
+          L13_LISTED=1
+          if command -v "$CLAUDE_BIN" >/dev/null 2>&1; then
+            L13_LIST_OUT="$("$CLAUDE_BIN" mcp list 2>&1)" && L13_LIST_OK=1
+          fi
+        fi
+        srv="$(jq -r --arg p "$prof" '(.mcp.profiles[$p].servers // [])[0] // empty' "$LOCK")"
+        if [ "$L13_LIST_OK" -ne 1 ]; then
+          unknown "L13 profile $prof (connector): could not run '$CLAUDE_BIN mcp list' — probe could not run"
+        elif [ -z "$srv" ]; then
+          drift "L13 profile $prof (connector): mcp.profiles.$prof declares no server name"
+        else
+          L13FOUND=0
+          while IFS= read -r ln; do
+            case "$ln" in
+              "$srv"*) case "$ln" in *Connected*) L13FOUND=1 ;; esac ;;
+            esac
+          done <<<"$L13_LIST_OUT"
+          if [ "$L13FOUND" -eq 1 ]; then
+            pass "L13 profile $prof (connector): $srv is Connected"
+          else
+            drift "L13 profile $prof (connector): no line starting with '$srv' and containing Connected in '$CLAUDE_BIN mcp list'"
+          fi
+        fi
+        ;;
+      *)
+        drift "L13 profile $prof: unrecognised kind '${kind:-<absent>}' — expected hubs or connector"
+        ;;
+    esac
+  done <<<"$L13_PROFILES"
 fi
 
 echo ""

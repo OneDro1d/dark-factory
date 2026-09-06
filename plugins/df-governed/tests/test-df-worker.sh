@@ -338,6 +338,47 @@ if printf '%s\n' "$OUT" | grep -q '^DF_CLAIM_TOOL='; then bad "CT13 no DF_CLAIM_
 if printf '%s\n' "$OUT" | grep -q '^DF_CLAIM_ITEM_KEYS='; then bad "CT14 no DF_CLAIM_ITEM_KEYS when not given" "line present"; else ok "CT14 no DF_CLAIM_ITEM_KEYS when not given"; fi
 if printf '%s\n' "$OUT" | grep -q '^DF_CLAIM_VALUES_KEY='; then bad "CT15 no DF_CLAIM_VALUES_KEY when not given" "line present"; else ok "CT15 no DF_CLAIM_VALUES_KEY when not given"; fi
 
+echo ""
+# ── case 14: connector mode — B24 ───────────────────────────────────────────────────────
+# mcp-profile-config.py in `kind: connector` prints a PLAN line and writes NO config file.
+# This launcher must then skip --mcp-config/--strict-mcp-config entirely, fold the plan's
+# disallow entries into --disallowedTools, export DF_MCP_MODE=connector, and print
+# `mcp-mode: connector (<name>)` instead of `mcp-profile: <p>`. A stub replaces the real
+# tool (via MCP_PROFILE_CONFIG, the launcher's own override knob) so this exercises exactly
+# the launcher's parsing, not the tool's own PLAN-shape correctness — that lives in
+# test-mcp-profile-config.sh.
+STUB="$WORK/stub-mcp-profile-config.py"
+cat > "$STUB" <<'PY'
+#!/usr/bin/env python3
+import json, sys
+plan = {"mode": "connector", "name": "claude.ai Example",
+        "allowPrefix": "mcp__claude_ai_Example__",
+        "disallow": ["mcp__onedroid__*", "mcp__hub_b__*", "mcp__plugin_*"]}
+print("mcp-profile-config: INFO stub connector plan", file=sys.stderr)
+print("PLAN " + json.dumps(plan))
+sys.exit(0)
+PY
+
+OUTCN="$(run_dry env WORKER_MCP_PROFILE=tp MCP_PROFILE_CONFIG="$STUB" \
+        "$WORKER" dev 12345 "p" --dry-run)"; RCCN=$?
+if [ "$RCCN" -eq 0 ]; then ok "CN1 connector mode --dry-run exits 0"; else bad "CN1 connector mode --dry-run exits 0" "rc=$RCCN: $OUTCN"; fi
+ARGVCN="$(printf '%s\n' "$OUTCN" | awk '/^---- argv ----$/{a=1;next} /^---- prompt ----$/{a=0} a')"
+noline "CN2 --mcp-config is NOT in argv for a connector"       "--mcp-config"       "$ARGVCN"
+noline "CN3 --strict-mcp-config is NOT in argv for a connector" "--strict-mcp-config" "$ARGVCN"
+pair "CN4 --disallowedTools carries the plan's first disallow entry"  "--disallowedTools" "mcp__onedroid__*" "$ARGVCN"
+pair "CN5 --disallowedTools carries the plan's second disallow entry" "mcp__onedroid__*"  "mcp__hub_b__*"    "$ARGVCN"
+pair "CN6 --disallowedTools carries mcp__plugin_*"                    "mcp__hub_b__*"     "mcp__plugin_*"    "$ARGVCN"
+hasline "CN7 --dry-run prints mcp-mode: connector (<name>)" "mcp-mode: connector (claude.ai Example)" "$OUTCN"
+noline  "CN8 no mcp-profile: line when in connector mode"    "mcp-profile: tp"                        "$OUTCN"
+hasline "CN9 env shows DF_MCP_MODE=connector"                "DF_MCP_MODE=connector"                  "$OUTCN"
+hasline "CN10 --dry-run names each disallow entry (plan-derived, same mechanism as --disallow-tool)" \
+        "disallow: mcp__plugin_*" "$OUTCN"
+
+# hubs mode (case 1's $OUT, no stub involved) exports DF_MCP_MODE=hubs, and never emits a
+# mcp-mode: line — the two modes are mutually exclusive in the dry-run output.
+hasline "CN11 hubs mode env shows DF_MCP_MODE=hubs" "DF_MCP_MODE=hubs" "$OUT"
+noline  "CN12 hubs mode never prints an mcp-mode: line" "mcp-mode: " "$OUT"
+
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]

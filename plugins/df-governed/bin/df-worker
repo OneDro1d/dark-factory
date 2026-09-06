@@ -341,10 +341,49 @@ chmod 700 "$MCPDIR" 2>/dev/null || true
 trap 'rm -rf "$MCPDIR"' EXIT
 MCP_CFG="$MCPDIR/mcp-$PROFILE.json"
 
-if ! python3 "$MCP_TOOL" --profile "$PROFILE" --out "$MCP_CFG" \
-        --config "${WORKER_MCP_SOURCE:-$HOME/.claude.json}" >&2; then
-  die "no MCP config for profile '$PROFILE' — REFUSING to launch. A worker with no tracker cannot report that it has none, so this failure would be silent by construction."
+# ── B24: mcp-profile-config.py may answer in one of TWO shapes now ──────────────────────
+# `hubs`      — the original shape: it writes $MCP_CFG, and this launcher allow-lists it via
+#               --mcp-config/--strict-mcp-config, exactly as before.
+# `connector` — a claude.ai CONNECTOR is not a file-based server at all (measured: it
+#               appears in NO file, not even ~/.claude.json), so there is nothing to write
+#               into a strict config. mcp-profile-config.py instead prints a machine-readable
+#               `PLAN {...}` line on STDOUT and writes no file; this launcher reads that line
+#               and scopes the connector by DENYING every other server's tools via the
+#               existing --disallowedTools mechanism, rather than allow-listing one.
+# Stdout is captured (never merged into stderr, unlike before) so the PLAN line can be told
+# apart from the WARN/INFO lines mcp-profile-config.py prints on stderr; stderr still flows
+# through live, exactly as it did when both fds were merged.
+MCP_STDOUT="$(python3 "$MCP_TOOL" --profile "$PROFILE" --out "$MCP_CFG" \
+        --config "${WORKER_MCP_SOURCE:-$HOME/.claude.json}")"
+MCP_RC=$?
+MCP_REFUSAL="no MCP config for profile '$PROFILE' — REFUSING to launch. A worker with no tracker cannot report that it has none, so this failure would be silent by construction. Declare mcp.profiles.$PROFILE in the instance lockfile, or run df-preflight --profile $PROFILE which proposes it."
+[ "$MCP_RC" -eq 0 ] || die "$MCP_REFUSAL"
+
+MCP_PLAN_LINE="$(printf '%s\n' "$MCP_STDOUT" | grep -m1 '^PLAN ')"
+if [ -n "$MCP_PLAN_LINE" ]; then
+  MCP_MODE="connector"
+  MCP_PLAN_JSON="${MCP_PLAN_LINE#PLAN }"
+  MCP_CONNECTOR_NAME="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$MCP_PLAN_JSON")" \
+    || die "$MCP_REFUSAL (PLAN line could not be parsed)"
+  # The plan's own disallow entries join the caller's --disallow-tool values in ONE list —
+  # same mechanism, same argv shape, so a connector-mode worker's tool denial is asserted
+  # exactly like every other --disallow-tool case.
+  while IFS= read -r pd; do
+    [ -n "$pd" ] && DISALLOW_LIST="$DISALLOW_LIST$pd
+"
+  done < <(python3 -c '
+import json, sys
+for d in json.loads(sys.argv[1]).get("disallow", []):
+    print(d)
+' "$MCP_PLAN_JSON")
+elif [ -f "$MCP_CFG" ]; then
+  MCP_MODE="hubs"
+else
+  # mcp-profile-config.py exited 0 but produced NEITHER a config file NOR a PLAN line — the
+  # same silent-by-construction shape the original refusal exists to catch, one layer up.
+  die "$MCP_REFUSAL (exited 0 but wrote no config and printed no PLAN line)"
 fi
+export DF_MCP_MODE="$MCP_MODE"
 
 # ── the brief ───────────────────────────────────────────────────────────────────────────
 # Compact on purpose. The frame is on disk beside the worker; repeating it here would pay
@@ -405,7 +444,12 @@ set -- "$@" --plugin-dir "$PLUGIN_ROOT"
 set -- "$@" --setting-sources project
 set -- "$@" --add-dir "$SCRATCH"
 [ -n "$REPO" ] && set -- "$@" --add-dir "$REPO"
-set -- "$@" --mcp-config "$MCP_CFG" --strict-mcp-config
+# hubs mode allow-lists via --mcp-config/--strict-mcp-config, exactly as before. connector
+# mode passes NEITHER flag — a claude.ai connector isn't a file-based server to allow-list,
+# so scoping happens entirely through the --disallowedTools list built above.
+if [ "$MCP_MODE" = "hubs" ]; then
+  set -- "$@" --mcp-config "$MCP_CFG" --strict-mcp-config
+fi
 if [ -n "$DISALLOW_LIST" ]; then
   set -- "$@" --disallowedTools
   while IFS= read -r dn; do
@@ -445,7 +489,11 @@ export DF_SCRATCH="$SCRATCH"
 if [ "$DRY" = "1" ]; then
   printf 'scratch: %s\n' "$SCRATCH"
   printf 'plugin-root: %s\n' "$PLUGIN_ROOT"
-  printf 'mcp-profile: %s\n' "$PROFILE"
+  if [ "$MCP_MODE" = "connector" ]; then
+    printf 'mcp-mode: connector (%s)\n' "$MCP_CONNECTOR_NAME"
+  else
+    printf 'mcp-profile: %s\n' "$PROFILE"
+  fi
   printf 'frame:%s\n' "${FRAME:- (none)}"
   printf '%s' "$RULES_LIST" | while IFS= read -r rf; do
     [ -n "$rf" ] && printf 'rules: %s\n' "$rf"
@@ -465,6 +513,7 @@ if [ "$DRY" = "1" ]; then
   printf 'DF_ROLE=%s\n' "$DF_ROLE"
   printf 'DF_MISSION=%s\n' "$DF_MISSION"
   printf 'DF_SCRATCH=%s\n' "$DF_SCRATCH"
+  printf 'DF_MCP_MODE=%s\n' "$DF_MCP_MODE"
   [ -n "$CLAIM_COLUMNS" ] && printf 'DF_CLAIM_COLUMNS=%s\n' "$DF_CLAIM_COLUMNS"
   [ -n "$CLAIM_TOOL" ] && printf 'DF_CLAIM_TOOL=%s\n' "$DF_CLAIM_TOOL"
   [ -n "$CLAIM_ITEM_KEYS" ] && printf 'DF_CLAIM_ITEM_KEYS=%s\n' "$DF_CLAIM_ITEM_KEYS"
