@@ -379,6 +379,47 @@ hasline "CN10 --dry-run names each disallow entry (plan-derived, same mechanism 
 hasline "CN11 hubs mode env shows DF_MCP_MODE=hubs" "DF_MCP_MODE=hubs" "$OUT"
 noline  "CN12 hubs mode never prints an mcp-mode: line" "mcp-mode: " "$OUT"
 
+echo ""
+# ── case 15: the VENDORED layout reads the INSTANCE's lockfile, not the vendor dir's ──────
+# Measured 2026-09-06 on the first connector-mode dispatch through a kit's vendored Tier-2
+# shim: this launcher ran from <kit>/vendor/dark-factory/plugins/df-governed/, KIT_ROOT was
+# <kit>/vendor/dark-factory, its own boot-kit/scripts/mcp-profile-config.py existed, and that
+# copy looked for the lockfile two levels above ITSELF -- vendor/dark-factory, which has none.
+# mcp.profiles read as undeclared; the prefix rule took over silently. Now the instance root
+# is derived from df-mission on PATH and passed as --kit-root, so a `kind: connector` entry
+# in the INSTANCE's root lockfile produces connector mode even from the vendored copy. No
+# stub tool here: the real mcp-profile-config.py, in the position it really occupies.
+VEND="$WORK/vendored"
+T1SRC="$(cd "$(dirname "$WORKER")/../../.." && pwd)"
+mkdir -p "$VEND/vendor/dark-factory/boot-kit/scripts" "$VEND/vendor/dark-factory/plugins" "$VEND/boot-kit/scripts" "$VEND/bin"
+cp -R "$PLUGIN_ROOT" "$VEND/vendor/dark-factory/plugins/df-governed"
+cp "$T1SRC/boot-kit/scripts/mcp-profile-config.py" "$VEND/vendor/dark-factory/boot-kit/scripts/"
+cp "$T1SRC/boot-kit/scripts/mcp-profile-config.py" "$VEND/boot-kit/scripts/"
+printf '#!/usr/bin/env bash\necho df-mission-stub\n' > "$VEND/boot-kit/scripts/df-mission"
+chmod +x "$VEND/boot-kit/scripts/df-mission"
+ln -s "$VEND/boot-kit/scripts/df-mission" "$VEND/bin/df-mission"
+cat > "$VEND/loom.lock.json" <<'JSON'
+{"machine": {"platform": "PLATFORM_PLACEHOLDER", "home": "HOME_PLACEHOLDER"},
+ "mcp": {"profiles": {"tp": {"kind": "connector", "servers": ["claude.ai Example"], "toolPrefix": "mcp__claude_ai_Example__"}}}}
+JSON
+python3 - "$VEND/loom.lock.json" <<'PY'
+import json, os, platform, sys
+p = sys.argv[1]; d = json.load(open(p))
+d["machine"] = {"platform": platform.system(), "home": os.path.expanduser("~")}
+json.dump(d, open(p, "w"), indent=1)
+PY
+VW="$VEND/vendor/dark-factory/plugins/df-governed/bin/df-worker"
+OUT15="$(run_dry env PATH="$VEND/bin:$PATH" WORKER_MCP_PROFILE=tp "$VW" dev 12345 "p" --dry-run)"; RC15=$?
+if [ "$RC15" -eq 0 ]; then ok "V1 vendored layout --dry-run exits 0"; else bad "V1 vendored layout --dry-run exits 0" "rc=$RC15: $OUT15"; fi
+hasline "V2 vendored layout reads the INSTANCE lockfile: connector mode" "mcp-mode: connector (claude.ai Example)" "$OUT15"
+noline  "V3 vendored layout did not fall back to the prefix rule"        "mcp.profiles is undeclared"              "$OUT15"
+ARGV15="$(printf '%s\n' "$OUT15" | awk '/^---- argv ----$/{a=1;next} /^---- prompt ----$/{a=0} a')"
+noline  "V4 no --strict-mcp-config for the connector"                    "--strict-mcp-config"                     "$ARGV15"
+# and WITHOUT df-mission on PATH the vendored copy still runs the old default (its own two-up),
+# which for this fixture holds no lockfile -> prefix rule, not a crash
+OUT15b="$(run_dry env PATH="/usr/bin:/bin" WORKER_MCP_PROFILE=tp "$VW" dev 12345 "p" --dry-run)"
+contains "V5 without df-mission on PATH the fallback is the prefix rule, stated" "mcp.profiles is undeclared" "$OUT15b"
+
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]

@@ -90,11 +90,23 @@ MCP_TOOL="${MCP_PROFILE_CONFIG:-$KIT_ROOT/boot-kit/scripts/mcp-profile-config.py
 # guarantees about that directory is that rehydrate.sh links df-mission from it onto PATH.
 # So the engine dir is: where df-mission really lives. Resolved through the symlink with
 # python3 (readlink -f is not portable to macOS).
-if [ ! -f "$MCP_TOOL" ]; then
-  _dm="$(command -v df-mission 2>/dev/null || true)"
-  if [ -n "$_dm" ]; then
-    _eng="$(python3 -c 'import os,sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$_dm" 2>/dev/null || true)"
-    if [ -n "$_eng" ] && [ -f "$_eng/mcp-profile-config.py" ]; then
+# ⚠️ AND THE VENDORED LAYOUT IS A FOURTH. Measured 2026-09-06, first connector-mode dispatch
+# through a kit's vendored Tier-2 shim: this file ran from <kit>/vendor/dark-factory/plugins/
+# df-governed/, so KIT_ROOT was <kit>/vendor/dark-factory, its boot-kit/scripts/mcp-profile-
+# config.py EXISTED (the vendored Tier 1), the fallback below never fired -- and that copy
+# looked for the machine lockfile two levels above ITSELF: vendor/dark-factory, which holds
+# none. mcp.profiles silently read as undeclared and the prefix rule took over. The lockfile
+# lives in the INSTANCE, and the one thing every layout shares is df-mission on PATH linked
+# from the instance's engine dir, so the instance root is derived from that and handed to
+# mcp-profile-config as --kit-root whenever it resolves. Which COPY of the tool runs still
+# follows the rule above; WHERE it looks for the lockfile no longer depends on it.
+INSTANCE_ROOT=""
+_dm="$(command -v df-mission 2>/dev/null || true)"
+if [ -n "$_dm" ]; then
+  _eng="$(python3 -c 'import os,sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$_dm" 2>/dev/null || true)"
+  if [ -n "$_eng" ]; then
+    INSTANCE_ROOT="$(cd "$_eng/../.." 2>/dev/null && pwd || true)"
+    if [ ! -f "$MCP_TOOL" ] && [ -f "$_eng/mcp-profile-config.py" ]; then
       MCP_TOOL="$_eng/mcp-profile-config.py"
     fi
   fi
@@ -354,7 +366,8 @@ MCP_CFG="$MCPDIR/mcp-$PROFILE.json"
 # apart from the WARN/INFO lines mcp-profile-config.py prints on stderr; stderr still flows
 # through live, exactly as it did when both fds were merged.
 MCP_STDOUT="$(python3 "$MCP_TOOL" --profile "$PROFILE" --out "$MCP_CFG" \
-        --config "${WORKER_MCP_SOURCE:-$HOME/.claude.json}")"
+        --config "${WORKER_MCP_SOURCE:-$HOME/.claude.json}" \
+        ${INSTANCE_ROOT:+--kit-root "$INSTANCE_ROOT"})"
 MCP_RC=$?
 MCP_REFUSAL="no MCP config for profile '$PROFILE' — REFUSING to launch. A worker with no tracker cannot report that it has none, so this failure would be silent by construction. Declare mcp.profiles.$PROFILE in the instance lockfile, or run df-preflight --profile $PROFILE which proposes it."
 [ "$MCP_RC" -eq 0 ] || die "$MCP_REFUSAL"
