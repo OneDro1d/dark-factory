@@ -81,7 +81,7 @@ def sanitise_name(name):
     return NAME_SANITISE.sub("_", name or "")
 
 
-def resolve_machine_lock():
+def resolve_machine_lock(kit_root=None):
     """Which instance lockfile describes THIS machine -- the same SMALL rule df-preflight's
     find_lock() applies, reimplemented rather than imported (this script stays standalone;
     see the module docstring's refusal-to-import precedent in df-worker).
@@ -92,7 +92,15 @@ def resolve_machine_lock():
     the caller's fallback is the untouched, always-safe prefix rule, so "cannot tell" is never
     treated as "cannot proceed".
     """
-    kit_root = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
+    # kit_root defaults to two levels above THIS file -- right in an instance whose engine
+    # is materialised into <instance>/boot-kit/scripts/. WRONG when this file runs from a
+    # VENDORED Tier 1 (<instance>/vendor/dark-factory/boot-kit/scripts/): two levels up is
+    # vendor/dark-factory, which holds no lockfile, so lookup returned None and the prefix
+    # rule silently took over -- measured 2026-09-06 on the first connector-mode dispatch
+    # from a kit's vendored shim. df-worker therefore passes --kit-root (the directory
+    # df-mission on PATH really lives under); the default stays for direct invocations.
+    if not kit_root:
+        kit_root = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
     cands = []
     if os.path.isdir(kit_root):
         for n in sorted(os.listdir(kit_root)):
@@ -196,6 +204,10 @@ def main():
     ap.add_argument("--lock", default=None,
                      help="instance lockfile to read mcp.profiles from (else auto-resolved "
                           "the same way df-preflight resolves the machine's lockfile)")
+    ap.add_argument("--kit-root", default=None,
+                     help="instance root to discover the machine lockfile under (default: two "
+                          "levels above this file -- wrong when this file is the VENDORED copy; "
+                          "df-worker passes the root df-mission on PATH lives under)")
     a = ap.parse_args()
 
     try:
@@ -210,7 +222,7 @@ def main():
         print("mcp-profile-config: no mcpServers in %s" % a.config, file=sys.stderr)
         return 3
 
-    lock_path = a.lock or resolve_machine_lock()
+    lock_path = a.lock or resolve_machine_lock(a.kit_root)
     lock = {}
     if lock_path:
         try:
