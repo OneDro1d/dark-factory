@@ -178,6 +178,24 @@ Report the counts of `ok` / `drift` / `unknown`, and any drift **with its propos
 ⚠️ Preflight **proposes and never applies**. If something offers to rewrite the lockfile for you,
 that is a finding.
 
+## 4b · Confirm your estate's MCP source
+
+Which MCP servers actually serve this estate — a `hubs` set in `~/.claude.json`, or a claude.ai
+**connector** — is a MACHINE fact, declared (when it is known) as `mcp.profiles.<estate>` in the
+lockfile. If it was never declared, every tool still runs on a NAME-PREFIX guess, and this task
+proves that guess is right (or replaces it).
+
+```sh
+<engine>/df-preflight.py --report --profile <estate>
+```
+
+Read the `mcp` row(s). **PASS** if the declared source resolves `ok`. If the row instead offers a
+proposal — a live connector visibly matching `<estate>` by name, or a hub set df-preflight found —
+confirm it names the right server, then apply it the same way every other proposal here is applied
+(never blind; the operator confirms first). Then re-run `lock-verify.sh` and confirm **L13**
+prints `PASS` for this estate. If `mcp.profiles` is still undeclared and no proposal fired, L13
+prints an `INFO` line, not a failure — record that as the current state, not a defect to silence.
+
 ## 5 · Continuity: the half that only appears after a reset
 
 This is the machinery most likely to be silently dead, because nothing complains when it is.

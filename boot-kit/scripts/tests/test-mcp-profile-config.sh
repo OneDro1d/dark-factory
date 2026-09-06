@@ -101,6 +101,85 @@ python3 "$GATE" --profile onedroid --config "$WORK/nope.json" --out "$WORK/o3.js
 if [ "$RC" -eq 2 ]; then ok "M7 exits 2 on an unreadable config"; else bad "M7 exits 2" "rc=$RC"; fi
 
 echo ""
+# ══ B24: mcp.profiles — a lockfile entry beats the name-prefix guess ═════════════════════
+# The prefix rule above is a GUESS. When the instance lockfile DECLARES which servers serve
+# an estate, that record is used instead — hubs (an exact server list) or a claude.ai
+# connector (which appears in no file, so nothing is written; a PLAN line is printed instead).
+
+# ---- 8. no entry for the profile: the OLD rule runs, plus one INFO line -----
+LOCK_NOENTRY="$WORK/noentry.lock.json"
+cat > "$LOCK_NOENTRY" <<'JSON'
+{"mcp": {"profiles": {}}}
+JSON
+OUT8="$(python3 "$GATE" --profile onedroid --config "$CFG" --lock "$LOCK_NOENTRY" \
+        --out "$WORK/o8.json" 2>&1)"; RC8=$?
+if [ "$RC8" -eq 0 ]; then ok "L1 no mcp.profiles entry: exits 0 (prefix rule still runs)"
+else bad "L1 no mcp.profiles entry: exits 0" "rc=$RC8: $OUT8"; fi
+contains "L2 the INFO line names the undeclared profile" "mcp.profiles is undeclared for profile 'onedroid'" "$OUT8"
+contains "L3 the INFO line is marked INFO"                "INFO"                                            "$OUT8"
+BODY8="$(cat "$WORK/o8.json" 2>/dev/null)"
+contains "L4 the prefix-rule hub is still kept" '"onedroid"' "$BODY8"
+
+# ---- 9. kind hubs: EXACTLY the declared servers, not the prefix guess -------
+LOCK_HUBS="$WORK/hubs.lock.json"
+cat > "$LOCK_HUBS" <<'JSON'
+{"mcp": {"profiles": {"onedroid": {"kind": "hubs", "servers": ["onedroid", "hub-b"]}}}}
+JSON
+OUT9="$(python3 "$GATE" --profile onedroid --config "$CFG" --lock "$LOCK_HUBS" \
+        --out "$WORK/o9.json" 2>&1)"; RC9=$?
+if [ "$RC9" -eq 0 ]; then ok "H1 hubs-from-lock exits 0"; else bad "H1 hubs-from-lock exits 0" "rc=$RC9: $OUT9"; fi
+BODY9="$(cat "$WORK/o9.json" 2>/dev/null)"
+contains "H2 the declared onedroid hub is kept" '"onedroid"' "$BODY9"
+contains "H3 the declared hub-b IS kept (it is declared, prefix would exclude it)" '"hub-b"' "$BODY9"
+absent   "H4 onedroid-dev is NOT kept (not in the declared list)" '"onedroid-dev"' "$BODY9"
+absent   "H5 no INFO line when the profile IS declared" "mcp.profiles is undeclared" "$OUT9"
+
+# ---- 10. kind hubs: a missing server exits 2, naming it, writes nothing ------
+LOCK_MISSING="$WORK/missing.lock.json"
+cat > "$LOCK_MISSING" <<'JSON'
+{"mcp": {"profiles": {"onedroid": {"kind": "hubs", "servers": ["onedroid", "no-such-hub"]}}}}
+JSON
+OUT10="$(python3 "$GATE" --profile onedroid --config "$CFG" --lock "$LOCK_MISSING" \
+         --out "$WORK/o10.json" 2>&1)"; RC10=$?
+if [ "$RC10" -eq 2 ]; then ok "H6 a missing declared hub exits 2"; else bad "H6 a missing declared hub exits 2" "rc=$RC10"; fi
+contains "H7 the refusal names the missing hub" "no-such-hub" "$OUT10"
+if [ -f "$WORK/o10.json" ]; then bad "H8 nothing is written when a declared hub is missing" "a file was written anyway"
+else ok "H8 nothing is written when a declared hub is missing"; fi
+
+# ---- 11. kind connector: NO file written, a PLAN line on stdout -------------
+LOCK_CONN="$WORK/connector.lock.json"
+cat > "$LOCK_CONN" <<'JSON'
+{"mcp": {"profiles": {"onedroid": {"kind": "connector", "servers": ["claude.ai Example"], "toolPrefix": "mcp__claude_ai_Example__"}}}}
+JSON
+OUT11="$(python3 "$GATE" --profile onedroid --config "$CFG" --lock "$LOCK_CONN" \
+         --out "$WORK/o11.json" 2>&1)"; RC11=$?
+if [ "$RC11" -eq 0 ]; then ok "C1 connector plan exits 0"; else bad "C1 connector plan exits 0" "rc=$RC11: $OUT11"; fi
+if [ -f "$WORK/o11.json" ]; then bad "C2 no --mcp-config file is written for a connector" "a file was written"
+else ok "C2 no --mcp-config file is written for a connector"; fi
+PLAN_LINE="$(printf '%s\n' "$OUT11" | grep '^PLAN ')"
+if [ -n "$PLAN_LINE" ]; then ok "C3 a PLAN line is printed"; else bad "C3 a PLAN line is printed" "none found in: $OUT11"; fi
+PLAN_JSON="${PLAN_LINE#PLAN }"
+if printf '%s' "$PLAN_JSON" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null
+then ok "C4 the PLAN payload is valid JSON"; else bad "C4 the PLAN payload is valid JSON" "parse failed: $PLAN_JSON"; fi
+PLAN_MODE="$(printf '%s' "$PLAN_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("mode"))')"
+[ "$PLAN_MODE" = "connector" ] && ok "C5 plan mode is connector" || bad "C5 plan mode is connector" "got '$PLAN_MODE'"
+PLAN_NAME="$(printf '%s' "$PLAN_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("name"))')"
+[ "$PLAN_NAME" = "claude.ai Example" ] && ok "C6 plan names the connector server exactly" || bad "C6 plan names the connector server exactly" "got '$PLAN_NAME'"
+PLAN_PREFIX="$(printf '%s' "$PLAN_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("allowPrefix"))')"
+[ "$PLAN_PREFIX" = "mcp__claude_ai_Example__" ] && ok "C7 allowPrefix is sanitised exactly ('claude.ai Example' -> 'claude_ai_Example')" \
+                                                 || bad "C7 allowPrefix sanitised" "got '$PLAN_PREFIX'"
+DISALLOW_HAS() { printf '%s' "$PLAN_JSON" | python3 -c "
+import json, sys
+d = json.load(sys.stdin).get('disallow', [])
+sys.exit(0 if '$1' in d else 1)
+"; }
+if DISALLOW_HAS "mcp__onedroid__*"; then ok "C8 disallow denies the onedroid hub"; else bad "C8 disallow denies the onedroid hub" "absent"; fi
+if DISALLOW_HAS "mcp__onedroid_dev__*"; then ok "C9 disallow denies onedroid-dev (sanitised)"; else bad "C9 disallow denies onedroid-dev (sanitised)" "absent"; fi
+if DISALLOW_HAS "mcp__hub_b__*"; then ok "C10 disallow denies hub-b (sanitised)"; else bad "C10 disallow denies hub-b (sanitised)" "absent"; fi
+if DISALLOW_HAS "mcp__plugin_*"; then ok "C11 disallow always includes mcp__plugin_*"; else bad "C11 disallow always includes mcp__plugin_*" "absent"; fi
+absent "C12 a literal token never reaches stdout for a connector plan" "LITERALTOKEN1" "$OUT11"
+
+echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]
