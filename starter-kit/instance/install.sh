@@ -76,6 +76,42 @@ UNFILLED="$(jq -r '
   | unique | join(" ")' "$LOCK" 2>/dev/null)"
 [ -n "$UNFILLED" ] && say "WARN  unresolved placeholders still in the lockfile: $UNFILLED"
 
+# ---- 0b. the lockfile SHAPE guard --------------------------------------------
+# ⛔ PORTED IN 2026-09-07, AND ITS ABSENCE HERE WAS A REAL GAP — found only by merging the
+# two Tier-3 generators. The org-layer's copy of this installer carried this guard; THIS
+# file, the one the operator has now made canonical, did not. So the claim that Tier 1's
+# generator was "a strict superset" was WRONG on exactly one thing, and it was a safety
+# check. `test-lock-verify-l7-shape.sh` caught it the moment its fixture was repointed here:
+# the installer ACCEPTED an `install.hooks` that lock-verify L7 REFUSES.
+#
+# ⚠️ THAT DIRECTION IS THE DANGEROUS ONE. That suite's own header states the contract: "a
+# lockfile install.sh would refuse outright must not verify as LOCKED — a verifier more
+# permissive than the installer is how 'in sync' comes to mean two different things in one
+# estate." Here it ran the other way: the INSTALLER was more permissive than the verifier, so
+# an old-shape lockfile installed cleanly and then verified as DRIFT forever, with the
+# installer's silence implying the machine was fine.
+#
+# The old shape is a MAP where the split-out array + *Sources map now belongs. A map cannot
+# express a name with no source or a source with no name — the two states that install
+# nothing while still reading like a declaration — which is why the shape changed at all.
+lock_shape_guard() {
+  local kind t
+  for kind in skills hooks; do
+    t="$(jq -r --arg k "$kind" '.install[$k] | type' "$LOCK" 2>/dev/null)"
+    case "$t" in
+      array|null) ;;
+      object) die "install.$kind in $LOCK is a MAP — that is the old shape, from before
+   names and sources were split. Convert it once, then re-run this installer:
+
+     python3 <dark-factory checkout>/boot-kit/scripts/df-lock-migrate.py --lock $LOCK --apply
+
+   Nothing was installed." ;;
+      *) die "install.$kind in $LOCK has unexpected type '$t' — expected an array." ;;
+    esac
+  done
+}
+lock_shape_guard
+
 VENDOR_REL="$(jq -r '.vendorDir // "vendor"' "$LOCK")"
 VENDOR="$ROOT/$VENDOR_REL"
 T1_NAME="dark-factory"

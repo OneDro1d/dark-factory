@@ -3,7 +3,8 @@
 #
 # WHY THIS EXISTS. This repo is the Tier 2 org layer: `org.lock.json` is the single
 # register that decides what every minted OneDroid Tier 3 instance installs, and
-# `scripts/new-instance.sh` stamps `templates/tier3-instance/` out verbatim. A defect
+# `scripts/new-instance.sh` stamps instances from the VENDORED Tier 1's starter-kit/instance/
+# (this layer keeps no copy of its own, since 2026-09-07). A defect
 # landed here reaches the whole fleet on the next mint. Until now the repo had no
 # `.github/` at all — no workflow, no runner, nothing. Its correctness was maintained by
 # a human remembering to run a script, which is the same silent-decay defect this

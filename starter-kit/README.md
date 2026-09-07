@@ -71,6 +71,8 @@ starter-kit/
     org.lock.json               authority: T1 pin + curated skill/hook list
     install.sh                  self-contained installer (fetch T1, link, copy, verify)
     scripts/new-instance.sh     generates a developer's Tier 3, pinning T2 by SHA
-    templates/tier3-instance/   what that stamps out (lockfile, installer, docs)
+                                (no tier-3 template: since 2026-09-07 new-instance.sh
+                                 stamps from THIS repo's starter-kit/instance/ at the pin,
+                                 so a layer carries no second copy of the generator)
     docs/ONBOARDING.md          seven steps, written for a first-timer
 ```
