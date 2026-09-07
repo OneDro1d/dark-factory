@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""df-operator-todo — the single page of work the HUMAN owes, maintained by the agent.
+
+WHY THIS EXISTS. The governed loop already refuses to hand work back that was never the
+operator's (`escalation-gate.py`) and refuses to stop without enumerating what was deferred
+(`handoff-completeness-gate.py`). Both produce the same artefact and neither KEEPS it: the
+operator-only items land in a transcript, a mission escalation file, or the tail of a handoff,
+and a human who steps away for a day has to reconstruct their own to-do list from three places.
+Operator attention is the only non-replenishable input in this method; making a human re-derive
+their own queue spends it on retrieval.
+
+So: ONE file, at the notepad root, next to NOTES.md. The agent writes it. The human works it,
+asynchronously, while the loop keeps running.
+
+⚠️ NO HISTORY IN THE FILE — AND THAT IS NOT THE SAME AS NO HISTORY.
+The operator asked for no history: a finished task is DELETED, not struck through, not moved to
+a "Done" section that grows forever. This file is a FRONTIER, not a log, and a frontier that
+accumulates its own past stops being readable at a glance — which is the entire feature.
+⚠️ This deliberately sits against a rule the rest of this estate applies hard, that an entry
+which simply vanishes reads as one nobody decided (see repos.manifest.json, four separate
+recorded instances). The reconciliation is that THE NOTEPAD IS A GIT REPO: every removal is a
+commit, so the history is complete and durable in `git log -p operator-todo.md` while the file
+itself stays short. History lives where history belongs, not in the working page.
+
+⚠️ THE AGENT MAY NOT TICK OFF WORK IT DID NOT WATCH HAPPEN. `done` requires either --verified
+with evidence, or --by-operator when the human says so. An agent that removes an item because
+it ASSUMES the human did it produces the one failure this file cannot survive: a task that
+silently leaves the queue while still undone. Same rule as everywhere else here — verify the
+evidence, never the self-report, and never your own optimism.
+
+USAGE
+  df-operator-todo add  --id <slug> --task "<what>" --why "<why it is theirs>" \
+                        --do "<the exact command/URL/PR>" [--blocking] [--ref <path|url>]
+  df-operator-todo done --id <slug> (--verified "<evidence>" | --by-operator)
+  df-operator-todo list [--blocking-only]
+  df-operator-todo path
+
+  --blocking  the loop cannot proceed until this is done. Default is ASYNC: the loop keeps
+              going and the human picks it up when convenient, which is the normal case and
+              the reason this file exists at all.
+
+IDS ARE THE DEDUPE KEY. Re-adding an existing id UPDATES that entry in place rather than
+appending a second copy. A loop that runs for six hours and re-derives the same blocker every
+iteration must not produce six identical lines; it must produce one, still true.
+"""
+import argparse
+import os
+import re
+import sys
+from datetime import datetime, timezone
+
+FILENAME = "operator-todo.md"
+
+HEADER = """# Operator TODO
+
+<!-- MAINTAINED BY THE AGENT (df-governed / df-operator-todo). This is your queue, not a log.
+
+     NO HISTORY BY DESIGN: a finished task is DELETED from this file, never struck through and
+     never moved to a "Done" section. The file is the FRONTIER. The history is complete in git
+     (`git log -p operator-todo.md`) — it just does not live on this page.
+
+     You can work these in any order, asynchronously; the loop keeps running without you unless
+     an item is marked BLOCKING. Delete a line yourself the moment it is done, or tell the agent
+     and it will — but it will not remove one on a guess. -->
+"""
+
+BLOCKING_H = "## ⛔ Blocking — the loop is stopped until you do these"
+ASYNC_H = "## Async — the loop continues without these"
+EMPTY_BLOCKING = "_Nothing blocking. The loop is not waiting on you._"
+EMPTY_ASYNC = "_Nothing queued._"
+
+ENTRY_RE = re.compile(r"^- \[ \] `(?P<id>[^`]+)` — (?P<rest>.*)$")
+
+
+def find_notepad(start):
+    """Walk up for NOTES.md — the notepad root marker (the directory NAME is never parsed)."""
+    d = os.path.abspath(start)
+    while True:
+        if os.path.isfile(os.path.join(d, "NOTES.md")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def todo_path(explicit=None):
+    if explicit:
+        return explicit
+    np = find_notepad(os.environ.get("DF_NOTEPAD") or os.getcwd())
+    if not np:
+        sys.stderr.write(
+            "df-operator-todo: no notepad found (walked up from cwd for NOTES.md).\n"
+            "This file belongs at a notepad root. Run it from inside one, or set DF_NOTEPAD.\n")
+        sys.exit(2)
+    return os.path.join(np, FILENAME)
+
+
+def parse(path):
+    """Return (blocking, async_) as lists of (id, rest). Unknown lines outside the two sections
+    are dropped on rewrite — the file is generated, and a hand-edited line that the parser
+    cannot round-trip would be silently corrupted instead. Deleting a whole `- [ ]` line by hand
+    IS supported and is the documented way for a human to close an item."""
+    if not os.path.isfile(path):
+        return [], []
+    blocking, async_, cur = [], [], None
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if line.startswith(BLOCKING_H):
+                cur = blocking
+                continue
+            if line.startswith(ASYNC_H):
+                cur = async_
+                continue
+            m = ENTRY_RE.match(line)
+            if m and cur is not None:
+                cur.append((m.group("id"), m.group("rest")))
+    return blocking, async_
+
+
+def render(blocking, async_):
+    out = [HEADER, "", BLOCKING_H, ""]
+    out.append("\n".join(f"- [ ] `{i}` — {r}" for i, r in blocking) if blocking else EMPTY_BLOCKING)
+    out += ["", ASYNC_H, ""]
+    out.append("\n".join(f"- [ ] `{i}` — {r}" for i, r in async_) if async_ else EMPTY_ASYNC)
+    out.append("")
+    return "\n".join(out)
+
+
+def write(path, blocking, async_):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(render(blocking, async_))
+
+
+def cmd_add(a):
+    path = todo_path(a.file)
+    blocking, async_ = parse(path)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rest = f"**{a.task}** · _why it is yours:_ {a.why} · _do:_ {a.do}"
+    if a.ref:
+        rest += f" · _ref:_ {a.ref}"
+    rest += f" · _raised {stamp}_"
+    # An id is unique across BOTH sections: re-adding with a changed --blocking must MOVE the
+    # entry, not leave a stale twin in the other section saying the opposite about urgency.
+    blocking = [e for e in blocking if e[0] != a.id]
+    async_ = [e for e in async_ if e[0] != a.id]
+    (blocking if a.blocking else async_).append((a.id, rest))
+    write(path, blocking, async_)
+    print(f"operator-todo: {'BLOCKING' if a.blocking else 'async'} item `{a.id}` recorded -> {path}")
+
+
+def cmd_done(a):
+    if not a.verified and not a.by_operator:
+        sys.stderr.write(
+            "df-operator-todo: refusing to close `%s` without --verified <evidence> or "
+            "--by-operator.\nRemoving an item you did not watch complete is how a task leaves "
+            "the queue while still undone.\n" % a.id)
+        return 2
+    path = todo_path(a.file)
+    blocking, async_ = parse(path)
+    before = len(blocking) + len(async_)
+    blocking = [e for e in blocking if e[0] != a.id]
+    async_ = [e for e in async_ if e[0] != a.id]
+    if len(blocking) + len(async_) == before:
+        sys.stderr.write(f"df-operator-todo: no open item with id `{a.id}` — nothing removed.\n")
+        return 1
+    write(path, blocking, async_)
+    how = "operator says so" if a.by_operator else f"verified: {a.verified}"
+    print(f"operator-todo: `{a.id}` removed ({how}). History is in git, not in the file.")
+    return 0
+
+
+def cmd_list(a):
+    path = todo_path(a.file)
+    blocking, async_ = parse(path)
+    if a.blocking_only:
+        async_ = []
+    if not blocking and not async_:
+        print("operator-todo: empty — the operator owes nothing.")
+        return 0
+    for label, items in (("BLOCKING", blocking), ("async", async_)):
+        for i, r in items:
+            print(f"[{label}] {i} :: {r}")
+    return 0
+
+
+def main():
+    p = argparse.ArgumentParser(prog="df-operator-todo", description=__doc__.split("\n")[0])
+    p.add_argument("--file", help="explicit path (tests); default is <notepad>/" + FILENAME)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    a = sub.add_parser("add", help="record or update one task the operator owes")
+    a.add_argument("--id", required=True)
+    a.add_argument("--task", required=True)
+    a.add_argument("--why", required=True, help="which operator-only category makes this theirs")
+    a.add_argument("--do", required=True, dest="do", help="the exact command, PR number or URL")
+    a.add_argument("--ref")
+    a.add_argument("--blocking", action="store_true")
+    a.set_defaults(func=cmd_add)
+
+    d = sub.add_parser("done", help="remove a finished task (no history kept in the file)")
+    d.add_argument("--id", required=True)
+    d.add_argument("--verified", help="the evidence you saw that it is done")
+    d.add_argument("--by-operator", action="store_true", help="the operator said it is done")
+    d.set_defaults(func=cmd_done)
+
+    l = sub.add_parser("list", help="print the open queue")
+    l.add_argument("--blocking-only", action="store_true")
+    l.set_defaults(func=cmd_list)
+
+    pa = sub.add_parser("path", help="print where the file resolves for this cwd")
+    pa.set_defaults(func=lambda x: (print(todo_path(x.file)), 0)[1])
+
+    args = p.parse_args()
+    sys.exit(args.func(args) or 0)
+
+
+if __name__ == "__main__":
+    main()

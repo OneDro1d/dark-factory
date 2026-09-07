@@ -74,6 +74,19 @@ ANSWER_FIRST = (
     "escalation file naming the category, then ask."
 )
 
+# ⚠️ AN ESCALATION FILE IS NOT A QUEUE THE HUMAN CAN WORK. It lives under
+# .df/missions/<id>/escalations/, one file per question, and a human returning after a day
+# would have to find and read all of them to learn what they owe. The escalation file is the
+# gate's EVIDENCE; operator-todo.md is the operator's PAGE. Both, not either — they answer
+# different questions ("did the agent think first?" vs "what do I still owe?") and collapsing
+# them would lose one of the two. `df-operator-todo` is on PATH whenever this plugin is loaded,
+# because the plugin's bin/ joins the Bash PATH.
+RECORD_THE_TODO = (
+    "Then record it on the operator's page so it is not buried in a transcript: "
+    "df-operator-todo add --id <slug> --task <what> --why <category> --do <exact steps> "
+    "[--blocking]."
+)
+
 
 def allow():
     print("{}")
@@ -173,8 +186,10 @@ def deny_reason(notepad, mission_id):
     )
     return (
         "escalation-gate: no fresh, on-topic escalation on file for mission '{mid}'. "
-        "Allowed categories: {cats}. Write one to {path} naming the category. {answer_first}"
-    ).format(mid=mission_id, cats=cats, path=example_path, answer_first=ANSWER_FIRST)
+        "Allowed categories: {cats}. Write one to {path} naming the category. {answer_first} "
+        "{todo}"
+    ).format(mid=mission_id, cats=cats, path=example_path, answer_first=ANSWER_FIRST,
+             todo=RECORD_THE_TODO)
 
 
 def main():

@@ -79,6 +79,24 @@ run; leave every other mission's state alone.
    root appears in no `--add-dir`. Then delete the scratch directory the dry run created under
    `workers/dev/`.
 
+7b. **The operator's page (objective 8).** Run `command -v df-operator-todo` — it must resolve
+   under a `df-governed/bin/` path, same as `df-worker`. Then, from this notepad:
+
+   ```sh
+   df-operator-todo add --id validate-probe --task "throwaway" --why "a decision you have not made" --do "delete this line"
+   df-operator-todo list
+   df-operator-todo done --id validate-probe          # expected: REFUSED, exit 2
+   df-operator-todo done --id validate-probe --by-operator
+   ```
+
+   Expected, in order: the item appears in `operator-todo.md` at the **notepad root** under
+   *Async*; `list` prints it; the bare `done` is **REFUSED** with a reason about a task leaving
+   the queue while still undone; the `--by-operator` form removes it. ⚠️ **The refusal is the
+   assertion that matters** — a tool that closes anything you name makes this file worse than no
+   file, because the operator would then trust a queue that silently drops work. Confirm
+   afterwards that `operator-todo.md` contains **no** `## Done` section and no `~~strikethrough~~`:
+   the file is a frontier, and its history belongs in `git log`, not on the page.
+
 8. **Clean up.** `printf 'DONE\n' > .df/missions/M-VALIDATE/state`; remove the empty commit
    from step 4 (`git reset --soft HEAD~1` only if `git log -1 --format=%s` is exactly
    `M-VALIDATE: gate check`); remove the test handoff from step 6 and `rm -rf .df/missions/M-VALIDATE`.

@@ -31,6 +31,49 @@ Tier-3 lockfile never carries the plugin's content — each side owns exactly on
 5. A recurring tick reminds the agent an open mission is still unfinished.
 6. Progress is tracked in a persistent layer — a map and tickets, not just commit history.
 7. Which notepad a session is scoped to is disclosed, not left for the reader to infer.
+8. **The human's own queue is a page, not a scavenger hunt** — `operator-todo.md` at the notepad
+   root, maintained by the agent, worked asynchronously by the operator while the loop runs.
+
+## `operator-todo.md` — objective 8, and why it is not just the escalation file again
+
+Objectives 4 and 3 already produce the operator's work: `escalation-gate.py` forces an escalation
+record before a question can be asked, and `handoff-completeness-gate.py` forces an enumeration of
+anything deferred before a turn can end. **Neither of them KEEPS that work anywhere the human can
+read it in one place.** It lands in a transcript that scrolls, a mission escalation file three
+directories down, or the tail of a handoff — so an operator returning after a day reconstructs
+their own to-do list from three sources. Operator attention is the only non-replenishable input in
+this method; spending it on retrieval is the exact waste the method exists to remove.
+
+`bin/df-operator-todo` maintains one file at the notepad root, next to `NOTES.md`:
+
+```sh
+df-operator-todo add  --id eso-install --task "Run bash install.sh on the ESO laptop" \
+                      --why "only you can reach that machine" --do "git pull; bash install.sh" \
+                      [--blocking]
+df-operator-todo done --id eso-install (--verified "<what you saw>" | --by-operator)
+df-operator-todo list [--blocking-only]
+```
+
+- **`--blocking` vs async.** Default is async: the loop keeps running and the human picks the item
+  up when convenient. That is the normal case and the whole point — the two are separated so a
+  genuine stop-the-world item cannot hide among six conveniences.
+- **Ids are the dedupe key.** Re-adding an id updates that entry in place and moves it between
+  sections. A loop that re-derives the same blocker every iteration for six hours must produce one
+  line that is still true, not six identical ones.
+
+⚠️ **NO HISTORY IN THE FILE, WHICH IS NOT THE SAME AS NO HISTORY.** A finished task is deleted —
+not struck through, not moved to a `## Done` section that grows forever. The file is a FRONTIER,
+and a frontier that accumulates its own past stops being readable at a glance, which was the
+feature. This sits deliberately against the rule the rest of this method applies hard — that an
+entry which simply vanishes reads as one nobody decided. The reconciliation: **the notepad is a
+git repo**, so every removal is a commit and the full history is in `git log -p operator-todo.md`.
+History lives where history belongs, not on the working page.
+
+⚠️ **THE AGENT MAY NOT TICK OFF WORK IT DID NOT WATCH HAPPEN.** `done` refuses without either
+`--verified <evidence>` or `--by-operator`, and the refusal is tested (`test-df-operator-todo.sh`
+case E). An agent that removes an item because it assumes the human got to it produces the one
+failure this file cannot survive: a task leaving the queue while still undone. Same rule as
+everywhere else here — verify the evidence, never the self-report, and never your own optimism.
 
 ## `agents/`
 
