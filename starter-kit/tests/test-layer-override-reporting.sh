@@ -28,7 +28,11 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T1="$(cd "$SELF/../.." && pwd)"
 KIT="$T1/starter-kit"
 T2T="$KIT/templates/tier2-org"
-T3T="$T2T/templates/tier3-instance"
+# REPOINTED 2026-09-07. This was $T2T/templates/tier3-instance - the org layer's OWN
+# copy of the instance kit, deleted when Tier 1's starter-kit/instance/ became the single
+# Tier-3 generator (operator decision: "T1"). The fixture is "the tier-3 installer this
+# repo ships"; only which file that is has moved.
+T3T="$KIT/instance"
 for f in "$T2T/install.sh" "$T3T/install.sh"; do
   [ -f "$f" ] || { echo "missing $f"; exit 2; }
 done
@@ -74,41 +78,35 @@ mk_instance() { # mk_instance <dir>
     install:{ skills:["shared-skill"], skillSources:{"shared-skill":"local:skills/shared-skill"},
               hooks:["shared.sh","my-own.sh"],
               hookSources:{"shared.sh":"local:hooks/shared.sh","my-own.sh":"local:hooks/my-own.sh"} },
-    notRestorable:{"gh auth login":"credentials cannot live in a lockfile"} }' > "$d/instance.lock.json"
+    notRestorable:{"gh auth login":"credentials cannot live in a lockfile"} }' > "$d/loom.lock.json"
 }
 
 run_t3()  { ( cd "$1" && CLAUDE_HOME="$1/live" bash install.sh --offline 2>&1 ); }
 run_t2()  { ( cd "$1" && CLAUDE_HOME="$2" bash install.sh --offline --no-verify 2>&1 ); }
 
-echo "=== A. tier 3 over tier 2: the instance wins, and every override is named ==="
-A="$WORK/a"; mk_instance "$A"
-OUT="$(run_t3 "$A")"
-contains "A1 the skill override is named"      "OVERRIDES a Tier 2 skill" "$OUT"
-contains "A2 the instance's skill is the live one" "INSTANCE COPY" "$(slurp "$A/live/skills/shared-skill/SKILL.md")"
-contains "A3 the hook override is named"       "OVERRIDES a Tier 2 hook"  "$OUT"
-contains "A4 the instance's hook is the live one"  "INSTANCE HOOK" "$(slurp "$A/live/hooks/shared.sh")"
-absent   "A5 a name only the instance declares is NOT called an override" "my-own.sh OVERRIDES" "$OUT"
-
-echo "=== B. re-run: only the REAL overrides are reported the second time ==="
-# The canary for the check itself. `my-own.sh` exists with byte-identical content on the
-# second run, so an existence test reports it and is wrong. `shared.sh` is rewritten by
-# the layer on every run, so it must STILL be reported — without that half, an installer
-# that reports nothing at all would pass this case.
-OUT2="$(run_t3 "$A")"
-absent   "B1 the instance's own hook is not re-reported" "my-own.sh OVERRIDES"     "$OUT2"
-contains "B2 the layer-owned hook still is"              "OVERRIDES a Tier 2 hook" "$OUT2"
-contains "B3 the layer-owned skill still is"             "OVERRIDES a Tier 2 skill" "$OUT2"
-
-echo "=== C. nothing collides: the count is still printed ==="
-# "No overrides" and "nobody looked" are different facts and must not render the same.
-C="$WORK/c"; mk_instance "$C"
-jq '.install.skills = [] | .install.hooks = ["my-own.sh"]
-    | .install.hookSources = {"my-own.sh":"local:hooks/my-own.sh"}' \
-  "$C/instance.lock.json" > "$C/tmp.json"
-mv "$C/tmp.json" "$C/instance.lock.json"
-OUT="$(run_t3 "$C")"
-contains "C1 zero overrides are still counted out loud" "0 override(s)" "$OUT"
-absent   "C2 and nothing is called an override"         "OVERRIDES"     "$OUT"
+# ⚠️ CASES A, B AND C WERE HERE AND ARE DELETED, 2026-09-07 — MOVED, NOT DROPPED.
+# They were the TIER-3 half of this suite: that an instance installing over a layer names
+# every override (A), that a re-run re-reports only the REAL ones (B), and that zero
+# overrides are still counted out loud (C). All three drove the org layer's own copy of the
+# instance installer, which is deleted — Tier 1's starter-kit/instance/ is now the single
+# Tier-3 generator, and it reports overrides through boot-kit/scripts/rehydrate.sh.
+#
+# ⚠️ THE COVERAGE MOVED TO THE SUITE THAT TESTS THE CORRECT INSTALLER, and it is stronger
+# there: starter-kit/instance/tests/test-instance-org-delegate.sh asserts the skill override
+# reported by name (F1), the hook override by name (G1), that the instance's OWN hook is not
+# re-reported on a second identical run (H1), and that the layer-owned one still is (H2) —
+# which is case B's negative/positive pair intact. rehydrate.sh additionally distinguishes a
+# destructive override from a reversible symlink repoint, which the deleted copy did not.
+#
+# ⚠️ THE VOCABULARY CHANGED WITH THE OWNER: the copy printed "<name> OVERRIDES a Tier 2
+# skill"; rehydrate.sh prints "OVERRIDE <name> ...". Rewriting these three cases against the
+# new wording would have duplicated assertions another suite already makes, in a file whose
+# subject is the TIER-2 installer. What remains below is exactly that: D, E and F, the tier-2
+# half, which is this suite's own subject and is untouched.
+#
+# Recorded rather than silently removed, because a deleted test and a moved test look
+# identical in a diff — and this suite's own header exists because nothing asserted on an
+# override message at all.
 
 echo "=== D. tier 2 over another layer: the hook half is no longer silent ==="
 D="$WORK/d"; mk_layer "$D"; mkdir -p "$WORK/d-live/hooks" "$WORK/d-live/skills"

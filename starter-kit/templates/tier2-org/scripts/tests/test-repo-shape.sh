@@ -101,24 +101,38 @@ case "$ORGLAYER" in
 esac
 
 # --- A4..A6  the files a mint depends on ---------------------------------------------
-for rel in install.sh scripts/new-instance.sh templates/tier3-instance/install.sh; do
+for rel in install.sh scripts/new-instance.sh; do
   if [ -s "$REPO/$rel" ]; then pass "A4 $rel is present and non-empty"
   else fail "A4 $rel is missing or empty"; fi
 done
 
-# --- A7..A8  the tier-3 template ------------------------------------------------------
-T3LOCK="$REPO/templates/tier3-instance/instance.lock.json"
-if jq -e . "$T3LOCK" >/dev/null 2>&1; then pass "A7 tier3 instance.lock.json is valid JSON"
-else fail "A7 tier3 instance.lock.json does not parse"; fi
-
-# A8 — the template must still carry its PLACEHOLDERS. `scripts/new-instance.sh`
-# substitutes `__T2_REF__` at mint time. If someone commits a real instance's resolved
-# lockfile back over the template, every instance minted afterwards is frozen on one
-# developer's pin and nothing reports it — the template still parses and still installs.
-if grep -q '__T2_REF__' "$T3LOCK" 2>/dev/null; then
-  pass "A8 tier3 template still carries __T2_REF__ (not a baked pin)"
+# --- A7..A8  THE LAYER MUST NOT CARRY ITS OWN TIER-3 TEMPLATE -------------------------
+# ⚠️ THESE TWO ASSERTIONS ARE INVERTED FROM WHAT THEY WERE, 2026-09-07, and the inversion IS
+# the change. They used to require `templates/tier3-instance/instance.lock.json` to parse and
+# to still carry `__T2_REF__` — i.e. they policed a full instance kit that every minted layer
+# kept its own copy of. Operator decision: Tier 1's `starter-kit/instance/` is canonical, and
+# `scripts/new-instance.sh` now stamps from the VENDORED Tier 1 instead. The copy is deleted.
+#
+# A template copied into every layer at mint time and never compared again is a drift surface
+# by construction; `test-tier3-template-pin.sh` existed solely to police it and, on the first
+# layer it ever ran against, found four of seven files differing in BOTH directions. Deleting
+# the copy deletes the drift, which beats detecting it — so the check that a copy EXISTS
+# becomes the check that it does NOT.
+if [ -e "$REPO/templates/tier3-instance" ]; then
+  fail "A7 templates/tier3-instance/ is back — this layer must not carry its own instance template; new-instance.sh stamps from the vendored Tier 1"
 else
-  fail "A8 tier3 template has no __T2_REF__ — a resolved lockfile may have been committed over the template"
+  pass "A7 no local tier-3 template (Tier 1's starter-kit/instance is canonical)"
+fi
+
+# A8 — and the mint path must actually REACH Tier 1. Deleting the template without
+# repointing the script would leave a layer that mints nothing, and A7 alone would call that
+# success: absence is exactly what it now asserts. The two halves are checked together for
+# the same reason the old A8 existed — half a migration passes every check aimed at the half
+# that moved.
+if grep -q 'starter-kit/instance/bootstrap.sh' "$REPO/scripts/new-instance.sh" 2>/dev/null; then
+  pass "A8 new-instance.sh stamps from Tier 1's bootstrap.sh"
+else
+  fail "A8 new-instance.sh does not reference Tier 1's starter-kit/instance/bootstrap.sh — the template is gone and nothing replaced it"
 fi
 
 # --- A9  the gate and its runner are one pair ----------------------------------------

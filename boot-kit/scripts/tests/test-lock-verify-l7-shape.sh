@@ -48,7 +48,13 @@ LV="${LOCK_VERIFY:-$SCRIPTS/lock-verify.sh}"
 # from the repo root so the test breaks loudly if the template is moved rather than
 # silently skipping the agreement cases.
 T1ROOT="$(cd "$SCRIPTS/../.." && pwd)"
-INST="$T1ROOT/starter-kit/templates/tier2-org/templates/tier3-instance/install.sh"
+# ⚠️ REPOINTED 2026-09-07 from starter-kit/templates/tier2-org/templates/tier3-instance/.
+# That was the org layer's OWN copy of the instance installer, deleted when Tier 1's
+# starter-kit/instance/ became the single Tier-3 generator (operator decision: "T1"). The
+# contract this suite pins — that L7 and the shipped installer classify the same lockfile
+# alike — is unchanged; only which installer is "the shipped one" moved, and it moved to the
+# one that was always canonical. Pointing at the copy is what made two installers possible.
+INST="$T1ROOT/starter-kit/instance/install.sh"
 command -v jq >/dev/null || { echo "jq required"; exit 2; }
 
 PASS=0; FAIL=0

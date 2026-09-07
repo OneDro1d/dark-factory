@@ -420,7 +420,9 @@ fi
 # ---- SHAPE FIRST, AND THE SAME THREE-WAY TEST THE INSTALLERS ALREADY MAKE.
 # `install.<kind>` has an older reading: a single MAP of name -> source, with no *Sources
 # key. Both shipped installers REFUSE it — `lock_shape_guard` in
-# starter-kit/templates/tier2-org/install.sh:153-168 and in its tier3-instance/install.sh:83-98
+# starter-kit/templates/tier2-org/install.sh:153-168 and in starter-kit/instance/install.sh's
+# lock_shape_guard (ported there 2026-09-07 -- it had been MISSING from Tier 1's own instance
+# installer, so that installer accepted a shape this very check refuses)
 # take `array|null`, `die` on `object`, and `die` on anything else. df-lock-migrate.py is
 # the one-command fix they name.
 #

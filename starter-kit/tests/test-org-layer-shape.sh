@@ -28,7 +28,11 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T1="$(cd "$SELF/../.." && pwd)"                       # the Tier 1 checkout
 KIT="$T1/starter-kit"
 T2T="$KIT/templates/tier2-org"
-T3T="$T2T/templates/tier3-instance"
+# REPOINTED 2026-09-07. This was $T2T/templates/tier3-instance - the org layer's OWN
+# copy of the instance kit, deleted when Tier 1's starter-kit/instance/ became the single
+# Tier-3 generator (operator decision: "T1"). The fixture is "the tier-3 installer this
+# repo ships"; only which file that is has moved.
+T3T="$KIT/instance"
 GEN="$KIT/new-org-layer.sh"
 MIGRATE="$T1/boot-kit/scripts/df-lock-migrate.py"
 LOCKVERIFY="$T1/boot-kit/scripts/lock-verify.sh"
@@ -166,40 +170,36 @@ eq "E8 sources carry the upstream: prefix"  "true" \
 # drops nested directories, and every layer minted afterwards would look complete while
 # being unable to produce a single machine. Same class as A3 one tier up.
 GT3DIR="$E/dest/scratchlayer/templates/tier3-instance"
-GT3="$GT3DIR/install.sh"
-eq "E9 the minted layer carries a tier-3 template" "yes" "$([ -f "$GT3" ] && echo yes || echo no)"
-# THE ONLY DIFFERENCE IS THE PLACEHOLDERS. This is the byte-for-byte pin between the
-# generator's template and its output — the one pair CI can see. It does NOT pin a layer
-# that was minted months ago and edited since: that copy lives in another repo, and the
-# only thing that ever detects ITS drift is someone diffing it by hand. Which is how a
-# better warning string sat unshared in a minted copy while the template kept the worse
-# one.
+GT3="$E/dest/scratchlayer/scripts/new-instance.sh"
+# ⚠️ E9 IS INVERTED FROM WHAT IT WAS, 2026-09-07, and the inversion is the change itself.
+# It used to require the minted layer to CARRY a tier-3 template. Operator decision: Tier 1's
+# starter-kit/instance/ is the single Tier-3 generator, so a layer must carry NO copy and
+# stamp from the vendored Tier 1 instead. A template copied into every layer at mint time and
+# never compared again is a drift surface by construction — the suite that policed it found
+# four of seven files differing, in BOTH directions, on the first layer it ever ran against.
+eq "E9 the minted layer carries NO tier-3 template" "no" "$([ -d "$GT3DIR" ] && echo yes || echo no)"
+# ⚠️ AND THE OTHER HALF, IN THE SAME BREATH. E9 alone now asserts an ABSENCE, which a layer
+# minted with no minting machinery at all would also satisfy. Deleting the template without
+# repointing the script produces exactly that: a layer that looks correct and can mint
+# nothing. Half a migration passes every check aimed at the half that moved.
+eq "E9a and its new-instance.sh stamps from Tier 1" "yes" \
+   "$(grep -q 'starter-kit/instance/bootstrap.sh' "$GT3" 2>/dev/null && echo yes || echo no)"
+# ⚠️ E10 AND E10a ARE GONE, 2026-09-07, AND THE REASON THEY EXISTED IS WHY.
+# They were a byte-for-byte pin between the org-layer template's tier-3 copy and its minted
+# output — the only pair CI could see. Their own header recorded the limit that killed them:
+# the pin "does NOT pin a layer that was minted months ago and edited since: that copy lives
+# in another repo, and the only thing that ever detects ITS drift is someone diffing it by
+# hand. Which is how a better warning string sat unshared in a minted copy while the template
+# kept the worse one."
 #
-# ⚠️ AND THIS PIN USED TO NAME A FILE RATHER THAN THE ARTIFACT. It covered install.sh and
-# nothing else, while the template ships seven files. Measured 2026-09-01 against the one
-# layer minted from it: install.sh was the ONE file whose only difference was the
-# placeholder, and the other three that differ each held a real divergence — a README
-# paragraph the fork had and the template did not, an instance.lock.json the template had
-# documented further, a CLAUDE.md that happened to be clean. A pin over one file of seven
-# reported green through all of it. The fix is not a better file to name: it is to stop
-# naming one.
-E10_DRIFT=0; E10_N=0
-while IFS= read -r rel; do
-  E10_N=$((E10_N + 1))
-  d="$(diff <(sed -e "s|__ORG_LAYER_NAME__|scratchlayer|g" \
-                  -e "s|__ORG_REPO__|acme/scratchlayer|g" \
-                  -e "s|__ORG_DISPLAY__|Scratch|g" "$T3T/$rel") \
-            "$GT3DIR/$rel" 2>&1)"
-  if [ -n "$d" ]; then
-    E10_DRIFT=$((E10_DRIFT + 1))
-    echo "     drift in $rel"
-  fi
-done < <(cd "$T3T" && find . -type f | sed -e "s:^\./::" | sort)
-eq "E10 every minted tier-3 file is the template with only the org placeholders resolved" "0" "$E10_DRIFT"
-# The oracle needs its own control. A find that matches nothing leaves E10 comparing zero
-# files and reporting 0 drift — green, and meaningless. This suite has already been bitten
-# by a count that stopped counting.
-eq "E10a the pin actually compared the whole template" "7" "$E10_N"
+# A pin that can only see freshly minted output was always going to lose to the copies in the
+# wild. Deleting the copy removes what they were guarding: there is now one Tier-3 generator,
+# in Tier 1, fetched at a pinned commit, and a layer holds no second version to drift.
+#
+# ⚠️ WHAT WAS LOST WITH THEM, STATED RATHER THAN QUIETLY DROPPED: nothing now compares a
+# minted layer's instance-generating machinery byte-for-byte, because there is no longer a
+# copy to compare — E9/E9a assert the absence and the delegation instead. If a layer ever
+# reintroduces a local template, E9 is what fires.
 absent "E11 no org template token survives into the minted installer" "__ORG_DISPLAY__" "$(slurp "$GT3")"
 # A .bak is not a file the generator meant to ship. It substitutes with `sed -i.bak` and
 # removes the backup on success — so one surviving anywhere means a substitution failed
@@ -213,7 +213,11 @@ eq "E12 no .bak survives anywhere in the minted layer" "0" \
 # whose drift is again detectable only by hand. Byte-identical because these files carry no
 # org placeholder: if one ever does, this assertion is where you find out.
 E13_MISSING=0
-for suite in test-repo-shape.sh test-tier3-template-pin.sh; do
+# ⚠️ test-tier3-template-pin.sh was the second entry here until 2026-09-07. It was deleted
+# with the template it policed — a suite whose whole subject no longer exists is not a suite
+# to keep passing. Its absence is asserted nowhere because nothing should ever look for it
+# again; if a layer ships one, test-repo-shape.sh's A7 is what fires.
+for suite in test-repo-shape.sh; do
   m="$E/dest/scratchlayer/scripts/tests/$suite"
   if [ ! -f "$m" ] || ! diff -q "$T2T/scripts/tests/$suite" "$m" >/dev/null 2>&1; then
     E13_MISSING=$((E13_MISSING + 1))
@@ -261,45 +265,46 @@ else
   FAIL=$((FAIL+9)); echo "  FAIL G1..G9 -- $MIGRATE does not exist"
 fi
 
-echo "=== H. tier-3 instance: additions use the one shape, decoy planted ==="
-H="$WORK/h"; mkdir -p "$H/vendor/orglayer" "$H/skills/my-skill" "$H/hooks" \
-                      "$H/vendor/skills/my-skill" "$H/vendor/hooks"
-echo 'MY OWN SKILL' > "$H/skills/my-skill/SKILL.md"
-printf 'MY OWN HOOK home=__HOME__\n' > "$H/hooks/my-hook.sh"
-echo 'DECOY SKILL FROM VENDOR' > "$H/vendor/skills/my-skill/SKILL.md"
-printf 'DECOY HOOK FROM VENDOR\n' > "$H/vendor/hooks/my-hook.sh"
-# A minimal but REAL vendored Tier 2, so the delegation step is the real installer.
-mk_org "$H/vendor/orglayer" '{"skills":[],"skillSources":{},"hooks":[],"hookSources":{}}'
-( cd "$H/vendor/orglayer" && git init -q . && git add -A >/dev/null 2>&1 ) || true
-cp "$T3T/install.sh" "$H/install.sh"
-jq -n '{instance:"scratch", agentName:"x", upstreams:{orglayer:{repo:"acme/orglayer", ref:"deadbeef"}},
-        vendorDir:"vendor",
-        install:{skills:["my-skill"], skillSources:{"my-skill":"local:skills/my-skill"},
-                 hooks:["my-hook.sh"], hookSources:{"my-hook.sh":"local:hooks/my-hook.sh"}},
-        notRestorable:{"gh auth login":"credentials cannot live in a lockfile"}}' > "$H/instance.lock.json"
-OUT="$( cd "$H" && CLAUDE_HOME="$H/live" bash install.sh --offline 2>&1 )"
-eq       "H1 a local: instance skill is the instance copy, not the decoy" "MY OWN SKILL" "$(slurp "$H/live/skills/my-skill/SKILL.md")"
-contains "H2 a local: instance hook is the instance copy" "MY OWN HOOK" "$(slurp "$H/live/hooks/my-hook.sh")"
-absent   "H3 the instance hook decoy was not installed"   "DECOY HOOK"  "$(slurp "$H/live/hooks/my-hook.sh")"
-contains "H4 __HOME__ is rehydrated"                      "home=$HOME"  "$(slurp "$H/live/hooks/my-hook.sh")"
+# ⚠️ SECTIONS H AND I WERE HERE AND ARE DELETED, 2026-09-07 — MOVED, NOT DROPPED.
+# They drove the TIER-3 installer: H that a `local:` instance skill/hook beats a vendored
+# decoy and that __HOME__ is rehydrated; I that the old map lockfile shape is refused there
+# too. Both built their fixture around the org layer's own copy of the instance installer,
+# which is deleted — Tier 1's starter-kit/instance/ is now the single Tier-3 generator.
+#
+# ⚠️ THE COVERAGE DID NOT GO ANYWHERE: starter-kit/instance/tests/test-instance-org-delegate.sh
+# already asserts the same properties against the CORRECT installer, and asserts more of them —
+# `local:` sources (its cases around skillSources/hookSources), `__HOME__` rehydration, the
+# override reported BY NAME (F1/G1), and the re-run property that only REAL overrides are
+# re-reported (H1/H2). The old-shape refusal is pinned by the lock_shape_guard now ported into
+# that installer and by boot-kit/scripts/tests/test-lock-verify-l7-shape.sh, whose whole
+# subject is that the installer and lock-verify L7 classify the same lockfile alike.
+#
+# Rebuilding H and I here would have meant re-creating a fixture for a contract another suite
+# already pins, against an installer this suite is not about. This file is about the ORG LAYER;
+# the tier-3 half moved out of it when the tier-3 generator did. Recorded rather than silently
+# removed, because a deleted test and a moved test look identical in a diff.
 
-echo "=== I. tier-3 instance: the old map shape is refused there too ==="
-I="$WORK/i"; cp -R "$H" "$I"; rm -rf "$I/live"
-jq '.install = {skills:{"my-skill":"skills/my-skill"}, hooks:{}}' "$H/instance.lock.json" > "$I/instance.lock.json"
-OUT="$( cd "$I" && CLAUDE_HOME="$I/live" bash install.sh --offline 2>&1 )"
-contains "I1 the old shape is refused at tier 3"     "df-lock-migrate" "$OUT"
-eq       "I2 nothing was installed from the old shape" ""              "$(ls "$I/live/skills" 2>/dev/null)"
-
-echo "=== J. the duplicated reader has not drifted between the two tier templates ==="
-# The block is duplicated on purpose — each tier template must stand alone in a fresh
-# clone with nothing vendored. Duplication that nothing checks is just deferred drift, so
-# the two copies are compared byte for byte rather than trusted to stay in step.
+echo "=== J. the reader block is duplicated NOWHERE — tier 3 delegates instead ==="
+# ⚠️ J1/J2 ARE REWRITTEN, 2026-09-07, AND THE OLD PAIR IS THE BEST ARGUMENT FOR THE CHANGE.
+# They used to require this block to be byte-identical in BOTH tier templates, because "each
+# tier template must stand alone in a fresh clone with nothing vendored" — a real constraint,
+# answered by copying, with a test to police the copy. That is the same bargain the tier-3
+# template itself made, and it is the bargain the operator has now ended: Tier 1's
+# starter-kit/instance/ is the only Tier-3 generator, and it reads its install sources through
+# boot-kit/scripts/rehydrate.sh rather than carrying its own copy of the reader.
+#
+# So the assertion inverts. Tier 2 must still carry the block — a layer genuinely does stand
+# alone, it is cloned and run before anything is vendored. Tier 3 must NOT, because a copy
+# there is a second implementation of the one thing this refactor removed.
 extract() { sed -n '/^# --- BEGIN shared install-source reader/,/^# --- END shared install-source reader/p' "$1"; }
 R2="$(extract "$T2T/install.sh")"; R3="$(extract "$T3T/install.sh")"
-if [ -z "$R2" ]; then FAIL=$((FAIL+1)); echo "  FAIL J1 -- no reader block in the tier-2 installer"
-elif [ "$R2" = "$R3" ]; then PASS=$((PASS+1)); echo "  ok   J1 the tier-2 and tier-3 reader blocks are byte-identical"
-else FAIL=$((FAIL+1)); echo "  FAIL J1 the reader blocks have drifted:"; diff <(printf '%s' "$R2") <(printf '%s' "$R3") | sed 's/^/       /'; fi
-eq "J2 the block is not empty in tier 3" "0" "$([ -n "$R3" ] && echo 0 || echo 1)"
+if [ -n "$R2" ]; then PASS=$((PASS+1)); echo "  ok   J1 the tier-2 installer still carries its own reader block"
+else FAIL=$((FAIL+1)); echo "  FAIL J1 -- no reader block in the tier-2 installer; a layer must stand alone in a fresh clone"; fi
+# ⚠️ ASSERTING AN ABSENCE NEEDS A CONTROL, or a typo in the sed range passes it forever. J2a
+# proves the extractor can still FIND a block when one is there, using the tier-2 copy J1
+# just matched — without it, J2 is green on any broken extractor.
+eq "J2 the tier-3 installer does NOT duplicate it" "0" "$([ -z "$R3" ] && echo 0 || echo 1)"
+eq "J2a control: the extractor can find a block that exists" "0" "$([ -n "$R2" ] && echo 0 || echo 1)"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

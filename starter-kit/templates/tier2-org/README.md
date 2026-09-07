@@ -51,7 +51,10 @@ hooks, and **start a new session**.
 - `hooks/` — org hooks (`local:hooks/<name>`); use `__HOME__` for home paths.
 - `scripts/new-instance.sh` — generates a developer's Tier 3 instance, pinning this repo
   by commit SHA at generation time.
-- `templates/tier3-instance/` — what that generator stamps out.
+- ⚠️ There is **no** `templates/tier3-instance/`. `scripts/new-instance.sh` stamps from Tier 1's
+  `starter-kit/instance/` in `vendor/`, at the commit this layer pins — so this layer holds no
+  second copy of the instance generator to drift from Tier 1's. It does mean `install.sh` must
+  have run first, to fetch Tier 1; the script says so with the remedy if it has not.
 
 What does NOT belong here: personal doctrine (Tier 3), the generic method (Tier 1 — send
 upstream PRs instead), secrets (nowhere in git, ever).
