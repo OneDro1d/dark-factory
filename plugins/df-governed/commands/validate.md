@@ -20,7 +20,9 @@ never paraphrase a denial or an error. **Fix nothing until the end.**
 
 Tasks 0–4 of that document (orient, identity, ground truth, hooks, preflight) are about the
 KIT and do not depend on being in a notepad — if you need them, they are unchanged and live
-at `<kit-root>/starter-kit/instance/VALIDATE-INSTALL.md`. What changes in a notepad session
+at `<kit-root>/vendor/dark-factory/starter-kit/instance/VALIDATE-INSTALL.md` on a kit (the
+`vendorDir` the lockfile names; `starter-kit/instance/…` only in a Tier-1 checkout). What
+changes in a notepad session
 is continuity, dispatch, and subagents, so those three are reproduced here adapted to it.
 
 ### §5 · Continuity: the half that only appears after a reset
@@ -125,6 +127,11 @@ alone.
    and telling you to write one. Write a short handoff (`## Next action`, `## Blocked`,
    `## Evidence`, mentioning `M-VALIDATE`) via the `handoff` skill's helper.
 
+   ⚠️ **The live block is INTERACTIVE-ONLY.** If `CLAUDE_CODE_ENTRYPOINT` is `sdk-cli` (a
+   `claude -p` run — measured 2026-09-08 when `validate.sh` was driven headless), the gate's
+   loop guard releases before any check, so the turn WILL end. Record that as UNKNOWN (live),
+   not FAIL, and rely on the three direct probes below, which do not depend on the entrypoint.
+
    ⚠️ **Do NOT test the pass by "stopping again"** — the Stop that follows a block arrives
    with `stop_hook_active: true` and the gate releases on that unconditionally (its loop
    guard), so the turn ending proves the guard, not the handoff. Test the handoff directly:
@@ -174,7 +181,9 @@ alone.
    # the test handoff written when the Stop gate blocked you (find it by name)
    git status --porcelain handoffs/ | sed -n 's/^?? //p'      # then rm the one you wrote
 
-   # the worker dry-run scratch directory, at the kit root
+   # the worker dry-run scratch directory — it lands under THIS notepad (the launcher resolves
+   # the nearest NOTES.md, which is your cwd), so it goes when validate.sh removes the cwd.
+   # Only if you find one at the kit root did something resolve wrong; say so, then:
    rm -rf ../workers/dev/*probe* 2>/dev/null || true
 
    # the operator-todo probe item, if step 7b left it behind

@@ -136,6 +136,19 @@ EOF
 
 printf '[]\n' > "$NP/sessions/index.json"
 
+# The commit and push gates are wired at PROJECT level — in the kit root's own
+# .claude/settings.json — never at user level (lock-verify L9 reads user settings only, and
+# the lockfile's hooksUnwired says so). This notepad is its own git repo under its own cwd,
+# so the kit root's project settings do NOT reach it. MEASURED 2026-09-08 on the first real
+# run: every other gate fired, and `git commit -m wip` went straight through with M-VALIDATE
+# RUNNING — the exact bypass Part 2 step 4 exists to catch, reported as a finding about the
+# gate when it was a finding about the arm. Copy the kit's project settings in, verbatim, so
+# the armed notepad wires what the kit wires.
+if [ -f "$KIT_ROOT/.claude/settings.json" ]; then
+  mkdir -p "$NP/.claude"
+  cp "$KIT_ROOT/.claude/settings.json" "$NP/.claude/settings.json"
+fi
+
 git -C "$NP" init -q
 git -C "$NP" -c user.name="df-validate" -c user.email="df-validate@localhost" add -A
 git -C "$NP" -c user.name="df-validate" -c user.email="df-validate@localhost" \

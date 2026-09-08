@@ -199,6 +199,27 @@ contains "10: it says it removed the leftover" "leftover" "$V10_OUT"
 V10_STATUS="$(git -C "$KIT10" status --porcelain 2>&1)"
 [ -z "$V10_STATUS" ] && ok "10: kit status is empty" || bad "10: kit status is empty" "$V10_STATUS"
 
+echo "=== 11: the kit's PROJECT-level settings (commit/push gates) reach the armed notepad ==="
+# MEASURED 2026-09-08 on the first real run: the commit gate is wired in the kit root's
+# .claude/settings.json only, the armed notepad is its own repo under its own cwd, so
+# `git commit -m wip` went through with M-VALIDATE RUNNING. The arm now copies that file in.
+KIT11="$(_fresh_kit kit11)"
+mkdir -p "$KIT11/.claude"
+printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"${HOME}/.claude/hooks/agent-notepad/hooks/commit-gate.sh"}]}]}}\n' > "$KIT11/.claude/settings.json"
+git -C "$KIT11" -c user.name=t -c user.email=t@example.invalid add -A
+git -C "$KIT11" -c user.name=t -c user.email=t@example.invalid commit -q -m settings
+bash "$ARM" "$KIT11" >/dev/null 2>&1
+file_exists "11: armed notepad has .claude/settings.json" "$KIT11/.df-validate/.claude/settings.json"
+if cmp -s "$KIT11/.claude/settings.json" "$KIT11/.df-validate/.claude/settings.json"; then
+  ok "11: it is byte-identical to the kit's"
+else
+  bad "11: it is byte-identical to the kit's" "differs"
+fi
+KIT11B="$(_fresh_kit kit11b)"
+bash "$ARM" "$KIT11B" >/dev/null 2>&1
+[ ! -e "$KIT11B/.df-validate/.claude" ] && ok "11: a kit with no project settings arms with none (nothing invented)" \
+  || bad "11: a kit with no project settings arms with none" ".claude/ present"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
