@@ -133,6 +133,16 @@ OUT="$(run none)"
 contains "says so rather than staying silent" "marketplace plugins: none declared" "$OUT"
 eqstr    "exit 0" "0" "$(rc_of none)"
 eqstr    "the CLI was never called" "" "$(log_of none)"
+# ⛔ "none declared" ON ITS OWN TEACHES NOBODY ANYTHING. Operator request 2026-09-08: a reader
+# who does not already know this key exists has no way to learn it from a line that only says
+# there are none, so third-party plugins stay a per-machine ritual that differs on every box.
+# The recipe has to be in the output, and it has to be honest about the limit.
+contains "offers the recipe"            "install.marketplacePlugins in" "$OUT"
+contains "shows a real entry"           '"marketplace": "claude-plugins-official"' "$OUT"
+contains "says where both names come from" "claude plugin list --json" "$OUT"
+contains "says why the source is needed" "not found in marketplace" "$OUT"
+contains "refuses to imply a version pin" "NEVER WHICH VERSION" "$OUT"
+contains "and names what it does instead" "probed.marketplacePlugins" "$OUT"
 
 echo ""
 echo "== the happy path =="
