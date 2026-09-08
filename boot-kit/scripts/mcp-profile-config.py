@@ -155,7 +155,7 @@ def other_estates(profile, own_server, resolved_lock, resolved_path, kit_root):
     the resolved record, AND by every other record the kit holds.
 
     ⛔ MEASURED 2026-09-08, THIRD HOMELAB RUN: the deny list was built from the resolved
-    record's own mcp.profiles only. That record (a Coder instance) declared {onedroid, optima};
+    record's own mcp.profiles only. That record (a Coder instance) declared two estates;
     the kit's ROOT record declared the third estate's connector too; the connector is
     account-level, so it was live on the Coder -- and a worker scoped to one estate called the
     health-data estate's tools with zero denials. The record's own $comment said no such

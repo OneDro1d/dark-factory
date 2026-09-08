@@ -288,7 +288,7 @@ if DISALLOW_HAS "mcp__plugin_*"; then ok "H6 mcp__plugin_* still denied"; else b
 absent "I6 a lone --lock has no other record to learn from: no 'other record' WARN" "does not declare" "$OUT22"
 
 # ---- 17. the deny list is the union of EVERY record in the kit, not the resolved one alone ---
-# ⛔ MEASURED 2026-09-08, THIRD HOMELAB RUN: the Coder's own record declared {onedroid, optima};
+# ⛔ MEASURED 2026-09-08, THIRD HOMELAB RUN: the Coder's own record declared two estates;
 # the kit's ROOT record (the laptop's) also declared the third estate's connector; connectors are
 # account-level so it was live on the Coder -- and a worker scoped to onedroid called the third
 # estate's tools with zero denials. Case 16 above passed throughout, because it measured the
