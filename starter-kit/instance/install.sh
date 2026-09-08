@@ -670,15 +670,9 @@ if [ -f "$ROOT/VALIDATE-INSTALL.md" ]; then
   # so a new user wouldn't even be aware of it". The step DID print — as four quiet lines among
   # eighty. A validation step nobody notices is a validation step nobody runs.
   say ""
-  say "  ┌─────────────────────────────────────────────────────────────────────────────┐"
-  say "  │  NEXT STEP, and it is not optional:                                          │"
-  say "  │                                                                             │"
-  say "  │    1. cd into this kit directory                                            │"
-  say "  │    2. start a NEW agent session there  (a fresh 'claude', NOT /clear)        │"
-  say "  │    3. paste VALIDATE-INSTALL.md as the first prompt                          │"
-  say "  └─────────────────────────────────────────────────────────────────────────────┘"
-  say ""
-  say "     $ROOT/VALIDATE-INSTALL.md"
+  say "  NEXT STEP, and it is one command:"
+  say "      bash $ROOT/boot-kit/scripts/validate.sh"
+  say "  (it opens the fresh session for you, in the right directory, with the right prompt)"
   say ""
   say "  WHY A NEW SESSION, AND WHY /clear WILL NOT DO: the skills, hooks and plugin this run"
   say "  just placed are read by the harness when a session STARTS. The session you are in now"
