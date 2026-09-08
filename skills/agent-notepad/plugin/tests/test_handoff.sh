@@ -248,4 +248,28 @@ test_publish_refuses_outside_notepad() {
   rm -rf "$d"
 }
 
+# ── the commit message names the RUNNING mission(s) ─────────────────────────────
+# MEASURED 2026-09-08 on a Coder: this helper commits from INSIDE a script, so the mission
+# commit gate (a PreToolUse Bash matcher) never sees it — and its message `handoff: m-validate-…`
+# carried a lowercased topic that matched nothing, under a RUNNING mission. The rule wants a
+# mission id in the message; the helper knows which missions are RUNNING; it writes them.
+test_commit_message_names_running_missions() {
+  local np
+  np="$(_mk_notepad_no_remote)"
+  mkdir -p "$np/.df/missions/M-PROBE-1" "$np/.df/missions/M-DONE-2"
+  printf 'RUNNING\n' > "$np/.df/missions/M-PROBE-1/state"
+  printf 'DONE\n'    > "$np/.df/missions/M-DONE-2/state"
+  printf 'body\n' | AGENT_NOTEPAD_DATE=2026-07-10 "$LIB" "$np" "m-probe slug case" >/dev/null 2>&1
+  local subj; subj="$(git -C "$np" log -1 --pretty=%s 2>/dev/null)"
+  assert_contains "$subj" "[M-PROBE-1]" "commit message carries the RUNNING mission id"
+  assert_not_contains "$subj" "M-DONE-2" "a DONE mission is not named"
+  rm -rf "$(dirname "$np")"
+
+  np="$(_mk_notepad_no_remote)"
+  printf 'body\n' | AGENT_NOTEPAD_DATE=2026-07-10 "$LIB" "$np" "no mission" >/dev/null 2>&1
+  subj="$(git -C "$np" log -1 --pretty=%s 2>/dev/null)"
+  assert_not_contains "$subj" "[" "no RUNNING mission: no bracketed id appended"
+  rm -rf "$(dirname "$np")"
+}
+
 run_tests

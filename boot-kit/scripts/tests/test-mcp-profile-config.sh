@@ -260,6 +260,30 @@ OUT21="$(env -u LOOM_LOCK CODER_WORKSPACE_NAME=ws-none python3 "$GATE" --profile
          --kit-root "$KIT2" --out "$WORK/o21.json" 2>&1)"; RC21=$?
 contains "G6 a workspace name that matches NO record learns nothing (tie stays)" "mcp.profiles is undeclared" "$OUT21"
 
+# ---- 16. a connector plan denies the OTHER estates from the LOCKFILE, not only mcpServers ---
+# ⛔ MEASURED 2026-09-08 ON THE HOMELAB CODER: ~/.claude.json there holds no mcpServers, so the
+# connector plan's disallow list was [mcp__plugin_*] alone, and a headless worker scoped to the
+# one estate's connector reported the other two estates' tools RESOLVABLE. Account-level
+# connectors appear in no file; the other estates' names exist only in the record's own
+# mcp.profiles. Estate names below are placeholders — this repo is public.
+LOCK_3EST="$WORK/three-estates.lock.json"
+cat > "$LOCK_3EST" <<'JSON'
+{"mcp": {"profiles": {
+  "onedroid":  {"kind": "connector", "servers": ["onedroid"]},
+  "estate-b":  {"kind": "connector", "servers": ["claude.ai Estate B"]},
+  "estate-c":  {"kind": "hubs",      "servers": ["hub-c", "hub-c-dev"]}
+}}}
+JSON
+OUT22="$(python3 "$GATE" --profile onedroid --config "$EMPTYCFG" --lock "$LOCK_3EST" \
+         --out "$WORK/o22.json" 2>&1)"; RC22=$?
+if [ "$RC22" -eq 0 ]; then ok "H1 connector plan with an empty config exits 0"; else bad "H1 connector plan with an empty config exits 0" "rc=$RC22: $OUT22"; fi
+PLAN_JSON="${OUT22#*PLAN }"; PLAN_JSON="${PLAN_JSON%%$'\n'*}"
+if DISALLOW_HAS "mcp__claude_ai_Estate_B__*"; then ok "H2 the other CONNECTOR estate is denied (from the lockfile)"; else bad "H2 the other connector estate is denied" "absent: $PLAN_JSON"; fi
+if DISALLOW_HAS "mcp__hub_c__*"; then ok "H3 the other HUBS estate is denied (from the lockfile)"; else bad "H3 the other hubs estate is denied" "absent: $PLAN_JSON"; fi
+if DISALLOW_HAS "mcp__hub_c_dev__*"; then ok "H4 every server of the other hubs profile is denied"; else bad "H4 every server of the other hubs profile is denied" "absent: $PLAN_JSON"; fi
+if DISALLOW_HAS "mcp__onedroid__*"; then bad "H5 the worker's OWN connector is never denied" "mcp__onedroid__* in disallow"; else ok "H5 the worker's OWN connector is never denied"; fi
+if DISALLOW_HAS "mcp__plugin_*"; then ok "H6 mcp__plugin_* still denied"; else bad "H6 mcp__plugin_* still denied" "absent"; fi
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
