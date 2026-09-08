@@ -52,8 +52,13 @@ EOF
 }
 
 event_json() {
-  local cwd="$1" active="${2:-false}"
-  printf '{"session_id":"x","hook_event_name":"Stop","stop_hook_active":%s,"cwd":"%s"}' "$active" "$cwd"
+  local cwd="$1" active="${2:-false}" sid="${3:-x}"
+  printf '{"session_id":"%s","hook_event_name":"Stop","stop_hook_active":%s,"cwd":"%s"}' "$sid" "$active" "$cwd"
+}
+
+mk_owner() {
+  local notepad="$1" id="$2" owner="$3"
+  printf '%s\n' "$owner" > "$notepad/.df/missions/$id/owner"
 }
 
 echo "=== 1: PROBE 3 shape — RUNNING mission, NO handoff at all -> decision:block ==="
@@ -137,6 +142,47 @@ O="$(printf 'not json' | run)"; rc=$?
 contains "8: systemMessage names an internal error" "internal error" "$O"
 absent   "8: no decision is asserted over a parse failure" '"decision"' "$O"
 if [ "$rc" -eq 0 ]; then ok "8: hook still exits 0"; else bad "8: hook still exits 0" "exit $rc"; fi
+
+echo "=== 9: owner file names THIS session (session_id=x) -> blocks exactly as an unowned mission ==="
+N9="$T/np9"; mk_notepad "$N9"; mk_running "$N9" "M-TEST-9"
+mk_owner "$N9" "M-TEST-9" "x"
+O="$(event_json "$N9" false x | run)"
+contains "9: still blocks — the owner IS this session" '"decision": "block"' "$O"
+
+echo "=== 10: owner is another session -> {} plus a systemMessage naming the owner, once ==="
+N10="$T/np10"; mk_notepad "$N10"; mk_running "$N10" "M-TEST-10"
+mk_owner "$N10" "M-TEST-10" "the-other-session"
+O="$(event_json "$N10" false x | run)"
+absent   "10: no decision — never blocks a non-owner" '"decision"' "$O"
+contains "10: systemMessage names the mission" "M-TEST-10" "$O"
+contains "10: systemMessage names the owner" "the-other-session" "$O"
+O2="$(event_json "$N10" false x | run)"
+if [ "$O2" = "{}" ]; then ok "10: the SAME session's second Stop gets bare {} — told once"
+else bad "10: second Stop from the same session is silent" "$O2"; fi
+
+echo "=== 11: 'once per session' is per READER, not global — a different session still gets told ==="
+N11="$T/np11"; mk_notepad "$N11"; mk_running "$N11" "M-TEST-11"
+mk_owner "$N11" "M-TEST-11" "the-other-session"
+O="$(event_json "$N11" false session-a | run)"
+contains "11: session-a gets the notice" "the-other-session" "$O"
+O2="$(event_json "$N11" false session-b | run)"
+contains "11: session-b (a different reader) ALSO gets the notice" "the-other-session" "$O2"
+
+echo "=== 12: no owner file at all -> unchanged: still blocks an incomplete handoff ==="
+N12="$T/np12"; mk_notepad "$N12"; mk_running "$N12" "M-TEST-12"
+O="$(event_json "$N12" false any-session | run)"
+contains "12: unowned mission still blocks, regardless of who is asking" '"decision": "block"' "$O"
+
+echo "=== 13: one mission owned ELSEWHERE, one owned by ME with no handoff -> still BLOCKS ==="
+# A notice about somebody else's mission must never pre-empt the check on the mission this
+# session does own. Sorted order puts the other-owned mission first, which is the shape that
+# used to return the notice and skip the rest.
+N13="$T/np13"; mk_notepad "$N13"; mk_running "$N13" "M-TEST-13A"; mk_running "$N13" "M-TEST-13B"
+mk_owner "$N13" "M-TEST-13A" "the-other-session"
+mk_owner "$N13" "M-TEST-13B" "me"
+O="$(event_json "$N13" false me | run)"
+contains "13: blocks on the mission this session owns" '"decision": "block"' "$O"
+contains "13: the block names MY mission, not the other one" "M-TEST-13B" "$O"
 
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"

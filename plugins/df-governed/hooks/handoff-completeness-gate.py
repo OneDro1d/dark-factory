@@ -18,6 +18,12 @@ immediately (headless workers do not author handoffs; the supervisor does, betwe
 
 Fails OPEN on any internal error: a Stop gate that crashes closed traps the session.
 Pure-Python stdlib, reads stdin once, never raises past main().
+
+OWNER-AWARE. A RUNNING mission with a `.df/missions/<id>/owner` file only demands a handoff
+from the session named in it (measured: this event's own `session_id` field, present on every
+Stop payload — no env var needed here, unlike the payload-less mission-tick.sh monitor). A
+non-owner session gets `{}` plus, once per session, a systemMessage naming the owner. No owner
+file at all is unowned, and unowned behaves exactly as before this file changed.
 """
 import glob
 import json
@@ -51,6 +57,34 @@ def resolve_notepad(cwd):
         if parent == p:
             return None
         p = parent
+
+
+def read_owner(notepad, mission_id):
+    """The owning session id from .df/missions/<id>/owner, or None. No file, or an empty
+    file, means unowned — today's behaviour applies unchanged."""
+    path = os.path.join(notepad, ".df", "missions", mission_id, "owner")
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8", errors="replace") as f:
+        owner = f.readline().strip()
+    return owner or None
+
+
+def notify_non_owner_once(notepad, mission_id, owner, reader_session_id):
+    """Once per (mission, reading session) pair, return the one-line systemMessage naming the
+    owner; every later Stop from the same non-owner session returns None. The marker lives
+    beside the mission's own owner/state files, so a fresh notepad (as every test uses) starts
+    with a clean slate and two different non-owner sessions each get their own notice."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", reader_session_id or "unknown")
+    marker = os.path.join(notepad, ".df", "missions", mission_id, ".owner-notified.%s" % safe)
+    if os.path.isfile(marker):
+        return None
+    try:
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write("")
+    except OSError:
+        pass
+    return "mission %s: owned by %s, not this session." % (mission_id, owner)
 
 
 def running_missions(notepad):
@@ -125,7 +159,19 @@ def main():
     map_path = os.path.join(notepad, "MAP.md")
     map_mtime = os.path.getmtime(map_path) if os.path.isfile(map_path) else None
 
+    session_id = str(event.get("session_id") or "")
+
+    # A notice about a mission owned elsewhere must not pre-empt the check on a mission this
+    # session DOES own: collect notices, keep walking, and only emit them if nothing blocks.
+    notices = []
     for mission_id in missions:
+        owner = read_owner(notepad, mission_id)
+        if owner and owner != session_id:
+            msg = notify_non_owner_once(notepad, mission_id, owner, session_id)
+            if msg:
+                notices.append(msg)
+            continue
+
         path, content = newest_handoff(notepad, mission_id)
         if path is None:
             reason = "mission %s: handoff none — no handoffs/*.md mentions this mission id." % mission_id
@@ -137,6 +183,8 @@ def main():
         reason += " Write or refresh the handoff (Skill: handoff), then stop again."
         return emit({"decision": "block", "reason": reason})
 
+    if notices:
+        return emit({"systemMessage": " ".join(notices)})
     return emit({})
 
 
