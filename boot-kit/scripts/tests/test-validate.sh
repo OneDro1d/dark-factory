@@ -220,6 +220,64 @@ bash "$ARM" "$KIT11B" >/dev/null 2>&1
 [ ! -e "$KIT11B/.df-validate/.claude" ] && ok "11: a kit with no project settings arms with none (nothing invented)" \
   || bad "11: a kit with no project settings arms with none" ".claude/ present"
 
+echo "=== 12: the armed notepad can COMMIT with no global git identity ==="
+# MEASURED 2026-09-08 on the homelab Coder: the kit's identity was repo-local, nothing was
+# global, so the notepad repo inherited none -- the handoff helper wrote and staged but could
+# not commit ("Author identity unknown"). The arm now gives the notepad an identity: the kit's
+# where git can resolve one, else its own throwaway one. Both halves, under a HOME with no
+# .gitconfig and GIT_CONFIG_GLOBAL pointed at nothing.
+NOHOME="$T/nohome"; mkdir -p "$NOHOME"
+KIT12="$(_fresh_kit kit12)"
+git -C "$KIT12" config user.name "Kit Local"
+git -C "$KIT12" config user.email "kit-local@example.invalid"
+env HOME="$NOHOME" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 bash "$ARM" "$KIT12" >/dev/null 2>&1
+NP12="$KIT12/.df-validate"
+C12="$(env HOME="$NOHOME" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$NP12" commit -q --allow-empty -m "M-VALIDATE: gate check" 2>&1)"; RC12=$?
+[ "$RC12" -eq 0 ] && ok "12: a plain commit in the armed notepad succeeds" || bad "12: a plain commit succeeds" "rc=$RC12: $C12"
+contains "12: it carries the kit's repo-local identity" "kit-local@example.invalid" "$(git -C "$NP12" log -1 --format=%ae)"
+KIT12B="$(_fresh_kit kit12b)"
+env HOME="$NOHOME" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 bash "$ARM" "$KIT12B" >/dev/null 2>&1
+C12B="$(env HOME="$NOHOME" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$KIT12B/.df-validate" commit -q --allow-empty -m "M-VALIDATE: gate check" 2>&1)"; RC12B=$?
+[ "$RC12B" -eq 0 ] && ok "12: with NO identity anywhere the arm supplies its own and the commit still succeeds" \
+  || bad "12: no identity anywhere still commits" "rc=$RC12B: $C12B"
+
+echo "=== 13: project HOOKS travel with the project settings that name them ==="
+# MEASURED 2026-09-08 on the homelab Coder: the copied settings named `.claude/hooks/ensure-gate.sh`,
+# absent in the notepad -- a declared SessionStart hook failing silently on every start there.
+KIT13="$(_fresh_kit kit13)"
+mkdir -p "$KIT13/.claude/hooks"
+printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash .claude/hooks/ensure-gate.sh"}]}]}}\n' > "$KIT13/.claude/settings.json"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$KIT13/.claude/hooks/ensure-gate.sh"
+git -C "$KIT13" -c user.name=t -c user.email=t@example.invalid add -A
+git -C "$KIT13" -c user.name=t -c user.email=t@example.invalid commit -q -m hooks
+bash "$ARM" "$KIT13" >/dev/null 2>&1
+file_exists "13: the hook the settings name exists in the notepad" "$KIT13/.df-validate/.claude/hooks/ensure-gate.sh"
+
+echo "=== 14: an operator-todo raised INSIDE the run is carried out, not destroyed ==="
+# MEASURED 2026-09-08 on the homelab Coder: df-operator-todo resolves the nearest notepad --
+# the throwaway one -- so an item raised for the operator during validation was written there
+# and would have gone with the directory.
+KIT14="$(_fresh_kit kit14)"
+LOG14="$T/log14"; : > "$LOG14"
+STUB14="$T/claude-stub-todo.sh"
+cat > "$STUB14" <<'STUBEOF'
+#!/usr/bin/env bash
+printf '## Async\n- [ ] `probe` — **needs the operator** · _why it is yours:_ a decision · _do:_ decide · _raised 2026-09-08_\n' > operator-todo.md
+exit 0
+STUBEOF
+chmod +x "$STUB14"
+V14_OUT="$(VALIDATE_CLAUDE_BIN="$STUB14" bash "$VALIDATE" --kit-root "$KIT14" 2>&1)"; V14_RC=$?
+[ "$V14_RC" -eq 0 ] && ok "14: validate.sh exits 0" || bad "14: validate.sh exits 0" "rc=$V14_RC: $V14_OUT"
+TODO14="$(ls "$KIT14"/VALIDATE-OPERATOR-TODO-*.md 2>/dev/null | head -1)"
+[ -n "$TODO14" ] && ok "14: VALIDATE-OPERATOR-TODO-<date>.md exists at the kit root" || bad "14: operator todo carried out" "no file"
+contains "14: it carries the item" "needs the operator" "$(cat "$TODO14" 2>/dev/null)"
+contains "14: the run says it did so" "raised item(s) for the operator" "$V14_OUT"
+KIT14B="$(_fresh_kit kit14b)"
+LOG14B="$T/log14b"; : > "$LOG14B"
+V14B_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOG14B" bash "$VALIDATE" --kit-root "$KIT14B" 2>&1)"; V14B_RC=$?
+[ -z "$(ls "$KIT14B"/VALIDATE-OPERATOR-TODO-*.md 2>/dev/null)" ] && ok "14: a run that raised nothing leaves no todo file" \
+  || bad "14: no todo file when nothing raised" "file present"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"

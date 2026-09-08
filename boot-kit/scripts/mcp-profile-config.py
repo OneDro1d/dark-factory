@@ -128,7 +128,59 @@ def resolve_machine_lock(kit_root=None):
             continue
         if m and all(m.get(k) == v for k, v in me.items()):
             matched.append(c)
+    matched = narrow_by_identity(matched, _load_json_quiet)
     return matched[0] if len(matched) == 1 else None
+
+
+def _load_json_quiet(path):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def narrow_by_identity(matched, load):
+    """Several records claim this platform + home. MEASURED 2026-09-08 on the homelab Coder:
+    two instance records of one kit (homelab, poland) both say {Linux, /home/coder} — the
+    machine block is deliberately not keyed on hostname, because a Coder pod is renamed on
+    every restart — so the tie could not be broken and the worker chain refused to launch,
+    although each record already carried the discriminator identify.sh measured into it:
+    install.identity.workspace (CODER_WORKSPACE_NAME) and install.identity.deploymentId (from
+    GET <CODER_AGENT_URL>/api/v2/buildinfo — the URL itself is NOT unique, the id is).
+
+    Narrow by the workspace name from the environment; if that still ties (one workspace
+    name on two deployments — the ESO estate's shape), ask the control plane for its
+    deployment id, best effort, 3 s. Learn nothing → return the list unchanged, so "cannot
+    tell" stays visible to the caller. Same code, by design, as df-preflight.find_lock().
+    """
+    if len(matched) < 2:
+        return matched
+    ws = os.environ.get("CODER_WORKSPACE_NAME", "").strip()
+    if not ws:
+        return matched
+
+    def ident(c):
+        try:
+            return ((load(c) or {}).get("install") or {}).get("identity") or {}
+        except Exception:
+            return {}
+
+    by_ws = [c for c in matched if ident(c).get("workspace") == ws]
+    if len(by_ws) == 1:
+        return by_ws
+    if not by_ws:
+        return matched
+    url = os.environ.get("CODER_AGENT_URL", "").strip().rstrip("/")
+    if not url:
+        return by_ws
+    try:
+        import urllib.request
+        # TLS verified, on purpose: a control plane whose certificate does not verify teaches
+        # this resolver nothing, and "nothing learned" is the safe answer (the tie stays).
+        with urllib.request.urlopen(url + "/api/v2/buildinfo", timeout=3) as r:
+            dep = (json.loads(r.read().decode("utf-8", "replace")) or {}).get("deployment_id", "")
+    except Exception:
+        return by_ws
+    by_dep = [c for c in by_ws if dep and ident(c).get("deploymentId") == dep]
+    return by_dep if len(by_dep) == 1 else by_ws
 
 
 def env_refs(obj):
@@ -210,17 +262,33 @@ def main():
                           "df-worker passes the root df-mission on PATH lives under)")
     a = ap.parse_args()
 
+    # ⛔ ORDER MATTERS, and it was wrong until 2026-09-08. This used to refuse "no mcpServers"
+    # HERE, before the lockfile was even read — so on a machine whose ~/.claude.json holds no
+    # mcpServers (the connector estate's normal shape: credentials come from shared storage,
+    # and the record says never to copy a bearer token into that file to satisfy a check) a
+    # `kind: connector` profile could never be reached, LOOM_LOCK or not. Measured on the
+    # homelab Coder: df-worker refused "no MCP config for profile 'onedroid'" while the record
+    # declared exactly that profile. A connector needs no mcpServers at all; only `hubs` and
+    # the name-prefix fallback do. So: read the config leniently, resolve the profile, and
+    # refuse for want of servers only where servers are what the shape needs.
+    cfg_err = None
+    cfg = {}
     try:
         with open(a.config, encoding="utf-8") as fh:
-            cfg = json.load(fh)
+            cfg = json.load(fh) or {}
     except Exception as e:
-        print("mcp-profile-config: cannot read %s: %s" % (a.config, e), file=sys.stderr)
-        return 2
-
+        cfg_err = "%s" % e
     servers = cfg.get("mcpServers") or {}
-    if not servers:
-        print("mcp-profile-config: no mcpServers in %s" % a.config, file=sys.stderr)
-        return 3
+
+    def need_servers():
+        """Refuse, with the same exit codes as before, for a shape that needs mcpServers."""
+        if cfg_err is not None:
+            print("mcp-profile-config: cannot read %s: %s" % (a.config, cfg_err), file=sys.stderr)
+            return 2
+        if not servers:
+            print("mcp-profile-config: no mcpServers in %s" % a.config, file=sys.stderr)
+            return 3
+        return 0
 
     # LOOM_LOCK sits between the explicit flag and the path-derived guess. It is how
     # df-preflight and df-mission are told which instance this is on a VENDORED kit (START-HERE
@@ -246,6 +314,9 @@ def main():
         kind = prof_entry.get("kind")
         want = prof_entry.get("servers") or []
         if kind == "hubs":
+            rc = need_servers()
+            if rc:
+                return rc
             missing_hubs = [n for n in want if n not in servers]
             if missing_hubs:
                 print("mcp-profile-config: mcp.profiles.%s (hubs) names server(s) missing "
@@ -281,6 +352,9 @@ def main():
         return 2
 
     # ---- no declared entry: the ORIGINAL name-prefix rule, informed rather than silent ----
+    rc = need_servers()
+    if rc:
+        return rc
     print("mcp-profile-config: INFO mcp.profiles is undeclared for profile %r — using the "
           "name-prefix rule (run df-preflight --profile %s to get a proposal)"
           % (a.profile, a.profile), file=sys.stderr)

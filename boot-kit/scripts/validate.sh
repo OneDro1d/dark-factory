@@ -115,6 +115,17 @@ else
   printf 'validate.sh: no REPORT.md in the armed notepad -- nothing copied\n'
 fi
 
+# MEASURED 2026-09-08 on the homelab Coder: df-operator-todo resolves the NEAREST notepad —
+# which, inside a validate run, is this throwaway one — so anything the session raised for
+# the operator was written here and would have been destroyed with the directory. Carry
+# every open item out beside the report; an empty page leaves nothing behind.
+TODO_BASENAME=""
+if [ -f "$NP/operator-todo.md" ] && grep -q '^- \[ \]' "$NP/operator-todo.md"; then
+  TODO_BASENAME="VALIDATE-OPERATOR-TODO-$REPORT_DATE.md"
+  cp "$NP/operator-todo.md" "$KIT_ROOT/$TODO_BASENAME"
+  printf 'validate.sh: the session raised item(s) for the operator -- copied to %s\n' "$KIT_ROOT/$TODO_BASENAME"
+fi
+
 if [ "$KEEP" -eq 1 ]; then
   printf 'validate.sh: --keep set, leaving %s in place -- teardown skipped\n' "$NP"
   exit 0
@@ -154,6 +165,9 @@ if [ -n "$STATUS_BEFORE" ]; then
 fi
 if [ -n "$REPORT_BASENAME" ]; then
   STATUS_UNEXPLAINED="$(printf '%s\n' "$STATUS_UNEXPLAINED" | grep -vF "$REPORT_BASENAME" || true)"
+fi
+if [ -n "$TODO_BASENAME" ]; then
+  STATUS_UNEXPLAINED="$(printf '%s\n' "$STATUS_UNEXPLAINED" | grep -vF "$TODO_BASENAME" || true)"
 fi
 
 CLEAN=1

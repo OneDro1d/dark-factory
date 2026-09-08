@@ -93,6 +93,37 @@ probe "$D"
 case "$(det block)" in *"second appears"*) ok "D: says when it will start to matter" ;;
   *) bad "D: says when it matters" "no forward-looking line" ;; esac
 
+echo "=== E: two records claim this machine -- find_lock narrows by CODER_WORKSPACE_NAME ==="
+# ⛔ MEASURED 2026-09-08 ON THE HOMELAB CODER: `df-preflight --profile onedroid` said
+# "2 lockfiles claim machine Linux:/home/coder (homelab, poland) -- set LOOM_LOCK" although
+# each record carried install.identity.workspace, measured by identify.sh. find_lock() is
+# called with KIT_ROOT patched to a two-record kit, the same way df-preflight resolves it
+# on a real kit; the workspace name comes from the environment as it does on Coder.
+KIT_E="$TMP/kit-e"; mkdir -p "$KIT_E/instances/a" "$KIT_E/instances/b"
+jq -n --arg p "$ME_PLATFORM" --arg h "$ME_HOME" \
+  '{machine:{platform:$p, home:$h}, install:{identity:{workspace:"ws-a", deploymentId:"dep-1"}}}' > "$KIT_E/instances/a/loom.lock.json"
+jq -n --arg p "$ME_PLATFORM" --arg h "$ME_HOME" \
+  '{machine:{platform:$p, home:$h}, install:{identity:{workspace:"ws-b", deploymentId:"dep-1"}}}' > "$KIT_E/instances/b/loom.lock.json"
+find_lock_e() { # $1 = CODER_WORKSPACE_NAME ("" = unset) -> prints "<path-or-None>|<why-or-None>"
+  env -u LOOM_LOCK -u CODER_AGENT_URL ${1:+CODER_WORKSPACE_NAME="$1"} python3 - "$PF" "$KIT_E" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("dfpf", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+m.KIT_ROOT = sys.argv[2]
+p, why = m.find_lock()
+print("%s|%s" % (p, why))
+PY
+}
+R_B="$(find_lock_e ws-b)"
+case "$R_B" in *"/instances/b/loom.lock.json|None") ok "E: ws-b resolves record b" ;; *) bad "E: ws-b resolves record b" "$R_B" ;; esac
+R_A="$(find_lock_e ws-a)"
+case "$R_A" in *"/instances/a/loom.lock.json|None") ok "E: ws-a resolves record a" ;; *) bad "E: ws-a resolves record a" "$R_A" ;; esac
+R_0="$(find_lock_e "")"
+case "$R_0" in "None|"*"2 lockfiles claim machine"*) ok "E: no workspace in env: still a visible tie" ;; *) bad "E: no workspace: visible tie" "$R_0" ;; esac
+R_X="$(find_lock_e ws-none)"
+case "$R_X" in "None|"*"did not single one out"*) ok "E: an unmatched workspace name says so in the why" ;; *) bad "E: unmatched name says so" "$R_X" ;; esac
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"
