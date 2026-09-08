@@ -355,16 +355,34 @@ except Exception: pass
   # contradicting reality, which this estate measured (2026-04-24) the agent obeying over the
   # reality.
   assert_contains "$head" "INLINED IN FULL" "a handoff that fits is reported as inlined in full"
-  assert_contains "$head" "NOT inlined" "NOTES.md is reported as NOT inlined"
+  # ⛔ THE OLD ASSERTION HERE WAS "NOT inlined", AND IT WAS ASSERTING A LIE. That line printed
+  # unconditionally whenever NOTES.md existed -- measured 2026-09-08 on the eso laptop saying
+  # "NOT inlined (174 bytes; too large for the budget)" directly above a full inline of the
+  # file. The header is now decided from the same numbers the emitter uses, and this fixture's
+  # 70 KB NOTES.md is CUT, so that is the word it must say -- with the file path beside it.
+  assert_contains "$head" "NOTES.md — CUT" "a NOTES.md over the budget is reported as CUT, not as an unconditional not-inlined"
   assert_contains "$head" "$np/handoffs/2026-06-06-h.md" "the handoff PATH is inside the first 2 KB"
   assert_contains "$head" "$np/NOTES.md" "the NOTES path is inside the first 2 KB"
   assert_contains "$head" "TRUNCATED" "the reader is warned content may be cut"
 
-  # ⚠️ And the WHOLE payload must stay small enough to have a chance of arriving intact.
-  total="$(printf '%s' "$out" | wc -c | tr -d ' ')"
+  # ⛔ MEASURE THE FIELD THE HARNESS CAPS, NOT THE STDOUT. This used to assert total stdout under
+  # 20,000 bytes "past the externalisation seen at 13.7 KB". Measured 2026-09-08 with a hook
+  # emitting exactly N bytes of markers into a one-turn session: 10,000 bytes of
+  # additionalContext arrived whole, 10,500 were persisted to a file with a 2 KB preview -- and
+  # the cap is on the FIELD: a 15.7 KB stdout whose additionalContext was 7.6 KB was delivered in
+  # full on the eso laptop. Stdout is roughly twice the field (dual-field contract, plus JSON
+  # escaping), so a stdout threshold both over-counts and measures the wrong thing. The hook's
+  # default total is 8 KiB precisely so this stays under 10,000 with the framing included.
+  field="$(printf '%s' "$out" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print(max(len(d.get('systemMessage','')), len((d.get('hookSpecificOutput') or {}).get('additionalContext',''))))
+except Exception: print(999999)
+")"
   ASSERT_CASES=$((ASSERT_CASES + 1))
-  if [ "$total" -lt 20000 ]; then _pass
-  else _fail "payload is ${total} bytes — past the externalisation seen at 13.7 KB"; fi
+  if [ "${field:-999999}" -lt 10000 ]; then _pass
+  else _fail "the injected field is ${field} bytes — the harness persists it past ~10,000 and the session gets a 2 KB preview"; fi
   rm -rf "$(dirname "$np")"
 }
 

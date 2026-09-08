@@ -336,25 +336,45 @@ Part 1 finding wearing a Part 2 costume.
 not work around it. It means the installer's plugin step did not run, which is exactly the
 declared-and-installed-by-nothing defect this document exists to catch.
 
-### First, two things only a human can do
+### First, three things only a human can do
 
-1. On the machine you validate, in the notepad you work from, arm a throwaway mission so the
-   mission-scoped gates have something to guard. Nothing else reads this directory:
+⛔ **THE DIRECTORY YOU START IN DECIDES WHETHER ANY OF THIS CAN PASS.** Every mission-scoped gate
+(escalation, commit, handoff Stop, `df-worker`, `df-operator-todo`, `mission-tick`) finds its
+mission by walking **up from the session's cwd for a `NOTES.md`** — that file is what makes a
+directory a notepad. Start anywhere else and they all abstain, silently and correctly, and both
+first-screen signals below are structurally absent. **That is not "the plugin did not load".**
+Measured 2026-09-08 on a laptop whose kit root is not a notepad: every first-pass FAIL had this
+one cause, and the doc as it stood told the validator to record a plugin failure.
+
+⚠️ The kit root is a notepad on SOME machines and not others (it depends on whether that repo
+carries `NOTES.md`). Check before you arm: `ls NOTES.md` in the directory you intend to use. If
+it is not there, use — or `/scope-init` — a real notepad. **Do not drop a fixture `NOTES.md` into
+a repo that has a remote:** the notepad Stop hook pushes on every stop, and a fixture in a shared
+instance repo pushed three throwaway commits to its `main` the first time this was tried.
+
+1. In a **notepad** on the machine you validate (a directory holding `NOTES.md`), arm a throwaway
+   mission so the mission-scoped gates have something to guard. Nothing else reads this directory:
 
    ```sh
+   ls NOTES.md                              # must exist — see the block above
    mkdir -p .df/missions/M-VALIDATE
    printf 'RUNNING\n' > .df/missions/M-VALIDATE/state
    ```
 
-2. **Start a NEW session** in that notepad (a fresh `claude`, not `/clear` — a plugin materialised
-   after a session started is not loaded until the next one).
+2. **Start a NEW session** with cwd = that notepad (a fresh `claude`, not `/clear` — a plugin
+   materialised after a session started is not loaded until the next one).
 
 3. Watch the first screen. Two things must be there before you type anything:
    - the notepad restore block starts with **`### NOTEPAD RESOLVED`** and **`### OTHER NOTEPADS ON
      THIS MACHINE`** (objective 7 — disclosure, not a gate);
    - within the first seconds, a notification line **`mission-tick: M-VALIDATE is RUNNING …`**
      (objective 5 — the plugin started the monitor itself; the first tick fires before the first
-     sleep). No line = the plugin did not load; stop here and record that.
+     sleep).
+
+   **Neither line** → first re-check step 1: is `NOTES.md` in this directory, and is this session's
+   cwd that directory? If both are true and both lines are still absent, the plugin did not load —
+   stop and record that. If either is false, the finding is "started outside a notepad", not a
+   plugin failure; fix the cwd and start again.
 
 4. Paste Part B as your first prompt.
 
@@ -396,7 +416,21 @@ run; leave every other mission's state alone.
    not end.** The Stop hook blocks with a reason naming `M-VALIDATE`, that no handoff mentions it,
    and telling you to write one. When that happens, write a short handoff (one paragraph, headings
    `## Next action`, `## Blocked`, `## Evidence`, mentioning `M-VALIDATE`) into `handoffs/` via
-   the `handoff` skill's helper, then stop again. Expected: the turn ends. Record both outcomes.
+   the `handoff` skill's helper.
+
+   ⚠️ **Then do NOT test the pass by "stopping again".** The Stop that follows a block arrives with
+   `stop_hook_active: true`, and the gate releases on that flag unconditionally (its loop guard),
+   so the turn ending proves the guard, not the handoff. Measured 2026-09-08. Test the handoff
+   directly instead — the same way the block was produced, but by hand:
+
+   ```sh
+   printf '{"hook_event_name":"Stop","cwd":"%s","stop_hook_active":false}' "$PWD" \
+     | python3 ~/.claude/skills/df-governed/hooks/handoff-completeness-gate.py
+   ```
+
+   Expected: `{}` (released — the handoff is fresh and names the mission). Then `touch MAP.md`
+   again and repeat: expected a block whose reason says the handoff is older than the map.
+   Record all three outcomes: the live block, the direct release, the direct stale-map block.
 
 7. **The worker chain (objective 2), dry.** From this notepad run the estate's launcher in
    dry-run mode: `WORKER_DRY_RUN=1 <vendored Tier-2>/workers/dispatch.sh dev 1 "probe"` where the

@@ -134,7 +134,14 @@ chmod 700 "$MCPDIR" 2>/dev/null || true
 MCP_CFG="$MCPDIR/mcp-$PROFILE.json"
 MCP_OK=0
 if [ -f "$SCRIPTS/mcp-profile-config.py" ]; then
-  if python3 "$SCRIPTS/mcp-profile-config.py" --profile "$PROFILE" --out "$MCP_CFG"; then
+  # ⚠️ PASS THE LOCK WHEN WE KNOW IT. mcp-profile-config.py resolves the instance lockfile from
+  # its own path, which on a VENDORED kit is vendor/dark-factory -- no lockfile there. Measured
+  # 2026-09-08 (eso laptop): exit 4, "no MCP config for profile", every supervised iteration
+  # ran with no MCP plan. LOOM_LOCK is the estate's spelling of "this instance"; hand it over
+  # rather than letting the script guess wrong two directories away from the answer.
+  _lockarg=()
+  [ -n "${LOOM_LOCK:-}" ] && _lockarg=(--lock "$LOOM_LOCK")
+  if python3 "$SCRIPTS/mcp-profile-config.py" --profile "$PROFILE" --out "$MCP_CFG" "${_lockarg[@]}"; then
     MCP_OK=1
   else
     # ⚠️ LOUD, NEVER SILENT. Running on with no MCP is a legitimate choice for a mission that

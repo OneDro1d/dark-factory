@@ -243,7 +243,17 @@ while i < n:
                         reason += " --no-verify does not bypass the mission commit gate."
                     print("MISSION_BLOCK"); print(reason); sys.exit(0)
 
-            print("COMMIT\t%s\t%s\t%s" % (cpath, allf, nov)); sys.exit(0)
+            # "-" IS THE EMPTY-FIELD SENTINEL, AND ITS ABSENCE MADE THE GATE FAIL OPEN FOR THE
+            # COMMON CASE. Measured on the eso laptop 2026-09-07 and re-measured 2026-09-08: a
+            # plain "git commit -m x" (no -C) produced COMMIT<tab><tab>0<tab>0; the bash side
+            # reads that with IFS set to tab, and tab is IFS WHITESPACE, so the two adjacent tabs
+            # collapse and every later field shifts one column left -- cpath received the value
+            # of allf ("0"), "git -C 0" failed, and the gate ALLOWED. Only "git -C <repo> commit"
+            # was ever blocked, which is the only spelling the suite exercised. A gate that guards
+            # the rare spelling and not the common one is a gate in name.
+            # (No backticks or apostrophes in this comment: it sits inside a $( ) substitution,
+            # where bash tracks quote state while scanning for the closing paren.)
+            print("COMMIT\t%s\t%s\t%s" % (cpath or "-", allf, nov)); sys.exit(0)
     i += 1
 print("NOTCOMMIT")
 PY
@@ -262,6 +272,9 @@ esac
 IFS=$'\t' read -r _kind cpath allflag noverify <<EOF
 $first_line
 EOF
+# The python side never emits an empty cpath (see the sentinel comment above the print):
+# translate it back here, and nowhere else, so the two halves cannot drift.
+[ "$cpath" = "-" ] && cpath=""
 
 [ "${noverify:-0}" = "1" ] && allow   # respect an explicit --no-verify bypass (old rule only)
 

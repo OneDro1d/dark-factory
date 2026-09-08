@@ -269,6 +269,15 @@ Open a **new** session in your instance directory. Hooks are read once, at sessi
 a hook installed mid-session does nothing — that, and the fact that hooks are *copied* while
 skills are *symlinked*, account for almost every "my change did nothing".
 
+⛔ **The directory you start in decides what gets restored, and nothing else does.** Working
+memory — `NOTES.md`, the newest handoff, the mission gates — is resolved by walking **up from
+the session's cwd for a `NOTES.md`**. That is the same rule as "drive repos via `git -C`, never
+`cd`", seen from the other side: a session started inside a *code repo* the notepad drives gets
+**nothing** from the notepad, because the notepad is not above it. Measured 2026-09-08: a real
+`/clear` from a code-repo cwd restored nothing and said nothing. If you are resuming work, start
+with cwd = the notepad (the directory holding `NOTES.md`), then reach the repos with `git -C`.
+The hook now names the notepad and says so when it catches this; before, it emitted `{}`.
+
 The session hook should tell you which instance you are in, whether it is actually installed,
 and what missions are running. If it says nothing at all, run it directly before blaming it:
 

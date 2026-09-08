@@ -85,6 +85,25 @@ test_drift_commit_blocks() {
   rm -rf "$repo"
 }
 
+# ── (b2) the SAME drift, spelled `git commit` with cwd = the repo → block ──────
+# ⛔ THIS CASE WAS MISSING AND THE GATE SHIPPED FAILING OPEN. Every case above uses
+# `git -C <repo> commit`; the common spelling -- plain `git commit` from inside the repo --
+# emitted `COMMIT\t\t0\t0`, the empty field collapsed under IFS=$'\t', cpath took the next
+# column's "0", and `git -C 0` failed into `allow`. Measured on the eso laptop 2026-09-07/08.
+# A positive control that exercises one spelling proves that spelling, nothing wider.
+test_drift_commit_blocks_without_dash_C() {
+  local repo; repo="$(_mkrepo)"
+  printf 'message Y {}\n' > "$repo/contracts/y.proto"
+  git -C "$repo" add "$repo/contracts/y.proto" >/dev/null 2>&1
+  run_hook "$HOOKS/commit-gate.sh" \
+    "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m change\"},\"cwd\":\"$repo\"}"
+  assert_eq "2" "$RC" "drift commit, no -C, cwd=repo: exit 2 (block)"
+  printf '%s' "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1
+  assert_eq "0" "$?" "drift commit, no -C: decision==block"
+  assert_contains "$OUT" "y.proto" "no -C: block reason names the drifting file"
+  rm -rf "$repo"
+}
+
 # ── (c) compliant commit (context store staged too) → allow ─────────────────
 test_compliant_commit_allows() {
   local repo; repo="$(_mkrepo)"
