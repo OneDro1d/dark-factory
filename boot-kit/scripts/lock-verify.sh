@@ -888,7 +888,27 @@ else
       drift "L11 plugin $pname: pin source missing ($srcpath) — cannot verify"
       continue
     fi
-    L11DIFF="$(diff -r --brief "$srcpath" "$destpath" 2>&1)"
+    # ⛔ EXCLUDE NFS SILLY-RENAMES, 2026-09-08, AND THE RUN THAT MEASURES IS THE RUN THAT
+    # CAUSES IT. On a box where ~/.claude is a symlink into shared NFS (every provisioned
+    # Coder in the reference estate), install.sh's re-materialisation UNLINKS files under
+    # $LIVE/skills/<plugin>/. NFS cannot unlink a file another process still holds open, so
+    # it renames it aside as .nfsXXXXXXXX and keeps the ghost until the last fd closes.
+    # `diff -r` then sees a file the pin does not have and this layer reports the plugin as
+    # drifted when it is byte-identical.
+    #
+    # ⚠️ THE HOLDER IS USUALLY THIS ESTATE'S OWN MONITOR. Measured twice on 2026-09-08
+    # (homelab Coder): the fd belonged to mission-tick.sh -- fd 255, bash's own script fd --
+    # started by the very session running install.sh, mid-`sleep` on the copy being replaced.
+    # The remedy that existed before this line was "kill the holder", which is operator
+    # technique, and technique does not survive the next run: the monitor is armed by default,
+    # so "install from a session with no monitors armed" is not a thing anyone can reliably do.
+    #
+    # A silly-rename is never plugin content -- it is a deleted inode with a witness. It
+    # cannot be part of a pin, so excluding it costs this layer no honesty: a real extra file
+    # in the materialised tree is still caught, and the ghost disappears on its own.
+    # ⚠️ A gate that cries wolf on a green kit trains the reader to discount it. That is the
+    # cost being paid here, not the noise.
+    L11DIFF="$(diff -r --brief --exclude='.nfs*' "$srcpath" "$destpath" 2>&1)"
     if [ -n "$L11DIFF" ]; then
       drift "L11 plugin $pname: materialised copy does NOT match the pin:"
       printf '%s\n' "$L11DIFF" | head -5 | while IFS= read -r l; do note "$l"; done
