@@ -14,8 +14,18 @@
 #   df-mission status [id]
 #   df-mission say <id> "text"
 #   df-mission stop <id>
+#   df-mission own <id> [session-id]   record who holds an ATTENDED (state=RUNNING) mission
 #   df-mission list
 #   df-mission profile          what `start` defaults to, and where that came from
+#
+# OWNERSHIP. No script here ever writes state=RUNNING — that is the ATTENDED shape (an
+# operator-framed mission, run inside a live session, not `df-supervisor.sh`'s unattended
+# CONTINUE/DONE/BLOCKED/STOP loop), and nothing in this engine frames one. `own` is that
+# missing writer: it exists so `.df/missions/<id>/owner` gets written at all. `start` writes
+# it too, best-effort, when $CLAUDE_CODE_SESSION_ID is set in its own environment (true when
+# this script is run from a Claude session's Bash tool, which is the common case) — harmless
+# on the unattended path, since state there is never RUNNING and the two owner-aware gates
+# only ever consult `owner` under state=RUNNING.
 set -uo pipefail
 
 # readlink -f, not dirname alone: this script is normally reached through a symlink on
@@ -163,11 +173,25 @@ cmd_say() {
   echo "(the running iteration will not see it — notes are drained between iterations)"
 }
 
+cmd_own() {
+  local id="${1:?mission id}"; shift || true
+  local sid="${1:-${CLAUDE_CODE_SESSION_ID:-}}"
+  [ -n "$sid" ] || die "no session id given and \$CLAUDE_CODE_SESSION_ID is unset — pass one: df-mission own $id <session-id>"
+  local d; d="$(mdir "$id")"
+  [ -d "$d" ] || die "no such mission: $id"
+  printf '%s\n' "$sid" > "$d/owner"
+  echo "mission $id owner set to $sid"
+}
+
 cmd_stop() {
   local id="${1:?mission id}"
   local d; d="$(mdir "$id")"
   [ -d "$d" ] || die "no such mission: $id"
   echo STOP > "$d/state"
+  # STOP takes the mission out of RUNNING (attended) or CONTINUE (unattended) either way; the
+  # owner-aware gates only ever consult `owner` while state=RUNNING, so clear it here rather
+  # than leave a stale claim a later `own`/`start` would have to know to overwrite.
+  rm -f "$d/owner"
   local pid; pid="$(cat "$d/pid" 2>/dev/null || true)"
   echo "state set to STOP — the supervisor exits after the current iteration."
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
@@ -198,6 +222,7 @@ cmd_start() {
   echo "$profile" > "$d/profile"
   [ -n "$channel" ] && printf '%s\n' "$channel" > "$d/notify-channel"
   [ -s "$d/state" ] || echo CONTINUE > "$d/state"
+  [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && printf '%s\n' "$CLAUDE_CODE_SESSION_ID" > "$d/owner"
 
   # TERMINAL-STATE GUARD. Without this, `start` on a finished mission is a FALSE START: it
   # printed "started mission ... state CONTINUE", forked a supervisor, and the supervisor
@@ -261,6 +286,7 @@ case "${1:-}" in
   status) shift; cmd_status "$@" ;;
   say)    shift; cmd_say "$@" ;;
   stop)   shift; cmd_stop "$@" ;;
+  own)    shift; cmd_own "$@" ;;
   list)   cmd_list ;;
   profile) cmd_profile ;;
   *) sed -n '3,20p' "$0"; exit 64 ;;
