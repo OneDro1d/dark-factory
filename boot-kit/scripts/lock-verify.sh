@@ -19,6 +19,8 @@
 #   L11 every materialised plugin still matches its pin (a copy, not a symlink)
 #   L12 every plugin's own invariants suite, if it ships one, still passes
 #   L13 every estate's declared MCP source (a hub set, or a claude.ai connector) is present
+#   L14 every declared marketplace plugin is installed, enabled, and still the version
+#       install.sh recorded — the only drift signal available for something unpinnable
 #
 # L8/L9 added 2026-08-29. L1..L7 could all pass on a machine that boots with no identity and
 # no memory, because the hooks supplying those were in no lockfile (L8) or in one and wired
@@ -1061,6 +1063,74 @@ else
         ;;
     esac
   done <<<"$L13_PROFILES"
+fi
+
+# ---- L14: marketplace plugins — present, enabled, and still the version we got ----
+# ADDED 2026-09-08, and it exists because `install.marketplacePlugins` is the one thing this
+# kit installs that it CANNOT PIN. `claude plugin install` takes no version argument
+# (measured against the real CLI): every machine gets LATEST at whatever moment it ran. So
+# install.sh records the RESOLVED version into `probed.marketplacePlugins`, and this layer is
+# the half that makes that recording worth anything — without it, the record is a number
+# nobody ever reads back.
+#
+# ⚠️ WHAT THIS LAYER CAN AND CANNOT CLAIM. It cannot say the installed code is correct: there
+# is no pin to diff against, so nothing here is L11's byte-for-byte check. It says three
+# weaker things that are still worth saying — the plugin is THERE, it is ENABLED, and its
+# version has not MOVED since the day this machine installed it. Calling that a pin, in the
+# output or in anyone's head, is the failure this layer is trying to prevent.
+#
+# ⚠️ INSTALLED IS NOT ENABLED, and the difference is invisible in the filesystem. Measured on
+# a real laptop: `plugin list --json` carries entries with "enabled": false — on disk, in
+# installed_plugins.json, loading nothing. A check that only asked "is it installed" would
+# pass on a machine where the plugin does nothing at all.
+echo "[L14] marketplace plugins present, enabled, and unmoved since install"
+L14_CLAUDE="${LOCK_VERIFY_CLAUDE_BIN:-claude}"
+L14_N="$(jq -r '(.install.marketplacePlugins // []) | length' "$LOCK")"
+if [ "$L14_N" -eq 0 ]; then
+  pass "L14 no marketplace plugins declared — nothing to check"
+elif ! command -v "$L14_CLAUDE" >/dev/null 2>&1; then
+  # UNKNOWN, not drift: the plugins may be perfectly installed. Nothing here can see.
+  unknown "L14 '$L14_CLAUDE' is not on PATH — the only surface that lists these could not be read"
+else
+  L14_LIST="$("$L14_CLAUDE" plugin list --json 2>/dev/null)"
+  if [ -z "$L14_LIST" ]; then
+    unknown "L14 '$L14_CLAUDE plugin list --json' returned nothing — probe could not run"
+  else
+    while IFS= read -r m; do
+      [ -n "$m" ] || continue
+      l14name="$(jq -r '.name // empty' <<<"$m")"
+      l14mkt="$(jq -r '.marketplace // empty' <<<"$m")"
+      if [ -z "$l14name" ] || [ -z "$l14mkt" ]; then
+        drift "L14 entry missing name or marketplace — install.sh refuses this shape too"
+        continue
+      fi
+      l14id="$l14name@$l14mkt"
+      l14live="$(printf '%s' "$L14_LIST" | jq -c --arg id "$l14id" \
+        'map(select(.id == $id)) | .[0] // empty' 2>/dev/null)"
+      if [ -z "$l14live" ]; then
+        drift "L14 $l14id: declared but NOT installed — run install.sh"
+        continue
+      fi
+      if [ "$(jq -r '.enabled // false' <<<"$l14live")" != "true" ]; then
+        drift "L14 $l14id: installed but DISABLED — on disk, loading nothing"
+        continue
+      fi
+      l14now="$(jq -r '.version // "unknown"' <<<"$l14live")"
+      l14was="$(jq -r --arg id "$l14id" '.probed.marketplacePlugins[$id].version // empty' "$LOCK")"
+      if [ -z "$l14was" ]; then
+        # Genuinely UNKNOWN for the question this layer asks. The plugin is present and
+        # enabled — but with no recorded baseline there is no such thing as "moved", and
+        # saying ok would claim a check that never happened.
+        unknown "L14 $l14id: installed and enabled, but no recorded version — re-run install.sh to record one"
+      elif [ "$l14was" != "$l14now" ]; then
+        drift "L14 $l14id: version MOVED since install — recorded $l14was, now $l14now"
+        note "this is not a broken machine. It is what unpinnable means: LATEST moved under you."
+        note "if the new version is wanted, re-run install.sh so probed records it and this clears."
+      else
+        pass "L14 $l14id: enabled, version $l14now — unchanged since install"
+      fi
+    done < <(jq -c '(.install.marketplacePlugins // [])[]' "$LOCK")
+  fi
 fi
 
 echo ""

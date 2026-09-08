@@ -22,7 +22,20 @@
 # NOT handled (documented rather than silently skipped):
 #   - claude.ai-hosted MCP connectors (e.g. the ESO hub) are ACCOUNT-level, not in
 #     ~/.claude.json. Sign in on the machine; no lockfile can restore them.
-#   - `gh auth login` itself, plugin marketplaces, and any compiled binary.
+#   - `gh auth login` itself, UNDECLARED third-party marketplace plugins, and any
+#     compiled binary.
+#     ⚠️ THREE THINGS SHARE THE WORD "PLUGIN" HERE AND THEY BEHAVE DIFFERENTLY:
+#       1. `install.plugins` — a COPY of a tree inside this lockfile's Tier-1 pin,
+#          restored by the plugin step above into ~/.claude/skills/<name>/. PINNED.
+#       2. `install.marketplacePlugins` — DECLARED third-party plugins, installed by
+#          install.sh step 3c via `claude plugin install`. RESTORED, but NOT PINNED:
+#          the CLI has no version argument, so every machine gets LATEST and the
+#          resolved version is recorded in `probed.marketplacePlugins` after the fact.
+#       3. anything a human added with `/plugin` and never declared. NOT restored,
+#          because nothing knows it exists. That is the line this section is about.
+#     Conflating 1 and 3 is measured, not hypothetical: an operator read an older
+#     wording as "the kit's plugin is now yours to install by hand", which is the exact
+#     opposite of what happens.
 #   - anything in settings.json that is NOT a hook chain: `permissions` is a security
 #     posture and `outputStyle` is the operator's UI. Section 4 reports a difference in
 #     those and never applies it.
@@ -490,4 +503,7 @@ say "== summary =="
 say "  $OVERRIDE override(s) — a declaration here replacing something an earlier layer installed"
 say ""
 say "NEXT: bash <vendor>/dark-factory/boot-kit/scripts/lock-verify.sh"
-say "Manual, not restorable from a lockfile: gh auth login · claude.ai MCP connectors · plugin marketplaces"
+say "Manual, not restorable from a lockfile: gh auth login · claude.ai MCP connectors ·"
+say "  third-party plugins you added with /plugin and never DECLARED. Declared ones are"
+say "  installed for you — install.plugins into ~/.claude/skills/ (pinned), and"
+say "  install.marketplacePlugins via 'claude plugin install' (latest, never pinned)."

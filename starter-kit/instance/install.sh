@@ -423,6 +423,153 @@ else
   done < <(jq -c '(.install.plugins // [])[]' "$LOCK")
 fi
 
+# ---- 3c. marketplace plugins -> `claude plugin install` ----------------------
+# ADDED 2026-09-08. THIRD-PARTY plugins from a Claude Code MARKETPLACE — playwright and its
+# kind. Operator ask: "is there a way of automatically install 3rd party plugins?"
+#
+# ⛔ THIS IS A DIFFERENT MECHANISM FROM 3b ABOVE AND THE TWO MUST NOT BE READ AS SIBLINGS.
+# 3b materialises a COPY of a plugin that lives INSIDE the Tier-1 pin, so it moves only when
+# the pin moves and lock-verify L11 can diff it byte-for-byte against its source. This step
+# shells out to a CLI that fetches code this estate does not host, cannot diff, and — the
+# part that decides the whole design — cannot pin.
+#
+# ⛔ THERE IS NO VERSION ARGUMENT. MEASURED 2026-09-08 against the real CLI, not assumed:
+# `claude plugin install <plugin>` accepts `--config`, `--scope` and `-y`, and NOTHING that
+# selects a version. It installs LATEST, on every machine, every time. A pin that cannot be
+# expressed is not a pin, and a lockfile that implies one it cannot enforce is worse than a
+# lockfile that admits the gap.
+#
+# OPERATOR DECISION 2026-09-08, option A of two: automate it anyway, and RECORD THE RESOLVED
+# VERSION into `probed.marketplacePlugins`, so that what LATEST meant on the day this machine
+# installed is written down and lock-verify L14 can see it move afterwards. Option B — leave
+# these a human step — was rejected because a human typing the same command gets the same
+# unpinned latest, just slower and with nothing recorded.
+#
+# ⚠️ THIS STEP CAUSES ~/.claude/settings.json TO BE EDITED, AND IT IS THE ONE STEP THAT DOES.
+# MEASURED in an isolated CLAUDE_CONFIG_DIR: `plugin marketplace add` writes
+# `extraKnownMarketplaces` and `plugin install` writes `enabledPlugins`, both into the
+# user-scope settings.json. `notRestorable` says this installer "places hook files, it does
+# not edit your settings" — that stays true of THIS SCRIPT, which still writes nothing there;
+# the edit is made by Claude Code's own CLI through its own merge path. Say it out loud
+# anyway, because the operator who read that line will otherwise meet the change by surprise.
+#
+# ⚠️ THE MARKETPLACE MUST BE ADDED FIRST, INCLUDING THE OFFICIAL ONE. MEASURED on a fresh
+# config dir: `plugin marketplace list --json` returns `[]` and an install of
+# `playwright@claude-plugins-official` fails with "not found in marketplace" until
+# `plugin marketplace add anthropics/claude-plugins-official` has run. A new machine is
+# exactly that fresh config dir, so `marketplaceSource` is how an entry becomes installable
+# there rather than only on the laptop it was authored on.
+#
+# BOTH CLI CALLS ARE IDEMPOTENT AND EXIT 0 ON A SECOND RUN — measured: "already installed"
+# and "already on disk". So this step is re-runnable like every other one here.
+#
+# A REFUSED ENTRY DOES NOT ABORT THE INSTALL, on the same contract as 3b: the loop continues
+# and RC carries the refusal into the exit code, so it is never swallowed into a green run.
+step "marketplace plugins"
+MP_N="$(jq -r '(.install.marketplacePlugins // []) | length' "$LOCK")"
+if [ "$MP_N" -eq 0 ]; then
+  say "marketplace plugins: none declared"
+else
+  # Overridable for the same reason LOOM_LIVE and LOOM_BIN are: a suite that has to shell out
+  # to the real `claude` — and mutate the real ~/.claude/settings.json to prove a point — is a
+  # suite nobody runs twice. lock-verify spells the same idea LOCK_VERIFY_CLAUDE_BIN.
+  MP_CLAUDE="${DF_CLAUDE_BIN:-claude}"
+  if ! command -v "$MP_CLAUDE" >/dev/null 2>&1; then
+    say "  REFUSED every marketplace plugin: '$MP_CLAUDE' is not on PATH"
+    say "        nothing else can install these — there is no fetch path that is not the CLI"
+    RC=2
+  else
+    MP_PROBED='{}'
+    while IFS= read -r m; do
+      [ -n "$m" ] || continue
+      MNAME="$(jq -r '.name // empty' <<<"$m")"
+      MMKT="$(jq -r '.marketplace // empty' <<<"$m")"
+      MSRC="$(jq -r '.marketplaceSource // empty' <<<"$m")"
+      MSCOPE="$(jq -r '.scope // "user"' <<<"$m")"
+      if [ -z "$MNAME" ] || [ -z "$MMKT" ]; then
+        say "  REFUSED marketplace plugin '${MNAME:-<unnamed>}': needs both name and marketplace"
+        RC=2; continue
+      fi
+      # ONLY `user` IS ACCEPTED. `project` and `local` write into a PROJECT's settings, so a
+      # machine installer would be reaching into one checkout and calling that the machine's
+      # state — and lock-verify, which asks the CLI about this machine, would never see it.
+      if [ "$MSCOPE" != "user" ]; then
+        say "  REFUSED marketplace plugin $MNAME: scope '$MSCOPE' — only 'user' is accepted here"
+        RC=2; continue
+      fi
+      MID="$MNAME@$MMKT"
+      if [ "$DRY" -eq 1 ]; then
+        [ -n "$MSRC" ] && say "  would add marketplace $MMKT <- $MSRC"
+        say "  would install $MID (scope user, whatever LATEST is at that moment — no pin exists)"
+        continue
+      fi
+      if [ -n "$MSRC" ]; then
+        if ! MPOUT="$("$MP_CLAUDE" plugin marketplace add "$MSRC" 2>&1)"; then
+          say "  REFUSED $MID: could not add marketplace '$MMKT' from '$MSRC'"
+          printf '%s\n' "$MPOUT" | tail -3 | while IFS= read -r l; do say "        $l"; done
+          RC=2; continue
+        fi
+      fi
+      if ! MIOUT="$("$MP_CLAUDE" plugin install "$MID" -y --scope user 2>&1)"; then
+        say "  REFUSED $MID: install failed"
+        printf '%s\n' "$MIOUT" | tail -3 | while IFS= read -r l; do say "        $l"; done
+        RC=2; continue
+      fi
+      # ASK THE CLI WHAT IT ACTUALLY DID, rather than believing the success line. `plugin list
+      # --json` is the same surface lock-verify L14 reads, so the record written here and the
+      # check made later cannot disagree about where the truth lives.
+      MP_LIVE="$("$MP_CLAUDE" plugin list --json 2>/dev/null \
+        | jq -c --arg id "$MID" 'map(select(.id == $id)) | .[0] // empty' 2>/dev/null)"
+      if [ -z "$MP_LIVE" ]; then
+        say "  WARN  $MID: install reported success but the plugin is absent from"
+        say "        '$MP_CLAUDE plugin list --json' — nothing recorded, so nothing verifiable"
+        RC=2; continue
+      fi
+      MVER="$(jq -r '.version // "unknown"' <<<"$MP_LIVE")"
+      MPATH="$(jq -r '.installPath // ""' <<<"$MP_LIVE")"
+      # INSTALLED IS NOT ENABLED. Measured on this laptop: `plugin list --json` shows entries
+      # with "enabled": false — installed, on disk, loading nothing. A fresh install comes up
+      # enabled, so this is a repair for a machine where someone disabled it, not the norm.
+      if [ "$(jq -r '.enabled // false' <<<"$MP_LIVE")" != "true" ]; then
+        "$MP_CLAUDE" plugin enable "$MID" >/dev/null 2>&1 \
+          || say "  WARN  $MID: installed but DISABLED, and 'plugin enable' failed — it loads nothing"
+      fi
+      MP_PROBED="$(jq -c --arg id "$MID" --arg v "$MVER" --arg p "$MPATH" \
+        '.[$id] = {version: $v, installPath: $p}' <<<"$MP_PROBED")"
+      say "  $MID: installed, version $MVER"
+      say "        ^ this is LATEST as of now, NOT a pin — recorded so L14 can see it move"
+    done < <(jq -c '(.install.marketplacePlugins // [])[]' "$LOCK")
+
+    # WRITE THE RESOLVED VERSIONS BACK INTO THE LOCKFILE. This is the first thing install.sh
+    # writes to its own lockfile, and it is deliberate: `probed` is the section whose own
+    # $comment says "WRITTEN BY TOOLS, not by you", and a resolved version is a MEASUREMENT,
+    # not a declaration. It belongs beside the other measured machine facts, in the one file
+    # that is this machine's record — not in a receipt file beside it, which would be the
+    # second copy of a fact this whole tier exists to prevent.
+    #
+    # A failure to write is a WARN, never fatal: the plugins ARE installed by this point, and
+    # aborting would leave a machine changed and unreported. But the warning must say what is
+    # lost — without the record, L14 can see that a plugin is present and can say nothing at
+    # all about whether its version moved.
+    if [ "$DRY" -eq 0 ] && [ "$MP_PROBED" != "{}" ]; then
+      MP_TMP="$LOCK.mp.$$"
+      if jq --argjson mp "$MP_PROBED" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '.probed = ((.probed // {})
+                        | .marketplacePlugins = $mp
+                        | .marketplacePluginsResolvedAt = $at)' \
+            "$LOCK" > "$MP_TMP" 2>/dev/null && mv "$MP_TMP" "$LOCK"; then
+        say "  recorded resolved versions -> probed.marketplacePlugins in $LOCK"
+        say "  ⚠️ COMMIT THAT FILE. It is the only written record of what LATEST meant today;"
+        say "     uncommitted, the next machine has no baseline and L14 has nothing to compare."
+      else
+        rm -f "$MP_TMP"
+        say "  WARN  could not write probed.marketplacePlugins into $LOCK"
+        say "        the versions above are UNRECORDED — L14 will report them unknown, not ok"
+      fi
+    fi
+  fi
+fi
+
 # ---- 4. PATH -----------------------------------------------------------------
 step "df-mission and df-preflight on PATH"
 # Overridable for the same reason rehydrate.sh takes LOOM_LIVE: a test that has to write
