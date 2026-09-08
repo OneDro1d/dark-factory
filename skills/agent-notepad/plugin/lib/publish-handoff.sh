@@ -108,7 +108,20 @@ publish_handoff() { # NOTEPAD_ROOT TOPIC [BODY_FILE]
   # WRONG for the commit, because it turns a REJECTION into a reported success. The handoff tier
   # exists so a checkpoint survives; a publisher that reports success over an uncommitted file
   # loses precisely what it promised to keep.
-  _commit_out="$(git -C "$root" commit -qm "handoff: ${topic} (${date_stamp})" 2>&1)"
+  # ⚠️ NAME THE RUNNING MISSION(S) IN THE MESSAGE. The mission commit gate requires a commit
+  # under a RUNNING mission to carry a tracker item id or a mission id. This helper commits
+  # from INSIDE a script, so a PreToolUse Bash gate never sees the commit (measured 2026-09-08
+  # on a Coder: `handoff: m-validate-…` landed under M-VALIDATE RUNNING, its topic lowercased
+  # by the slug and matching nothing). A helper that would be blocked if the gate could see it
+  # is a helper writing the wrong message; put the id where the rule looks for it.
+  _missions=""
+  for _st in "$root"/.df/missions/*/state; do
+    [ -f "$_st" ] || continue
+    [ "$(head -n1 "$_st" 2>/dev/null)" = "RUNNING" ] || continue
+    _mid="${_st%/state}"; _mid="${_mid##*/}"
+    _missions="${_missions:+$_missions }[$_mid]"
+  done
+  _commit_out="$(git -C "$root" commit -qm "handoff: ${topic} (${date_stamp})${_missions:+ $_missions}" 2>&1)"
   _commit_rc=$?
   if [ "$_commit_rc" -ne 0 ]; then
     case "$_commit_out" in

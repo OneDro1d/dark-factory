@@ -337,7 +337,22 @@ def main():
             # allow-list into a config. Scoping instead means DENYING every OTHER server's
             # tools: every hub-config server present on this machine, plus any plugin-shipped
             # tool namespace, so only the target connector's own tools remain reachable.
-            disallow = ["mcp__%s__*" % sanitise_name(n) for n in sorted(servers)]
+            # ⛔ AND EVERY OTHER PROFILE'S SERVERS FROM THE LOCKFILE, NOT ONLY THIS MACHINE'S
+            # mcpServers. Measured 2026-09-08 on the homelab Coder: ~/.claude.json there holds
+            # no mcpServers at all (the connector estate's shape), so this list came back as
+            # [mcp__plugin_*] alone — and a headless worker scoped to one estate's connector
+            # reported the other two estates' tools RESOLVABLE. Account-level connectors appear
+            # in no file; the only place the OTHER estates' names exist on such a machine is
+            # the record's own mcp.profiles. Deny all of them, whatever their kind, except the
+            # one this worker is for. The content boundary is a hard rule in both directions.
+            others = set(servers)
+            for pname, pentry in mcp_profiles.items():
+                if pname == a.profile:
+                    continue
+                for s in (pentry or {}).get("servers") or []:
+                    others.add(s)
+            others.discard(name)
+            disallow = ["mcp__%s__*" % sanitise_name(n) for n in sorted(others)]
             disallow.append("mcp__plugin_*")
             plan = {
                 "mode": "connector",

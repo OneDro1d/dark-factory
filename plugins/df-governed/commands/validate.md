@@ -62,6 +62,12 @@ claude -p 'List your available MCP tool namespaces. If you have none, reply exac
   --setting-sources project --output-format json 2>&1 | tail -5
 ```
 
+⚠️ **A "NO MCP IN WORKER" from that probe is NOT a trustworthy negative.** Measured 2026-09-08
+on a Coder: the worker answered exactly that, then in the next probe called one of the estate's
+read-only search tools and got real data — the tool's schema was *deferred* and needed
+a `ToolSearch` to load, so a bare enumeration never saw it. Ask it to run `ToolSearch` for
+`mcp__` before answering, and treat the enumeration as a hint only. The CALL below decides.
+
 ⛔ **THAT ANSWER IS NOT YET EVIDENCE. Enumeration is not capability.** Make it CALL something:
 
 ```sh
@@ -75,7 +81,17 @@ present-but-uncallable; with it the call executed and returned real data. Report
 `permission_denials` from the JSON as well as `result` — an empty denial list next to an
 empty tool list means the worker *called nothing*, not that everything worked.
 
-**NO MCP IN WORKER is a correct and important finding, not a failed test.**
+**NO MCP IN WORKER is a correct and important finding, not a failed test** — once the CALL
+probe agrees with it.
+
+Then the **cross-estate reach** probe, same flags: ask the worker to report whether tools of
+the OTHER estates' namespaces (`mcp__<other-estate>__*` for every estate this machine's record
+declares a profile for, other than the one this notepad serves) are resolvable — enumerate AND
+attempt one read-only call. A hand-rolled `claude -p`
+WILL reach them (account-level connectors replicate with no config; measured 2026-09-08); that
+is a finding about hand-rolled workers, not the kit. The kit's own launcher scopes them out —
+`--strict-mcp-config` in hubs mode, the PLAN's `disallow` list in connector mode — and step 7's
+dry run is where you read that list: it must name every other estate, not `mcp__plugin_*` alone.
 
 Then one **bounded** dispatch, rendered first — ask for the kit's own prompt-render or
 dry-run path, whatever it is called (do not assume a variable name), report whether a prompt

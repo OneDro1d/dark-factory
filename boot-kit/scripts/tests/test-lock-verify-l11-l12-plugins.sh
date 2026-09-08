@@ -99,6 +99,31 @@ contains "B1 a modified file is DRIFT"        "DRIFT"                     "$B"
 contains "B1 the mismatch names the file"     "hooks/probe.sh"            "$B"
 contains "B1 explains the copy does not match" "does NOT match the pin"   "$B"
 
+echo "=== L11-B2: an NFS silly-rename beside the copy is NOT drift; a real extra file still is ==="
+# MEASURED twice 2026-09-08 on a Coder whose ~/.claude is shared NFS: install.sh re-materialises
+# the plugin, NFS cannot unlink a file another process holds open (this estate's own
+# mission-tick monitor, fd 255), so it renames it aside as .nfsXXXX and L11 called a
+# byte-identical plugin drifted. A silly-rename is a deleted inode with a witness, never
+# content. T1 #149 excludes it; this case keeps the exclusion narrow.
+mk b2 "$DECL_OK"
+plugin_pin  b2 plugins/df-governed .claude-plugin/plugin.json '{"name":"df-governed"}'
+plugin_pin  b2 plugins/df-governed hooks/probe.sh 'echo hook'
+plugin_dest b2 df-governed .claude-plugin/plugin.json '{"name":"df-governed"}'
+plugin_dest b2 df-governed hooks/probe.sh 'echo hook'
+# bin/ exists on BOTH sides, as on the box (the ghost sat beside bin/mission-tick.sh). A ghost
+# in a directory the pin lacks is a directory-level difference and rightly still DRIFT.
+plugin_pin  b2 plugins/df-governed bin/tick.sh 'echo tick'
+plugin_dest b2 df-governed bin/tick.sh 'echo tick'
+plugin_dest b2 df-governed bin/.nfs00000000deadbeef0001 'ghost'
+O="$(run b2)"; B="$(blk "$O" L11)"
+contains "B2 a silly-renamed ghost alone is PASS" "PASS"  "$B"
+absent   "B2 no DRIFT over the ghost"             "DRIFT" "$B"
+plugin_dest b2 df-governed bin/ZZZ-planted-real-file 'real'
+O="$(run b2)"; B="$(blk "$O" L11)"
+contains "B2 a real extra file beside the ghost is still DRIFT" "DRIFT"                  "$B"
+contains "B2 and the real file is the one named"               "ZZZ-planted-real-file"  "$B"
+absent   "B2 the ghost is not what gets named"                  ".nfs00000000deadbeef"   "$B"
+
 echo "=== L11-C: dest was never installed — DRIFT, 'not installed' ==="
 mk c1 "$DECL_OK"
 plugin_pin c1 plugins/df-governed .claude-plugin/plugin.json '{"name":"df-governed"}'
