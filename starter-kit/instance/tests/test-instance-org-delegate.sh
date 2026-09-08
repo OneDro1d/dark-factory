@@ -119,7 +119,10 @@ mk_lock() { # mk_lock <dir> <org-json>
 # engine start writing to $HOME/.claude and these cases fail on content, not on error.
 run() {
   local d="$1"; shift
-  ( cd "$d" && CLAUDE_HOME="$d/live" LOOM_BIN="$d/bin" bash install.sh --offline "$@" 2>&1 )
+  # --no-prove: this fixture's T1 ships no prove.sh (that step has its own suite,
+  # test-install-prove.sh), and an absent prove.sh costs the exit code the same way an
+  # absent lock-verify.sh does -- a fact about a step this suite is not testing.
+  ( cd "$d" && CLAUDE_HOME="$d/live" LOOM_BIN="$d/bin" bash install.sh --offline --no-prove "$@" 2>&1 )
 }
 
 echo "=== A. no org block: step 2a runs nothing ==="

@@ -75,18 +75,22 @@ EOF
 }
 
 # run <case> [extra install.sh args...] — always --offline; LOOM_LIVE/LOOM_BIN pinned inside
-# the fixture so a bug here could never reach the real ~/.claude or ~/.local/bin.
+# the fixture so a bug here could never reach the real ~/.claude or ~/.local/bin. Always
+# --no-prove too: this fixture's T1 carries no prove.sh (that step has its own suite,
+# test-install-prove.sh), and an absent prove.sh costs the exit code the same way an absent
+# lock-verify.sh does -- which would confound every RC assertion below with a fact about a
+# step this suite never set out to test.
 run() {
   local c="$1"; shift
   ( cd "$WORK/$c/inst" \
       && LOOM_LIVE="$WORK/$c/inst/live" LOOM_BIN="$WORK/$c/inst/bin" \
-         bash install.sh --offline "$@" )
+         bash install.sh --offline --no-prove "$@" )
 }
 rc_of() { # rc_of <case> [extra args...] -- run and capture ONLY the exit code
   local c="$1"; shift
   ( cd "$WORK/$c/inst" \
       && LOOM_LIVE="$WORK/$c/inst/live" LOOM_BIN="$WORK/$c/inst/bin" \
-         bash install.sh --offline "$@" >/dev/null 2>&1 )
+         bash install.sh --offline --no-prove "$@" >/dev/null 2>&1 )
   echo $?
 }
 
