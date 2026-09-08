@@ -971,17 +971,42 @@ else
     kind="$(jq -r --arg p "$prof" '.mcp.profiles[$p].kind // empty' "$LOCK")"
     case "$kind" in
       hubs)
+        # ⛔ SEARCH EVERY PLACE A HUB CAN LIVE, 2026-09-08, AND SAY WHICH ONES WERE SEARCHED.
+        # This check used to read ~/.claude.json ALONE and report "server(s) missing from
+        # <that file>" otherwise. Measured on a provisioned Coder workspace (homelab k3s): the
+        # box was FULLY configured -- two synapse hubs with bearer tokens, materialised from
+        # shared storage into ~/.mcp.json -> ~/.config/loom/mcp-config.json -- and L13 called
+        # it missing. The verdict was a fact about ONE FILE reported as a fact about MCP.
+        #
+        # ⚠️ AND THE MESSAGE MADE THE BUG WORSE THAN THE LOGIC. Naming only ~/.claude.json
+        # tells the reader where to "fix" it, so the natural repair is to COPY the bearer token
+        # into ~/.claude.json -- duplicating a secret away from its shared-storage source of
+        # truth to satisfy a checker. A check that names one location teaches people to put
+        # things there.
+        #
+        # ⚠️ ~/.claude.json IS WORKSPACE-LOCAL ON THESE BOXES while ~/.claude is a symlink into
+        # shared NFS. So hub CONFIG persists fleet-wide and per-project APPROVAL does not --
+        # see the approval note under `connector` below, which applies to .mcp.json servers too.
         L13BAD=""
+        L13_MCP_JSON="${LOOM_MCP_JSON:-$HOME/.mcp.json}"
+        L13_SEARCHED="$CLAUDE_JSON"
+        [ -f "$L13_MCP_JSON" ] && L13_SEARCHED="$L13_SEARCHED, $L13_MCP_JSON"
         while IFS= read -r srv; do
           [ -n "$srv" ] || continue
           if [ -f "$CLAUDE_JSON" ] && jq -e --arg s "$srv" '.mcpServers[$s]' "$CLAUDE_JSON" >/dev/null 2>&1
+          then :
+          elif [ -f "$L13_MCP_JSON" ] && jq -e --arg s "$srv" '.mcpServers[$s]' "$L13_MCP_JSON" >/dev/null 2>&1
           then :
           else L13BAD="$L13BAD$srv"$'\n'
           fi
         done < <(jq -r --arg p "$prof" '(.mcp.profiles[$p].servers // [])[]' "$LOCK")
         if [ -n "$L13BAD" ]; then
-          drift "L13 profile $prof (hubs): server(s) missing from $CLAUDE_JSON mcpServers:"
+          drift "L13 profile $prof (hubs): server(s) not found in any of: $L13_SEARCHED"
           printf '%s' "$L13BAD" | while read -r n; do [ -n "$n" ] && note "$n"; done
+          note "⚠️ On a PROVISIONED box (Coder), hub config is materialised from shared storage"
+          note "   into ~/.mcp.json and is NOT hand-merged into ~/.claude.json. If that is this"
+          note "   machine, the right record is kind: \"connector\" -- which verifies the LIVE"
+          note "   connected state -- not kind: \"hubs\" plus a copied bearer token."
         else
           pass "L13 profile $prof (hubs): every declared server is present"
         fi
@@ -1009,6 +1034,25 @@ else
             pass "L13 profile $prof (connector): $srv is Connected"
           else
             drift "L13 profile $prof (connector): no line starting with '$srv' and containing Connected in '$CLAUDE_BIN mcp list'"
+            # ⚠️ THE APPROVAL CAVEAT, and it is the most likely cause of this line on a freshly
+            # provisioned box. Servers declared in a project-scope .mcp.json arrive as
+            # "Pending approval", not Connected. Approval happens ONCE, INTERACTIVELY, in a real
+            # `claude` session -- there is no non-interactive approve (only
+            # `claude mcp reset-project-choices`), and setting `enabledMcpjsonServers` in
+            # ~/.claude.json alone was MEASURED not to flip them (homelab Coder, 2026-09-08).
+            #
+            # ⚠️ AND IT DOES NOT PERSIST THE WAY THE CONFIG DOES. On a Coder workspace ~/.claude
+            # is a symlink into shared NFS, so hooks/skills/settings survive fleet-wide -- but
+            # ~/.claude.json, where the approval is stored, is workspace-LOCAL. Every fresh
+            # workspace re-prompts even though nothing about the config changed.
+            #
+            # So this DRIFT is not necessarily a broken record. It is the one genuinely
+            # interactive step in the whole install, and it is called out here rather than
+            # left to hide behind "fill in the tokens".
+            note "if this box is provisioned (Coder): the servers may be PENDING APPROVAL, not absent."
+            note "approve once in an interactive 'claude' session — there is no non-interactive"
+            note "approve, and the approval lives in workspace-local ~/.claude.json, so a fresh"
+            note "workspace re-prompts even when the config came from shared storage unchanged."
           fi
         fi
         ;;
