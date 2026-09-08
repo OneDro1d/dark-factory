@@ -488,12 +488,37 @@ say "  Read AUTHENTICATION.md before pointing this at a hub."
 #
 # ⚠️ NOT GATED ON $RC, on purpose. An install that ends in drift is precisely when someone most
 # needs telling that files-in-place is not the same as working.
-step "validate — files in place is not the same as working"
+step "validate — THE INSTALL IS NOT DONE UNTIL YOU RUN THIS"
 if [ -f "$ROOT/VALIDATE-INSTALL.md" ]; then
-  say "  paste $ROOT/VALIDATE-INSTALL.md into a FRESH session on this machine."
-  say "  It exercises the machinery instead of looking for it: it makes the identity check"
-  say "  disagree on purpose, feeds a gate two different inputs, and asks what a headless"
-  say "  worker can actually see — which is not what this session can see."
+  # ⚠️ WORDED THIS LOUDLY ON PURPOSE, 2026-09-08. A new operator installed a fresh Coder and
+  # reported that "the install session hasn't mentioned anything about the final test prompt,
+  # so a new user wouldn't even be aware of it". The step DID print — as four quiet lines among
+  # eighty. A validation step nobody notices is a validation step nobody runs.
+  say ""
+  say "  ┌─────────────────────────────────────────────────────────────────────────────┐"
+  say "  │  NEXT STEP, and it is not optional:                                          │"
+  say "  │                                                                             │"
+  say "  │    1. cd into this kit directory                                            │"
+  say "  │    2. start a NEW agent session there  (a fresh 'claude', NOT /clear)        │"
+  say "  │    3. paste VALIDATE-INSTALL.md as the first prompt                          │"
+  say "  └─────────────────────────────────────────────────────────────────────────────┘"
+  say ""
+  say "     $ROOT/VALIDATE-INSTALL.md"
+  say ""
+  say "  WHY A NEW SESSION, AND WHY /clear WILL NOT DO: the skills, hooks and plugin this run"
+  say "  just placed are read by the harness when a session STARTS. The session you are in now"
+  say "  began before they existed and cannot see them — validating in it fails every check for"
+  say "  the wrong reason, which looks exactly like a broken install."
+  say ""
+  say "  WHY THE DIRECTORY MATTERS: that document runs entirely inside this one and writes"
+  say "  nothing outside it. Its last step is a teardown that removes every artefact it created"
+  say "  and then PROVES the tree is clean."
+  say ""
+  say "  WHAT IT IS FOR: everything above proves files were COPIED and match the lockfile. None"
+  say "  of it proves the machinery WORKS — a hook command that does not exist FAILS OPEN, and"
+  say "  nothing blocks and nothing errors. That document exercises the machinery instead of"
+  say "  looking for it: it makes the identity check disagree on purpose, feeds a gate two"
+  say "  different inputs, and asks what a headless worker can actually see."
 else
   say "  WARN  no VALIDATE-INSTALL.md in this kit. Nothing here proves the install WORKS,"
   say "        only that files were copied. Fetch it from the starter kit before trusting this."
