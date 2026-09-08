@@ -131,6 +131,7 @@ alone.
    Expected: DENIED, reason naming the RUNNING mission and the two accepted message forms.
    Then run it again with `-m "M-VALIDATE: gate check"`. Expected: it runs (an empty commit;
    removed in step 8).
+   The same probe from the notepad against a CODE repo (`git -C <any repo> commit --allow-empty -m wip`) must also be DENIED now — that is the plugin's `mission-commit-gate.py`, distinct from this project-level staleness gate.
 
 5. **Merge gate.** From inside the Tier-1 checkout on this machine (find it: `git -C <path>
    remote get-url origin` ends in `/dark-factory.git` or `/dark-factory`), run
