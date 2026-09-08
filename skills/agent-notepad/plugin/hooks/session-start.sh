@@ -33,6 +33,50 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
 # --- resolve notepad; degrade to {} outside one ----------------------------
 np="$(find_notepad "$cwd")" || np=""
 if [ -z "$np" ]; then
+  # ⛔ SILENCE WAS THE DEFECT, NOT THE `{}`. Resolution is walk-up only, by design: a session is
+  # in a notepad or it is not. But a session started in a CODE REPO that some notepad DRIVES
+  # (listed in its repos.manifest.json) got `{}` and nothing else -- and the operator's real
+  # /clear on 2026-09-08 restored nothing and said nothing, in a repo whose notepad sat one
+  # directory over. The kit's own rule ("drive repos via git -C, never cd") means that cwd was
+  # wrong by the template's own standard, and the hook was the one thing that could have said so.
+  #
+  # This does NOT restore from the notepad -- restoring into a session that is not in it would
+  # make a wrong cwd look right. It names the notepad and says where to start, in the visible
+  # systemMessage, and still emits no context. The scan is the same one the resolved branch
+  # uses for OTHER NOTEPADS (AGENT_NOTEPAD_ROOTS + the parents of cwd, two levels deep), and a
+  # repo matches by its ORIGIN REMOTE first -- this estate resolves identity by remote, never by
+  # directory name -- with the manifest's `path` as the fallback for entries that carry one.
+  _hint=""
+  _cwd_remote="$(git -C "$cwd" remote get-url origin 2>/dev/null || true)"
+  _cwd_top="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
+  _roots="$(dirname "$cwd")"$'\n'"$(dirname "$(dirname "$cwd")")"$'\n'"${AGENT_NOTEPAD_ROOTS:-}"
+  _roots="$(printf '%s\n' "$_roots" | tr ':' '\n')"
+  while IFS= read -r _root; do
+    [ -n "$_root" ] && [ -d "$_root" ] || continue
+    while IFS= read -r _hit; do
+      [ -n "$_hit" ] || continue
+      _cand="$(cd "$(dirname "$_hit")" 2>/dev/null && pwd)"
+      [ -f "$_cand/repos.manifest.json" ] || continue
+      if command -v jq >/dev/null 2>&1; then
+        if [ -n "$_cwd_remote" ] && jq -e --arg r "$_cwd_remote" \
+             '(.repos // [])[] | select(.remote != null) | select(.remote == $r or (.remote | rtrimstr(".git")) == ($r | rtrimstr(".git")))' \
+             "$_cand/repos.manifest.json" >/dev/null 2>&1; then
+          _hint="$_cand"; break
+        fi
+        if jq -e --arg p "${_cwd_top:-$cwd}" \
+             '(.repos // [])[] | select(.path != null) | select(.path == $p)' \
+             "$_cand/repos.manifest.json" >/dev/null 2>&1; then
+          _hint="$_cand"; break
+        fi
+      fi
+    done < <(find "$_root" -maxdepth 2 -name NOTES.md 2>/dev/null)
+    [ -n "$_hint" ] && break
+  done <<< "$_roots"
+  if [ -n "$_hint" ]; then
+    jq -n --arg m "agent-notepad: no notepad above $cwd — nothing restored. This directory is a code repo that the notepad $_hint DRIVES (it is in that notepad's repos.manifest.json). Start the session THERE to get its working memory; from here, drive this repo with git -C, never cd." \
+      '{systemMessage: $m}'
+    exit 0
+  fi
   printf '{}\n'
   exit 0
 fi
@@ -153,7 +197,10 @@ if [ -d "$np/handoffs" ]; then
     # after the right-sizing: the whole 4,486-byte handoff fits at 9,187 bytes total, 4.5 KB under
     # the cliff. A cap that cut the handoff INSIDE its next-action section, mid-word, was the cap
     # doing damage rather than preventing it.
-    _cap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-5120}"
+    # MUST equal the _hcap default in the announcements block, or the header says one number
+    # and the emission does another -- the exact defect the 2026-09-08 audit measured on the
+    # NOTES.md line. Both read the same variable; both default to 4096.
+    _cap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-4096}"
     printf '\n\n### ⛔ NEWEST HANDOFF — READ THIS FIRST\n\n'
     printf '  file: %s\n' "$newest"
     printf '  handoff written : %s\n' "$(date -u -r "$newest" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
@@ -288,7 +335,10 @@ combined="$(
   printf '\n### ⛔ WHAT IS BELOW, AND WHAT IS NOT\n\n'
   _hf=""
   if [ -d "$np/handoffs" ]; then _hf="$(ls -t "$np/handoffs"/*.md 2>/dev/null | head -1)"; fi
-  _hcap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-5120}"
+  # 4,096 (was 5,120): with the harness cap MEASURED at ~10 KiB on the additionalContext field
+  # and ~3.5 KB of framing, a 5 KB handoff left no room for the NOTES reserve. See the budget
+  # block below the announcements for the arithmetic.
+  _hcap="${AGENT_NOTEPAD_HANDOFF_MAX_BYTES:-4096}"
   if [ -n "$_hf" ]; then
     _hsz="$(wc -c < "$_hf" 2>/dev/null | tr -d ' ')"
     if [ "${_hsz:-0}" -le "$_hcap" ]; then
@@ -299,10 +349,76 @@ combined="$(
       printf '     %s\n' "$_hf"
     fi
   fi
+  # ⛔ ONE TOTAL, SPENT IN PRIORITY ORDER, MEASURED — NOT TWO CAPS THAT EACH LOOK REASONABLE.
+  #
+  # The harness cap on additionalContext was MEASURED on 2026-09-08 with a hook emitting exactly
+  # N bytes of numbered markers into a one-turn headless session (project-level hook, real login):
+  #   10,000 bytes -> every marker arrived, INLINE
+  #   10,500 bytes -> Output too large, persisted to a file, ~2 KB preview (32 markers)
+  # (No quotes of either kind in these comments: they sit inside the $( ) substitution.)
+  # so the ceiling is in (10,000, 10,500] — almost certainly 10 KiB exactly — and it applies to the
+  # additionalContext FIELD, not the whole stdout (the eso laptop delivered a 15.7 KB stdout whose
+  # additionalContext was 7.6 KB). Three sessions had guessed this number before: 2,500 (starved
+  # NOTES.md and the manifest on every notepad with a 2 KB DIGEST), a comment claiming 36 KB, and a
+  # proposal of 6,000 that with a full-size handoff would have overflowed by itself.
+  #
+  # So: ONE total for the DOCUMENTS (handoff + DIGEST + manifest + NOTES), the handoff takes what
+  # it takes up to its own cap, and what is LEFT is the budget for the rest. A short handoff hands
+  # its unused bytes to NOTES.md instead of to nobody. AGENT_NOTEPAD_MAX_BYTES still overrides the
+  # rest-budget directly, so the suites that pin it keep their meaning.
+  #
+  # ⚠️ THE FRAMING IS NOT IN THE TOTAL AND IT IS NOT SMALL. Headings, the orientation block, the
+  # next-action quote (up to 600 bytes), the other-notepads list, every OMITTED / TRUNCATED notice:
+  # measured at ~3,800 bytes with a pathological NOTES.md in the suite (6,600 for documents put
+  # the field at 10,110). 6,300 for the documents keeps that worst case under 10,000. The handoff
+  # cap is 4,096 so a full-size handoff plus the NOTES reserve still fits: 4,096 + 1,200 + 3,800.
+  # Under-spending by a KB is a cost; over-spending by one byte is a 2 KB preview and no restore.
+  #
+  # ⚠️ NOTES.md GETS A RESERVED SLICE. It is emitted LAST (its top is the useful part, and it grows
+  # without limit), and last meant it was the one always OMITTED. Reserving 1,200 bytes means the
+  # goal and next action arrive even when DIGEST and the manifest would have spent everything.
+  _hoff=0
+  if [ -n "$_hf" ]; then _hoff="${_hsz:-0}"; [ "$_hoff" -gt "$_hcap" ] && _hoff="$_hcap"; fi
+  _total="${AGENT_NOTEPAD_TOTAL_BYTES:-6300}"
+  _default_budget=$(( _total - _hoff ))
+  [ "$_default_budget" -lt 1200 ] && _default_budget=1200
+  _budget="${AGENT_NOTEPAD_MAX_BYTES:-$_default_budget}"
+  _reserve_notes="${AGENT_NOTEPAD_NOTES_MIN_BYTES:-1200}"
+  [ "$_reserve_notes" -ge "$_budget" ] && _reserve_notes=$(( _budget / 2 ))
+  # ⛔ DECIDED FROM THE SAME NUMBERS _emit_bounded WILL USE, so the announcement and the emission
+  # cannot disagree. They did: this line printed NOT-inlined-too-large-for-the-budget for a
+  # 174-byte file, unconditionally, directly above a full inline of that file (eso laptop,
+  # 2026-09-08). The comment at the top of this block promises each line is decided from the
+  # actual byte counts at emit time, and this one was not. NOTES.md is emitted LAST, after
+  # DIGEST.md and the manifest digest, so what is left for it is the budget minus those two.
   if [ -f "$np/NOTES.md" ]; then
-    printf '  2. NOTES.md — NOT inlined (%s bytes; too large for the budget). Open it when the\n' \
-        "$(wc -c < "$np/NOTES.md" 2>/dev/null | tr -d ' ')"
-    printf '     handoff points you there, or when you need current state beyond it.  %s\n' "$np/NOTES.md"
+    _nsz="$(wc -c < "$np/NOTES.md" 2>/dev/null | tr -d ' ')"; _nsz="${_nsz:-0}"
+    # Sizes into plain variables FIRST. A $( ) nested inside $(( )) inside this outer $( ),
+    # with a jq filter carrying [])[] in single quotes, does not parse on bash 3.2 (macOS):
+    # the arithmetic scanner mis-reads the brackets and the whole hook dies with
+    # unexpected EOF. Found by hunk-bisecting this very block, 2026-09-08.
+    _dsz=0; _msz=0
+    if [ -f "$np/DIGEST.md" ]; then
+      _dsz="$(wc -c < "$np/DIGEST.md" 2>/dev/null | tr -d ' ')"
+    fi
+    if [ -f "$np/repos.manifest.json" ] && command -v jq >/dev/null 2>&1; then
+      _msz="$(jq -c '{repos: [ (.repos // [])[] | {name, path, remote, branch, role, note} | with_entries(select(.value != null)) ]}' "$np/repos.manifest.json" 2>/dev/null | wc -c | tr -d ' ')"
+    fi
+    _pre=$(( ${_dsz:-0} + ${_msz:-0} ))
+    # DIGEST and the manifest may not spend into the NOTES reserve, so NOTES gets at least it.
+    _nleft=$(( _budget - _pre ))
+    [ "$_nleft" -lt "$_reserve_notes" ] && _nleft="$_reserve_notes"
+    if [ "$_nleft" -le 512 ]; then
+      printf '  2. NOTES.md — OMITTED below (%s bytes; DIGEST + manifest already used the budget). ⛔ OPEN IT:  %s\n' "$_nsz" "$np/NOTES.md"
+    elif [ "$_nsz" -le "$_nleft" ]; then
+      # WHOLE, not INLINED IN FULL: that phrase belongs to the handoff line, and a test asserts
+      # it appears exactly once. Two lines with the same words is how a cut handoff got reported
+      # as complete by the line beneath it. (No apostrophes here: inside the substitution.)
+      printf '  2. NOTES.md — WHOLE below (%s bytes).  %s\n' "$_nsz" "$np/NOTES.md"
+    else
+      printf '  2. NOTES.md — CUT below: the first ~%s of %s bytes. Its top (goal, next action) is\n' "$_nleft" "$_nsz"
+      printf '     there; the tail is not. ⛔ OPEN IT for anything below the fold:  %s\n' "$np/NOTES.md"
+    fi
   fi
   printf '\n  Anything below may still be TRUNCATED by the harness. Every cut is ANNOUNCED where\n'
   printf '  it happens; do not conclude a fact is absent because it is not here.\n'
@@ -361,18 +477,18 @@ combined="$(
   #
   # Emitting less than the cap, deliberately, is the only way the reader learns what is
   # missing. A hook that overflows silently cannot tell a session what it did not receive.
-  # ⚠️ THE TWO CAPS MUST ADD UP TO LESS THAN THE HARNESS CAP, or they overflow together and
-  # neither notices. The handoff cap defaults to 24 KB (handoffs here top out near 17 KB) and
-  # this budget to 36 KB: ~60 KB total against the ~67 KB the harness accepts. Two independent
-  # limits that each look reasonable alone are how a budget gets blown — the same shape as a
-  # glob that is not a superset of the name it derives from.
-  _budget="${AGENT_NOTEPAD_MAX_BYTES:-2500}"
+  # ⚠️ THE CAPS MUST ADD UP TO LESS THAN THE HARNESS CAP, or they overflow together and neither
+  # notices. That is why _budget is DERIVED above from one measured total minus what the
+  # handoff actually took -- not set here as a second independent number. No backticks or
+  # apostrophes in this comment: it is inside the $( ) substitution. (This comment used to
+  # claim a 24 KB handoff cap, a 36 KB budget and a 67 KB harness; none of the three was what
+  # shipped, and the harness ceiling is ~10 KiB. See the measurement above the announcements.)
   _spent=0
-  _emit_bounded() {   # <path> <heading> [fence]
-    local f="$1" heading="$2" fence="${3:-}" sz left
+  _emit_bounded() {   # <path> <heading> [fence] [reserve-for-later-docs]
+    local f="$1" heading="$2" fence="${3:-}" reserve="${4:-0}" sz left
     [ -f "$f" ] || return 0
     sz="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"; sz="${sz:-0}"
-    left=$(( _budget - _spent ))
+    left=$(( _budget - _spent - reserve ))
     if [ "$left" -le 512 ]; then
       printf '\n\n### %s — OMITTED, the context budget was already spent\n' "$heading"
       printf '  %s (%s bytes) was NOT injected. Read it yourself before assuming it is empty.\n' "$f" "$sz"
@@ -384,7 +500,7 @@ combined="$(
       head -c "$left" "$f"
       printf '\n[TRUNCATED at %s of %s bytes — the rest of %s was NOT injected. This is a\n' "$left" "$sz" "$f"
       printf 'PARTIAL document; open it before concluding anything is absent from it.]\n'
-      _spent="$_budget"
+      _spent=$(( _spent + left ))
     else
       cat "$f"
       _spent=$(( _spent + sz ))
@@ -401,7 +517,7 @@ combined="$(
   # goal and Next action live at the TOP, so the first N KB is the operationally useful part.
   # That is a property of the template, not a law — if that layout changes, this ordering has
   # to be revisited rather than trusted.
-  _emit_bounded "$np/DIGEST.md"           "DIGEST.md (cross-scope, derived)"
+  _emit_bounded "$np/DIGEST.md"           "DIGEST.md (cross-scope, derived)" "" "$_reserve_notes"
   # WARN THE REPOS, NOT THE EDITORIAL. Measured 2026-09-05: the manifest is 4,504 bytes and 2,090
   # of them are top-level $-prefixed prose about how to EDIT it, placed FIRST. The raw-file cap
   # delivered all of that and ONE of three repo entries, cut mid-word. The repos array projected
@@ -410,16 +526,16 @@ combined="$(
     local f="$np/repos.manifest.json" left digest dsz
     [ -f "$f" ] || return 0
     if ! command -v jq >/dev/null 2>&1; then
-      _emit_bounded "$f" "repos.manifest.json (code repos in scope)" json; return 0
+      _emit_bounded "$f" "repos.manifest.json (code repos in scope)" json "$_reserve_notes"; return 0
     fi
     digest="$(jq -c '{repos: [ (.repos // [])[] | {name, path, remote, branch, role, note} | with_entries(select(.value != null)) ]}' "$f" 2>/dev/null)"
     if [ -z "$digest" ] || [ "$digest" = "null" ]; then
-      _emit_bounded "$f" "repos.manifest.json (code repos in scope)" json; return 0
+      _emit_bounded "$f" "repos.manifest.json (code repos in scope)" json "$_reserve_notes"; return 0
     fi
     dsz="$(printf '%s' "$digest" | wc -c | tr -d ' ')"
-    left=$(( _budget - _spent ))
+    left=$(( _budget - _spent - _reserve_notes ))
     if [ "$dsz" -gt "$left" ]; then
-      _emit_bounded "$f" "repos.manifest.json (code repos in scope)" json; return 0
+      _emit_bounded "$f" "repos.manifest.json (code repos in scope)" json "$_reserve_notes"; return 0
     fi
     printf '\n\n### repos.manifest.json — the repos in scope (DIGEST: name/path/remote/branch/role/note)\n\n'
     printf '```json\n'

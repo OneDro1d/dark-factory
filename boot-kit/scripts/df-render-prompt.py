@@ -139,6 +139,12 @@ deletion, outbound message to a human, spend) as a hard stop too, and mark BLOCK
 If a hub call fails auth, STOP and mark BLOCKED — do not work around it. The tokens are
 environment-inherited and a failure means this process cannot write to the tracker, so
 any work you do will be invisible to the next iteration.
+
+If a hub is listed as "still connecting" or its tools are not yet loaded, that is a startup
+race, not an absence: wait, list the tools again, and retry before concluding the hub is
+missing. Only mark BLOCKED once a real call has failed AFTER the retry. (Measured 2026-09-08:
+one headless iteration in four started before the account-level connector had connected,
+reported its tools as absent, and called nothing in a single turn.)
 {notes_block}"""
 
 STOPS_FALLBACK = """- Any git-history rewrite or force-push on a public repo.

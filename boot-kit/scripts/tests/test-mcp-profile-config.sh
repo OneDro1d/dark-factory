@@ -179,6 +179,24 @@ if DISALLOW_HAS "mcp__hub_b__*"; then ok "C10 disallow denies hub-b (sanitised)"
 if DISALLOW_HAS "mcp__plugin_*"; then ok "C11 disallow always includes mcp__plugin_*"; else bad "C11 disallow always includes mcp__plugin_*" "absent"; fi
 absent "C12 a literal token never reaches stdout for a connector plan" "LITERALTOKEN1" "$OUT11"
 
+# ---- 12. LOOM_LOCK is honoured when --lock is absent ---------------------------
+# ⛔ MEASURED 2026-09-08 ON THE ESO LAPTOP (audit B-3): with LOOM_LOCK exported and no --lock,
+# this script exited 4 "mcp.profiles is undeclared" because resolve_machine_lock() looked two
+# levels above the VENDORED engine and found no lockfile. df-supervisor never passed --lock, so
+# every supervised mission on a vendored kit ran with NO MCP plan and said so only in a WARN.
+# LOOM_LOCK is how df-preflight and df-mission are told which instance this is; it sits between
+# the explicit flag and the path-derived guess. The same connector lockfile as C1, by env only.
+OUT12="$(LOOM_LOCK="$LOCK_CONN" python3 "$GATE" --profile onedroid --config "$CFG" \
+         --out "$WORK/o12.json" 2>&1)"; RC12=$?
+if [ "$RC12" -eq 0 ]; then ok "E1 LOOM_LOCK alone resolves the record (exit 0)"; else bad "E1 LOOM_LOCK alone resolves the record" "rc=$RC12: $OUT12"; fi
+contains "E2 and the plan is the connector one, not the prefix fallback" "PLAN " "$OUT12"
+absent   "E3 no undeclared-profile INFO when the env names the record" "mcp.profiles is undeclared" "$OUT12"
+# Explicit --lock still wins over the env: a wrong LOOM_LOCK must not override a right flag.
+OUT13="$(LOOM_LOCK="$LOCK_MISSING" python3 "$GATE" --profile onedroid --config "$CFG" --lock "$LOCK_CONN" \
+         --out "$WORK/o13.json" 2>&1)"; RC13=$?
+if [ "$RC13" -eq 0 ]; then ok "E4 --lock outranks LOOM_LOCK"; else bad "E4 --lock outranks LOOM_LOCK" "rc=$RC13: $OUT13"; fi
+contains "E5 the flag's record produced the plan" "PLAN " "$OUT13"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"

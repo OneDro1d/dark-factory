@@ -222,7 +222,14 @@ def main():
         print("mcp-profile-config: no mcpServers in %s" % a.config, file=sys.stderr)
         return 3
 
-    lock_path = a.lock or resolve_machine_lock(a.kit_root)
+    # LOOM_LOCK sits between the explicit flag and the path-derived guess. It is how
+    # df-preflight and df-mission are told which instance this is on a VENDORED kit (START-HERE
+    # D-5), and this script ignoring it was measured 2026-09-08 on the eso laptop: with the
+    # variable exported, `--profile eso` still exited 4 "mcp.profiles is undeclared" because
+    # resolve_machine_lock() looked two levels above the vendored engine and found no lockfile.
+    # The supervisor never passes --lock, so every supervised mission on a vendored kit ran with
+    # NO MCP plan -- and said so only in a WARN line the operator has to notice.
+    lock_path = a.lock or os.environ.get("LOOM_LOCK") or resolve_machine_lock(a.kit_root)
     lock = {}
     if lock_path:
         try:
