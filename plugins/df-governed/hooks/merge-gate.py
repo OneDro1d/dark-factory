@@ -73,6 +73,15 @@ SEP_TOKENS = {"&&", "||", ";", ";;", "|", "|&"}
 API_MERGE_RE = re.compile(r"repos/([^/\s]+/[^/\s]+)/pulls/(\d+)/merge")
 API_MERGE_NOREPO_RE = re.compile(r"(?:^|[\s/])pulls/(\d+)/merge(?:$|[\s/?])")
 
+# When shlex cannot tokenise the command at all (an unbalanced quote -- most often an
+# apostrophe inside a heredoc body, which is prose to bash and a quote to shlex), the gate
+# falls back to this raw-text scan: text that so much as mentions a PR merge is DENIED with a
+# reason naming the parse failure; anything else is allowed. Measured 2026-09-08 on the third
+# homelab run: `cat > f <<'EOF' / the machine's record / EOF` was denied as "internal error
+# ValueError" -- every Bash call with an odd number of apostrophes was blocked, with a message
+# naming no cause. Failing closed was right; failing closed on unrelated prose was the defect.
+RAW_MERGE_RE = re.compile(r"\bgh\b[\s\S]*?\bpr\b[\s\S]*?\bmerge\b")
+
 
 def allow():
     print("{}")
@@ -330,9 +339,20 @@ def evaluate(event):
     if not isinstance(command, str) or not command.strip():
         allow()
 
+    try:
+        commands = split_commands(command)
+    except ValueError as e:
+        if RAW_MERGE_RE.search(command) or API_MERGE_RE.search(command) \
+                or API_MERGE_NOREPO_RE.search(command):
+            deny("merge-gate: the command could not be tokenised (%s -- an unbalanced quote, "
+                 "often an apostrophe inside a heredoc body) and its text mentions a PR merge. "
+                 "Run the merge on its own as a plain `gh pr merge <n> --repo <owner/repo>` so "
+                 "the gate can read it." % e)
+        allow()
+
     merge_hit = None
     top_cd = None
-    for tokens in split_commands(command):
+    for tokens in commands:
         # `cd DIR && gh pr merge N` relocates the merge the same way env --chdir does.
         if len(tokens) >= 2 and tokens[0] == "cd":
             top_cd = tokens[1]
