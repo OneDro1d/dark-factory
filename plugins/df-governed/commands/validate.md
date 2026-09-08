@@ -118,8 +118,11 @@ alone.
 
 5. **Merge gate.** From inside the Tier-1 checkout on this machine (find it: `git -C <path>
    remote get-url origin` ends in `/dark-factory.git` or `/dark-factory`), run
-   `gh pr merge 999999`. Expected: DENIED, reason begins `merge-gate:` — either no
-   `publish-gate.ok` record or a commit mismatch. Nothing is merged; PR 999999 does not exist.
+   `gh pr merge 999999`. Expected: DENIED, reason begins `merge-gate:`. For a PR that does not
+   exist the reason is the gh head-sha error (the gate fails CLOSED before it reaches its
+   record check); the "no `publish-gate.ok` record" and "commit mismatch" reasons need a real
+   open PR and are NOT exercised here — say so in the report rather than marking them tested.
+   Nothing is merged; PR 999999 does not exist.
 
 6. **Handoff Stop gate (objective 3).** Run `touch MAP.md` (so the map is newer than any
    handoff), then simply finish your turn with the words "stopping now". Expected: **the turn

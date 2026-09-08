@@ -147,12 +147,27 @@ printf '[]\n' > "$NP/sessions/index.json"
 if [ -f "$KIT_ROOT/.claude/settings.json" ]; then
   mkdir -p "$NP/.claude"
   cp "$KIT_ROOT/.claude/settings.json" "$NP/.claude/settings.json"
+  # MEASURED 2026-09-08 on the homelab Coder: the copied settings name relative hook paths
+  # (`bash .claude/hooks/ensure-gate.sh`) that did not exist in the notepad, so a declared
+  # SessionStart hook failed silently on every session start there. Settings and the hooks
+  # they name travel together or not at all.
+  if [ -d "$KIT_ROOT/.claude/hooks" ]; then
+    cp -R "$KIT_ROOT/.claude/hooks" "$NP/.claude/hooks"
+  fi
 fi
 
 git -C "$NP" init -q
-git -C "$NP" -c user.name="df-validate" -c user.email="df-validate@localhost" add -A
-git -C "$NP" -c user.name="df-validate" -c user.email="df-validate@localhost" \
-  commit -q -m "M-VALIDATE: arm throwaway notepad"
+# MEASURED 2026-09-08 on the homelab Coder: the kit's git identity was REPO-LOCAL (nothing
+# global), so the notepad this script initialised inherited none — the handoff helper wrote
+# and staged but could not commit ("Author identity unknown"), and Part 2's commit-gate PASS
+# path was untestable until the operator set one by hand. Give the notepad an identity of its
+# own: the kit's if git can resolve one from there, else this script's throwaway name.
+GIT_NAME="$(git -C "$KIT_ROOT" config --get user.name 2>/dev/null || true)"
+GIT_EMAIL="$(git -C "$KIT_ROOT" config --get user.email 2>/dev/null || true)"
+git -C "$NP" config user.name "${GIT_NAME:-df-validate}"
+git -C "$NP" config user.email "${GIT_EMAIL:-df-validate@localhost}"
+git -C "$NP" add -A
+git -C "$NP" commit -q -m "M-VALIDATE: arm throwaway notepad"
 
 if [ "$KIT_IS_GIT" -eq 1 ]; then
   mkdir -p "$(dirname "$EXCL")"

@@ -197,6 +197,69 @@ OUT13="$(LOOM_LOCK="$LOCK_MISSING" python3 "$GATE" --profile onedroid --config "
 if [ "$RC13" -eq 0 ]; then ok "E4 --lock outranks LOOM_LOCK"; else bad "E4 --lock outranks LOOM_LOCK" "rc=$RC13: $OUT13"; fi
 contains "E5 the flag's record produced the plan" "PLAN " "$OUT13"
 
+# ---- 14. a connector profile needs NO mcpServers -- the refusal order was wrong -----
+# ⛔ MEASURED 2026-09-08 ON THE HOMELAB CODER: ~/.claude.json there holds no mcpServers (the
+# connector estate's normal shape; credentials come from shared storage), and this script
+# refused "no mcpServers" BEFORE reading the lockfile — so a declared `kind: connector`
+# profile could never be reached, LOOM_LOCK or not, and df-worker refused to launch while
+# quoting a declaration the record already carried. Servers are needed by `hubs` and by the
+# prefix fallback; a connector plan is built from whatever servers exist, including none.
+EMPTYCFG="$WORK/empty.json"
+printf '{}\n' > "$EMPTYCFG"
+OUT14="$(python3 "$GATE" --profile onedroid --config "$EMPTYCFG" --lock "$LOCK_CONN" \
+         --out "$WORK/o14.json" 2>&1)"; RC14=$?
+if [ "$RC14" -eq 0 ]; then ok "F1 connector + no mcpServers exits 0"; else bad "F1 connector + no mcpServers exits 0" "rc=$RC14: $OUT14"; fi
+contains "F2 and prints the connector PLAN" "PLAN " "$OUT14"
+absent   "F3 no 'no mcpServers' refusal for a connector" "no mcpServers" "$OUT14"
+OUT15="$(python3 "$GATE" --profile onedroid --config "$EMPTYCFG" --lock "$LOCK_HUBS" \
+         --out "$WORK/o15.json" 2>&1)"; RC15=$?
+if [ "$RC15" -eq 3 ]; then ok "F4 hubs + no mcpServers still exits 3"; else bad "F4 hubs + no mcpServers still exits 3" "rc=$RC15: $OUT15"; fi
+contains "F5 and still says why" "no mcpServers" "$OUT15"
+OUT16="$(python3 "$GATE" --profile onedroid --config "$WORK/does-not-exist.json" --lock "$LOCK_CONN" \
+         --out "$WORK/o16.json" 2>&1)"; RC16=$?
+if [ "$RC16" -eq 0 ]; then ok "F6 connector + ABSENT config file exits 0"; else bad "F6 connector + absent config exits 0" "rc=$RC16: $OUT16"; fi
+OUT17="$(python3 "$GATE" --profile onedroid --config "$WORK/does-not-exist.json" --lock "$LOCK_HUBS" \
+         --out "$WORK/o17.json" 2>&1)"; RC17=$?
+if [ "$RC17" -eq 2 ]; then ok "F7 hubs + absent config still exits 2 (cannot read)"; else bad "F7 hubs + absent config exits 2" "rc=$RC17: $OUT17"; fi
+
+# ---- 15. two records claim this machine: narrow by CODER_WORKSPACE_NAME -------------
+# ⛔ MEASURED 2026-09-08 ON THE HOMELAB CODER: two instance records of one kit both say
+# {Linux, /home/coder} (hostname is deliberately not a key -- a Coder pod is renamed on every
+# restart), so resolve_machine_lock() could not break the tie, fell to the prefix rule, and
+# df-worker refused. Each record already carried install.identity.workspace, measured by
+# identify.sh from CODER_WORKSPACE_NAME. Use it. Record A is a hubs profile naming a hub the
+# config lacks (exit 2 if chosen); record B is the connector (PLAN if chosen) -- so which
+# record won is visible in the outcome, not inferred.
+ME_PLATFORM="$(python3 -c 'import platform;print(platform.system())')"
+KIT2="$WORK/kit2"
+mkdir -p "$KIT2/instances/a" "$KIT2/instances/b"
+python3 - "$KIT2" "$ME_PLATFORM" "$HOME" <<'PY'
+import json, sys
+kit, plat, home = sys.argv[1:4]
+a = {"machine": {"platform": plat, "home": home},
+     "install": {"identity": {"workspace": "ws-a", "deploymentId": "dep-1"}},
+     "mcp": {"profiles": {"onedroid": {"kind": "hubs", "servers": ["no-such-hub"]}}}}
+b = {"machine": {"platform": plat, "home": home},
+     "install": {"identity": {"workspace": "ws-b", "deploymentId": "dep-1"}},
+     "mcp": {"profiles": {"onedroid": {"kind": "connector", "servers": ["onedroid"]}}}}
+json.dump(a, open(kit + "/instances/a/loom.lock.json", "w"))
+json.dump(b, open(kit + "/instances/b/loom.lock.json", "w"))
+PY
+OUT18="$(env -u LOOM_LOCK CODER_WORKSPACE_NAME=ws-b python3 "$GATE" --profile onedroid --config "$CFG" \
+         --kit-root "$KIT2" --out "$WORK/o18.json" 2>&1)"; RC18=$?
+if [ "$RC18" -eq 0 ]; then ok "G1 CODER_WORKSPACE_NAME=ws-b picks record b (exit 0)"; else bad "G1 CODER_WORKSPACE_NAME=ws-b picks record b" "rc=$RC18: $OUT18"; fi
+contains "G2 and it is b's connector plan" "PLAN " "$OUT18"
+OUT19="$(env -u LOOM_LOCK CODER_WORKSPACE_NAME=ws-a python3 "$GATE" --profile onedroid --config "$CFG" \
+         --kit-root "$KIT2" --out "$WORK/o19.json" 2>&1)"; RC19=$?
+if [ "$RC19" -eq 2 ]; then ok "G3 CODER_WORKSPACE_NAME=ws-a picks record a (its missing hub, exit 2)"; else bad "G3 ws-a picks record a" "rc=$RC19: $OUT19"; fi
+contains "G4 a's refusal names a's missing hub" "no-such-hub" "$OUT19"
+OUT20="$(env -u LOOM_LOCK -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL python3 "$GATE" --profile onedroid --config "$CFG" \
+         --kit-root "$KIT2" --out "$WORK/o20.json" 2>&1)"; RC20=$?
+contains "G5 no workspace in env: the tie stays and the prefix rule says so" "mcp.profiles is undeclared" "$OUT20"
+OUT21="$(env -u LOOM_LOCK CODER_WORKSPACE_NAME=ws-none python3 "$GATE" --profile onedroid --config "$CFG" \
+         --kit-root "$KIT2" --out "$WORK/o21.json" 2>&1)"; RC21=$?
+contains "G6 a workspace name that matches NO record learns nothing (tie stays)" "mcp.profiles is undeclared" "$OUT21"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"

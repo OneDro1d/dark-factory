@@ -285,12 +285,23 @@ def find_lock():
     def rel(x):
         return os.path.relpath(x, KIT_ROOT)
 
+    if len(matched) > 1:
+        # MEASURED 2026-09-08 on the homelab Coder: two instance records of one kit both say
+        # {Linux, /home/coder} (hostname is deliberately not a key — a Coder pod is renamed on
+        # every restart), so this tie could not be broken and the worker chain refused —
+        # although each record already carried what identify.sh measured into
+        # install.identity: the workspace name and the deployment id. Use them. Same code,
+        # by design, as mcp-profile-config.narrow_by_identity().
+        matched = narrow_by_identity(matched, load_json)
     if len(matched) == 1:
         return matched[0], None
     if matched:
-        return None, ("%d lockfiles claim machine %s:%s (%s) -- set LOOM_LOCK"
+        ws = os.environ.get("CODER_WORKSPACE_NAME", "").strip()
+        hint = (" (CODER_WORKSPACE_NAME=%s did not single one out: check install.identity.workspace "
+                "and deploymentId on each)" % ws) if ws else ""
+        return None, ("%d lockfiles claim machine %s:%s (%s) -- set LOOM_LOCK%s"
                       % (len(matched), me["platform"], me["home"],
-                         ", ".join(rel(x) for x in matched)))
+                         ", ".join(rel(x) for x in matched), hint))
     return None, ("no lockfile declares machine %s:%s -- %d candidate(s), %d with no "
                   "machine block (%s). Set LOOM_LOCK, or add a machine block."
                   % (me["platform"], me["home"], len(cands), len(undeclared),
@@ -317,6 +328,47 @@ def probe_binaries():
 
 # ---------------------------------------------------------------------------
 # P2 — github identities, probed per repo rather than assumed
+def narrow_by_identity(matched, load):
+    """Several records claim this platform + home. Narrow by what identify.sh measured into
+    install.identity: the workspace name (CODER_WORKSPACE_NAME in env) and, if one workspace
+    name sits on two deployments (the ESO estate's shape), the deployment id from
+    GET <CODER_AGENT_URL>/api/v2/buildinfo — best effort, 3 s; the URL itself is not unique,
+    the id is. Learn nothing → return the list unchanged, so "cannot tell" stays visible.
+    ⚠️ Kept byte-for-byte in step with mcp-profile-config.narrow_by_identity(): both scripts
+    are standalone engine files a kit materialises by name, so neither may import the other.
+    """
+    if len(matched) < 2:
+        return matched
+    ws = os.environ.get("CODER_WORKSPACE_NAME", "").strip()
+    if not ws:
+        return matched
+
+    def ident(c):
+        try:
+            return ((load(c) or {}).get("install") or {}).get("identity") or {}
+        except Exception:
+            return {}
+
+    by_ws = [c for c in matched if ident(c).get("workspace") == ws]
+    if len(by_ws) == 1:
+        return by_ws
+    if not by_ws:
+        return matched
+    url = os.environ.get("CODER_AGENT_URL", "").strip().rstrip("/")
+    if not url:
+        return by_ws
+    try:
+        import urllib.request
+        # TLS verified, on purpose: a control plane whose certificate does not verify teaches
+        # this resolver nothing, and "nothing learned" is the safe answer (the tie stays).
+        with urllib.request.urlopen(url + "/api/v2/buildinfo", timeout=3) as r:
+            dep = (json.loads(r.read().decode("utf-8", "replace")) or {}).get("deployment_id", "")
+    except Exception:
+        return by_ws
+    by_dep = [c for c in by_ws if dep and ident(c).get("deploymentId") == dep]
+    return by_dep if len(by_dep) == 1 else by_ws
+
+
 # ---------------------------------------------------------------------------
 
 def repo_name(repo):
