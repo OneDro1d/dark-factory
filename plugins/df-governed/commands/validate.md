@@ -92,6 +92,13 @@ WILL reach them (account-level connectors replicate with no config; measured 202
 is a finding about hand-rolled workers, not the kit. The kit's own launcher scopes them out —
 `--strict-mcp-config` in hubs mode, the PLAN's `disallow` list in connector mode — and step 7's
 dry run is where you read that list: it must name every other estate, not `mcp__plugin_*` alone.
+"Every other estate" means every estate ANY record in the kit declares (root and `instances/*`),
+not only the record that resolved for this machine — a Coder's record that was never re-probed
+declared two estates while the third's connector was live on the box (measured 2026-09-08). Two
+WARN lines from the profile tool are findings, not noise: one says another record named an estate
+this one did not (the record is stale — `df-preflight --profile <that estate>` re-declares it);
+the other says NO record names any other estate, so nothing is denied — report which connectors
+`claude mcp list` shows beyond the one this notepad serves.
 
 Then one **bounded** dispatch, rendered first — ask for the kit's own prompt-render or
 dry-run path, whatever it is called (do not assume a variable name), report whether a prompt

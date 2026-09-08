@@ -101,18 +101,7 @@ def resolve_machine_lock(kit_root=None):
     # df-mission on PATH really lives under); the default stays for direct invocations.
     if not kit_root:
         kit_root = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
-    cands = []
-    if os.path.isdir(kit_root):
-        for n in sorted(os.listdir(kit_root)):
-            p = os.path.join(kit_root, n)
-            if n.endswith(".lock.json") and os.path.isfile(p):
-                cands.append(p)
-    inst_dir = os.path.join(kit_root, "instances")
-    if os.path.isdir(inst_dir):
-        for n in sorted(os.listdir(inst_dir)):
-            p = os.path.join(inst_dir, n, "loom.lock.json")
-            if os.path.isfile(p):
-                cands.append(p)
+    cands = kit_records(kit_root)
     if not cands:
         return None
     if len(cands) == 1:
@@ -130,6 +119,85 @@ def resolve_machine_lock(kit_root=None):
             matched.append(c)
     matched = narrow_by_identity(matched, _load_json_quiet)
     return matched[0] if len(matched) == 1 else None
+
+
+def kit_records(kit_root):
+    """Every lockfile a kit holds, in a stable order: any `*.lock.json` directly under the kit
+    root, then `instances/*/loom.lock.json`. Shared by resolve_machine_lock (which record is
+    THIS machine) and the connector plan (which estates the KIT knows -- see other_estates)."""
+    cands = []
+    if os.path.isdir(kit_root):
+        for n in sorted(os.listdir(kit_root)):
+            p = os.path.join(kit_root, n)
+            if n.endswith(".lock.json") and os.path.isfile(p):
+                cands.append(p)
+    inst_dir = os.path.join(kit_root, "instances")
+    if os.path.isdir(inst_dir):
+        for n in sorted(os.listdir(inst_dir)):
+            p = os.path.join(inst_dir, n, "loom.lock.json")
+            if os.path.isfile(p):
+                cands.append(p)
+    return cands
+
+
+def kit_root_of(lock_path):
+    """The kit root a lockfile lives in: <kit>/<x>.lock.json or <kit>/instances/<n>/loom.lock.json.
+    None when the path has neither shape (an ad-hoc --lock somewhere else)."""
+    p = os.path.abspath(lock_path)
+    d = os.path.dirname(p)
+    if os.path.basename(os.path.dirname(d)) == "instances":
+        return os.path.dirname(os.path.dirname(d))
+    return d
+
+
+def other_estates(profile, own_server, resolved_lock, resolved_path, kit_root):
+    """Servers a worker for PROFILE must be denied: every OTHER profile's servers declared by
+    the resolved record, AND by every other record the kit holds.
+
+    ⛔ MEASURED 2026-09-08, THIRD HOMELAB RUN: the deny list was built from the resolved
+    record's own mcp.profiles only. That record (a Coder instance) declared {onedroid, optima};
+    the kit's ROOT record declared the third estate's connector too; the connector is
+    account-level, so it was live on the Coder -- and a worker scoped to one estate called the
+    health-data estate's tools with zero denials. The record's own $comment said no such
+    connector was known there. A record that has not been re-probed is not evidence that an
+    estate is unreachable; every estate any record in the kit names is one this worker must not
+    reach, and denying a connector that is not there costs nothing.
+
+    Returns (others, undeclared): the full server set, and {profile name: servers} for every
+    profile some OTHER record declares that the resolved record does not (reported as a WARN,
+    so the stale record is visible in every dry run -- by profile name, because a profile IS
+    an estate and a hub name is only one of its servers)."""
+    def profiles_of(lock):
+        return ((lock or {}).get("mcp") or {}).get("profiles") or {}
+
+    def servers_except(profiles):
+        out = set()
+        for pname, pentry in profiles.items():
+            if pname == profile:
+                continue
+            for s in (pentry or {}).get("servers") or []:
+                out.add(s)
+        return out
+
+    own_profiles = profiles_of(resolved_lock)
+    own = servers_except(own_profiles)
+    elsewhere = set()
+    undeclared = {}
+    if kit_root:
+        for path in kit_records(kit_root):
+            if resolved_path and os.path.abspath(path) == os.path.abspath(resolved_path):
+                continue
+            try:
+                prof = profiles_of(_load_json_quiet(path))
+            except Exception:
+                continue
+            elsewhere |= servers_except(prof)
+            for pname, pentry in prof.items():
+                if pname != profile and pname not in own_profiles:
+                    undeclared.setdefault(pname, set()).update((pentry or {}).get("servers") or [])
+    others = (own | elsewhere)
+    others.discard(own_server)
+    return others, undeclared
 
 
 def _load_json_quiet(path):
@@ -345,13 +413,25 @@ def main():
             # in no file; the only place the OTHER estates' names exist on such a machine is
             # the record's own mcp.profiles. Deny all of them, whatever their kind, except the
             # one this worker is for. The content boundary is a hard rule in both directions.
-            others = set(servers)
-            for pname, pentry in mcp_profiles.items():
-                if pname == a.profile:
-                    continue
-                for s in (pentry or {}).get("servers") or []:
-                    others.add(s)
+            # ⛔ AND FROM EVERY OTHER RECORD THE KIT HOLDS, NOT ONLY THE RESOLVED ONE. Measured
+            # on the third homelab run: the Coder record named two estates, the kit's root
+            # record named three, the third was live on the box -- see other_estates().
+            union_root = a.kit_root or (kit_root_of(lock_path) if lock_path else None)
+            declared, undeclared = other_estates(a.profile, name, lock, lock_path, union_root)
+            others = set(servers) | declared
             others.discard(name)
+            if undeclared:
+                desc = ", ".join("%s (%s)" % (p, ", ".join(sorted(s))) for p, s in sorted(undeclared.items()))
+                print("mcp-profile-config: WARN the resolved record %s does not declare %s; other "
+                      "record(s) under %s do, so those servers are denied too. Run df-preflight "
+                      "--profile %s here to declare what this machine can actually reach."
+                      % (lock_path, desc, union_root, sorted(undeclared)[0]), file=sys.stderr)
+            if not declared:
+                print("mcp-profile-config: WARN no record under %s names any estate other than "
+                      "%r, so the deny list covers no other estate's connector. If this account "
+                      "has other claude.ai connectors enabled, a worker can reach them: declare "
+                      "each as an mcp.profiles entry (df-preflight --profile <name> proposes it)."
+                      % (union_root, a.profile), file=sys.stderr)
             disallow = ["mcp__%s__*" % sanitise_name(n) for n in sorted(others)]
             disallow.append("mcp__plugin_*")
             plan = {

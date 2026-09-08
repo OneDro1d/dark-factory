@@ -62,6 +62,8 @@ SHELLS = ("bash", "sh", "zsh", "dash", "ksh")
 
 TRACKER_RE = re.compile(r"\b1[0-9]{10,}\b")
 MISSION_RE = re.compile(r"\bM-[A-Z0-9][A-Z0-9-]{3,}\b")
+# Raw-text fallback when shlex cannot tokenise the command (see evaluate()).
+RAW_COMMIT_RE = re.compile(r"\bgit\b[\s\S]*?\bcommit\b")
 
 # git global options that consume the following token as their value (between `git` and the
 # subcommand). `-C` is handled separately below, both spaced and glued (`-C/path`).
@@ -275,7 +277,30 @@ def evaluate(event):
     if not missions:
         allow()
 
-    for tokens in split_commands(command):
+    try:
+        commands = split_commands(command)
+    except ValueError as e:
+        # The same lexer as merge-gate.py, and the same failure (third homelab run, 2026-09-08):
+        # an apostrophe inside a heredoc body is prose to bash and an unclosed quote to shlex.
+        # Falling to main()'s "internal error" here would fail OPEN -- and a commit whose message
+        # is smuggled behind an unbalanced quote is exactly the shape a gate must not wave
+        # through. So: text that mentions a git commit is held to the id rule over the WHOLE
+        # command text (an id anywhere in it satisfies the rule); anything else is allowed.
+        if RAW_COMMIT_RE.search(command):
+            if TRACKER_RE.search(command) or MISSION_RE.search(command):
+                allow()
+            deny(
+                mission_block_reason(
+                    missions,
+                    "The command could not be tokenised (%s -- an unbalanced quote, often an "
+                    "apostrophe inside a heredoc body), so the message could not be read, and "
+                    "the command text as a whole names neither. Put the message in -m or in a "
+                    "file passed with -F." % e,
+                )
+            )
+        allow()
+
+    for tokens in commands:
         for argv in git_argvs(tokens):
             sub, after_commit = git_subcommand(argv)
             if sub != "commit":

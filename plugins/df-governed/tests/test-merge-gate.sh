@@ -403,6 +403,27 @@ else
   ok "A5: registry file is deleted on FINDINGS (git-common-dir record deleted too, per A3)"
 fi
 
+echo "=== X: an untokenisable command (apostrophe in a heredoc body) -- prose passes, a merge does not ==="
+# MEASURED 2026-09-08, third homelab validation run: `cat > f <<'EOF' / the machine's record /
+# EOF` was DENIED as "merge-gate: internal error ValueError". shlex sees the heredoc body as
+# shell and the apostrophe as an unclosed quote; the ValueError escaped evaluate() and main()'s
+# catch-all failed closed on every Bash call with an odd number of apostrophes. Against the
+# previous tree X1 fails (denied) and X4 fails (reason is "internal error", not the cause).
+REPO_X="$(mk_repo 1)"
+write_record "$REPO_X" "$STUB_SHA" false real
+HEREDOC_PROSE=$'cat > /tmp/t2.txt <<\'EOF\'\nthe machine\'s record\nEOF'
+O="$(run_hook "$REPO_X" "$HEREDOC_PROSE")"
+equals "X1: an apostrophe inside a heredoc body, no merge anywhere -> {}" "{}" "$O"
+not_contains "X2: and no 'internal error' is reported for it" "internal error" "$O"
+HEREDOC_MERGE=$'gh pr merge 1 --repo '"$ORIGIN_REPO"$' --body "it\'s done'
+O="$(run_hook "$REPO_X" "$HEREDOC_MERGE")"
+contains "X3: an untokenisable command whose text mentions a PR merge is DENIED" "permissionDecision" "$O"
+contains "X4: the reason names the parse failure, not 'internal error'" "could not be tokenised" "$O"
+not_contains "X5: it is not reported as an internal error" "internal error" "$O"
+API_UNBAL=$'gh api -X PUT repos/'"$ORIGIN_REPO"$'/pulls/1/merge -f commit_title=it\'s'
+O="$(run_hook "$REPO_X" "$API_UNBAL")"
+contains "X6: the gh api merge form is caught by the raw scan too" "could not be tokenised" "$O"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"

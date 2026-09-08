@@ -167,6 +167,22 @@ equals "I: git status allows" "{}" "$O"
 O="$(run_hook "$NOTEPAD_A" "git -C $CODEREPO_A push origin main")"
 equals "I: git push allows" "{}" "$O"
 
+echo "=== J: an untokenisable command (apostrophe in a heredoc body) -- prose passes, a bare commit does not ==="
+# Same lexer and same failure as merge-gate.py (third homelab run, 2026-09-08). Here the
+# previous tree failed OPEN: the ValueError reached main() and printed a systemMessage, so a
+# commit smuggled behind an unbalanced quote was allowed. J3 is red against that tree.
+HEREDOC_PROSE=$'cat > /tmp/t2.txt <<\'EOF\'\nthe machine\'s record\nEOF'
+O="$(run_hook "$NOTEPAD_A" "$HEREDOC_PROSE")"
+equals "J1: an apostrophe inside a heredoc body, no commit anywhere -> {}" "{}" "$O"
+COMMIT_UNBAL=$'git -C '"$CODEREPO_A"$' commit -F - <<EOF\nwip it\'s\nEOF'
+O="$(run_hook "$NOTEPAD_A" "$COMMIT_UNBAL")"
+contains "J2: an untokenisable command whose text mentions a git commit is DENIED" "permissionDecision" "$O"
+contains "J3: the reason names the parse failure" "could not be tokenised" "$O"
+not_contains "J4: it is not reported as an internal error" "internal error" "$O"
+COMMIT_UNBAL_ID=$'git -C '"$CODEREPO_A"$' commit -F - <<EOF\n'"$MISSION_ID"$': wip it\'s\nEOF'
+O="$(run_hook "$NOTEPAD_A" "$COMMIT_UNBAL_ID")"
+equals "J5: the same command naming the mission anywhere in its text -> {}" "{}" "$O"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"

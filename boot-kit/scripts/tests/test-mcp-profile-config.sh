@@ -277,12 +277,63 @@ JSON
 OUT22="$(python3 "$GATE" --profile onedroid --config "$EMPTYCFG" --lock "$LOCK_3EST" \
          --out "$WORK/o22.json" 2>&1)"; RC22=$?
 if [ "$RC22" -eq 0 ]; then ok "H1 connector plan with an empty config exits 0"; else bad "H1 connector plan with an empty config exits 0" "rc=$RC22: $OUT22"; fi
+# (case 17 below reuses H1's kit-less shape as its control: a lone --lock names one file, so
+#  the union is that file alone and no "other record" WARN may appear -- see I6.)
 PLAN_JSON="${OUT22#*PLAN }"; PLAN_JSON="${PLAN_JSON%%$'\n'*}"
 if DISALLOW_HAS "mcp__claude_ai_Estate_B__*"; then ok "H2 the other CONNECTOR estate is denied (from the lockfile)"; else bad "H2 the other connector estate is denied" "absent: $PLAN_JSON"; fi
 if DISALLOW_HAS "mcp__hub_c__*"; then ok "H3 the other HUBS estate is denied (from the lockfile)"; else bad "H3 the other hubs estate is denied" "absent: $PLAN_JSON"; fi
 if DISALLOW_HAS "mcp__hub_c_dev__*"; then ok "H4 every server of the other hubs profile is denied"; else bad "H4 every server of the other hubs profile is denied" "absent: $PLAN_JSON"; fi
 if DISALLOW_HAS "mcp__onedroid__*"; then bad "H5 the worker's OWN connector is never denied" "mcp__onedroid__* in disallow"; else ok "H5 the worker's OWN connector is never denied"; fi
 if DISALLOW_HAS "mcp__plugin_*"; then ok "H6 mcp__plugin_* still denied"; else bad "H6 mcp__plugin_* still denied" "absent"; fi
+absent "I6 a lone --lock has no other record to learn from: no 'other record' WARN" "does not declare" "$OUT22"
+
+# ---- 17. the deny list is the union of EVERY record in the kit, not the resolved one alone ---
+# ⛔ MEASURED 2026-09-08, THIRD HOMELAB RUN: the Coder's own record declared {onedroid, optima};
+# the kit's ROOT record (the laptop's) also declared the third estate's connector; connectors are
+# account-level so it was live on the Coder -- and a worker scoped to onedroid called the third
+# estate's tools with zero denials. Case 16 above passed throughout, because it measured the
+# resolved record alone. Against the previous tree I1 is green and I2, I3 are red.
+# Root record: platform "NoSuchOS" so it can never resolve as THIS machine; instance record c
+# matches this machine and is picked by CODER_WORKSPACE_NAME. Estate names are placeholders.
+KIT3="$WORK/kit3"
+mkdir -p "$KIT3/instances/c"
+python3 - "$KIT3" "$ME_PLATFORM" "$HOME" <<'PY'
+import json, sys
+kit, plat, home = sys.argv[1:4]
+root = {"machine": {"platform": "NoSuchOS", "home": "/nowhere"},
+        "mcp": {"profiles": {"onedroid": {"kind": "hubs", "servers": ["onedroid", "onedroid-dev"]},
+                             "estate-b": {"kind": "connector", "servers": ["claude.ai Estate B"]}}}}
+c = {"machine": {"platform": plat, "home": home},
+     "install": {"identity": {"workspace": "ws-c", "deploymentId": "dep-3"}},
+     "mcp": {"profiles": {"onedroid": {"kind": "connector", "servers": ["onedroid"]},
+                          "estate-c": {"kind": "hubs", "servers": ["hub-c"]}}}}
+json.dump(root, open(kit + "/loom.lock.json", "w"))
+json.dump(c, open(kit + "/instances/c/loom.lock.json", "w"))
+PY
+OUT23="$(env -u LOOM_LOCK CODER_WORKSPACE_NAME=ws-c python3 "$GATE" --profile onedroid --config "$EMPTYCFG" \
+         --kit-root "$KIT3" --out "$WORK/o23.json" 2>&1)"; RC23=$?
+if [ "$RC23" -eq 0 ]; then ok "I1 the instance record resolves and plans (exit 0)"; else bad "I1 the instance record resolves and plans" "rc=$RC23: $OUT23"; fi
+PLAN_JSON="${OUT23#*PLAN }"; PLAN_JSON="${PLAN_JSON%%$'\n'*}"
+if DISALLOW_HAS "mcp__hub_c__*"; then ok "I2 the resolved record's own other estate is denied"; else bad "I2 the resolved record's own other estate is denied" "absent: $PLAN_JSON"; fi
+if DISALLOW_HAS "mcp__claude_ai_Estate_B__*"; then ok "I3 an estate only the ROOT record names is denied too"; else bad "I3 an estate only the ROOT record names is denied too" "absent: $PLAN_JSON"; fi
+if DISALLOW_HAS "mcp__onedroid__*"; then bad "I4 the worker's own connector is never denied" "mcp__onedroid__* in disallow"; else ok "I4 the worker's own connector is never denied"; fi
+if DISALLOW_HAS "mcp__onedroid_dev__*"; then bad "I5 the same PROFILE's servers in another record are not denied (same estate)" "mcp__onedroid_dev__* in disallow"; else ok "I5 the same PROFILE's servers in another record are not denied (same estate)"; fi
+contains "I7 a WARN names the PROFILE the resolved record did not declare, with its servers" "does not declare estate-b (claude.ai Estate B)" "$OUT23"
+contains "I8 and points at df-preflight for that profile" "df-preflight --profile estate-b" "$OUT23"
+# The same kit, resolved from --lock instead of --kit-root: the union root is derived from the
+# lock's own path (<kit>/instances/<n>/loom.lock.json), the way df-worker + LOOM_LOCK reach it.
+OUT24="$(python3 "$GATE" --profile onedroid --config "$EMPTYCFG" --lock "$KIT3/instances/c/loom.lock.json" \
+         --out "$WORK/o24.json" 2>&1)"; RC24=$?
+PLAN_JSON="${OUT24#*PLAN }"; PLAN_JSON="${PLAN_JSON%%$'\n'*}"
+if DISALLOW_HAS "mcp__claude_ai_Estate_B__*"; then ok "I9 --lock alone: the kit root is derived from the lock path and the union still holds"; else bad "I9 --lock alone derives the kit root" "absent: $PLAN_JSON"; fi
+# A kit that names NO other estate anywhere: the plan says so, loudly, instead of a silent [plugin_*].
+KIT4="$WORK/kit4"
+mkdir -p "$KIT4"
+printf '{"mcp": {"profiles": {"onedroid": {"kind": "connector", "servers": ["onedroid"]}}}}\n' > "$KIT4/loom.lock.json"
+OUT25="$(env -u LOOM_LOCK python3 "$GATE" --profile onedroid --config "$EMPTYCFG" --kit-root "$KIT4" \
+         --out "$WORK/o25.json" 2>&1)"; RC25=$?
+if [ "$RC25" -eq 0 ]; then ok "I10 a single-estate kit still plans (exit 0)"; else bad "I10 a single-estate kit still plans" "rc=$RC25: $OUT25"; fi
+contains "I11 and WARNs that no other estate is denied" "covers no other estate" "$OUT25"
 
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
