@@ -403,8 +403,8 @@ run; leave every other mission's state alone.
    vendored Tier-2 is your estate's org-layer directory under the instance repo's `vendor/` (the
    lockfile's `upstreams` names it). Expected: an argv containing `--plugin-dir`, `--setting-sources
    project`, `--strict-mcp-config`, at least one `deny:` line, and `claim-columns:`; the notepad
-   root appears in no `--add-dir`. Then delete the scratch directory the dry run created under
-   `workers/dev/`.
+   root appears in no `--add-dir`. ⚠️ It creates a scratch directory under `workers/dev/` — leave
+   it for now and remove it in the teardown, which removes everything in one place.
 
 7b. **The operator's page (objective 8).** Run `command -v df-operator-todo` — it must resolve
    under a `df-governed/bin/` path, same as `df-worker`. Then, from this notepad:
@@ -424,10 +424,56 @@ run; leave every other mission's state alone.
    afterwards that `operator-todo.md` contains **no** `## Done` section and no `~~strikethrough~~`:
    the file is a frontier, and its history belongs in `git log`, not on the page.
 
-8. **Clean up.** `printf 'DONE\n' > .df/missions/M-VALIDATE/state`; remove the empty commit
-   from step 4 (`git reset --soft HEAD~1` only if `git log -1 --format=%s` is exactly
-   `M-VALIDATE: gate check`); remove the test handoff from step 6 and `rm -rf .df/missions/M-VALIDATE`.
-   Report the table.
+8. **TEARDOWN — leave the tree exactly as you found it, then PROVE it.**
+
+   ⚠️ **THIS RUN MUTATES THINGS, AND EVERY MUTATION IS LISTED HERE RATHER THAN BESIDE THE STEP
+   THAT MADE IT.** A cleanup scattered across eight steps is a cleanup with survivors: the step
+   you skipped because it was UNKNOWN is also the step whose artefact nobody removed. One list,
+   run in order, then a check that fails if anything is left.
+
+   Everything below is INSIDE the directory this session started in. Nothing here writes outside
+   it, and nothing here touches another mission.
+
+   ```sh
+   # 1. the throwaway mission — this also stops the tick, which is a MONITOR and will keep
+   #    firing for the rest of the session otherwise. Setting the state is what stops it;
+   #    deleting the directory alone leaves a monitor reading a file that no longer exists.
+   printf 'DONE\n' > .df/missions/M-VALIDATE/state
+   rm -rf .df/missions/M-VALIDATE
+
+   # 2. the empty commit from the commit-gate step — ONLY if it is still HEAD and is yours.
+   #    Guarded, because a bare `reset --soft HEAD~1` on a session that committed something
+   #    else afterwards silently un-commits the wrong thing.
+   [ "$(git log -1 --format=%s)" = "M-VALIDATE: gate check" ] && git reset -q --soft HEAD~1
+
+   # 3. the test handoff written when the Stop gate blocked you
+   #    (find it by name; do not guess the filename)
+   git status --porcelain handoffs/ | sed -n 's/^?? //p'      # then rm the one you wrote
+
+   # 4. the worker dry-run scratch directory
+   rm -rf workers/dev/*probe* 2>/dev/null || true
+
+   # 5. MAP.md was touched, not edited — its mtime moved and its bytes did not.
+   #    Nothing to undo; noted so you do not go looking for a diff.
+
+   # 6. the operator-todo probe item, if 7b left it behind
+   df-operator-todo list | grep -q validate-probe && \
+     df-operator-todo done --id validate-probe --by-operator
+   ```
+
+   **Then prove it, and put the output in your report:**
+
+   ```sh
+   git status --porcelain          # expect: empty, or ONLY files you knowingly changed
+   ls .df/missions/ 2>/dev/null    # expect: no M-VALIDATE
+   git log --oneline -1            # expect: NOT "M-VALIDATE: gate check"
+   ```
+
+   ⚠️ **A teardown you did not verify is a teardown you did not do.** If `git status` is not
+   clean, say what is left and why — an artefact you decided to keep is a fine outcome; an
+   artefact nobody noticed is the one that ends up committed by the next person's `git add -A`.
+
+9. **Report the table.**
 
 ### What "PASS everywhere" means
 
