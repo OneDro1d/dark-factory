@@ -6,6 +6,7 @@
 #   bash install.sh              fetch at the pins, install, verify
 #   bash install.sh --offline    install from whatever is already vendored; touch no network
 #   bash install.sh --dry-run    print the plan, change nothing
+#   bash install.sh --no-prove   skip the prove.sh step (lock-verify.sh still runs)
 #
 # ORDER, AND WHY IT IS THIS ORDER
 #   0  preconditions        fail here, where the cause is one line, not three steps later
@@ -26,6 +27,8 @@
 #   4  PATH                 df-mission has to be reachable; installed-but-unreachable is
 #                           not installed, and it fails much later, as "unknown command"
 #   5  verify               lock-verify.sh, which is the only thing entitled to say LOCKED
+#   5b prove                prove.sh, the mechanical half of VALIDATE-INSTALL.md Part 1 --
+#                           files matching the lock is not the same as the machinery working
 #   6  print the gaps       every run, so a green install is never read as a complete setup
 #
 # EXIT: 0 installed and LOCKED · 1 a precondition failed · 2 installed but NOT locked.
@@ -33,12 +36,13 @@
 # lockfile. Collapsing that into success is how an instance ships half-configured.
 set -uo pipefail
 
-OFFLINE=0; DRY=0
+OFFLINE=0; DRY=0; PROVE=1
 for a in "$@"; do
   case "$a" in
     --offline) OFFLINE=1 ;;
     --dry-run) DRY=1 ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    --no-prove) PROVE=0 ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     *) printf 'unknown flag: %s\n' "$a" >&2; exit 1 ;;
   esac
 done
@@ -645,6 +649,27 @@ elif [ -f "$ENGINE_DST/lock-verify.sh" ]; then
   ( cd "$ROOT" && bash "$ENGINE_DST/lock-verify.sh" --lock "$LOCK" ) || RC=2
 else
   say "WARN  no lock-verify.sh in the pinned engine — this install is UNVERIFIED"
+  RC=2
+fi
+
+# ---- 5b. prove — the install is not done until this passes -------------------
+# lock-verify.sh above proves the tree matches the lockfile; it says nothing about whether
+# the machinery it declares actually RUNS. prove.sh is the mechanical half of
+# VALIDATE-INSTALL.md Part 1 -- identity, lock-verify (again, so its own verdict is inside
+# the one report), every wired hook fed a real input, two positive controls, preflight and
+# the kit's own suite -- scripted so it never depends on a human pasting a document. A FAIL
+# here follows the same "installed but NOT locked" contract as a verify failure: it costs
+# the exit code, it never aborts the remaining steps, so the validate box below still prints.
+step "prove — the install is not done until this passes"
+if [ "$DRY" -eq 1 ]; then
+  say "would  run boot-kit/scripts/prove.sh"
+elif [ "$PROVE" -eq 0 ]; then
+  say "SKIPPED  --no-prove. Run it by hand any time:"
+  say "         bash $ENGINE_DST/prove.sh --lock $LOCK"
+elif [ -f "$ENGINE_DST/prove.sh" ]; then
+  ( cd "$ROOT" && LOOM_LIVE="$LIVE" bash "$ENGINE_DST/prove.sh" --lock "$LOCK" ) || RC=2
+else
+  say "WARN  no prove.sh in the pinned engine — this install is UNPROVEN"
   RC=2
 fi
 

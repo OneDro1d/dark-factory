@@ -102,14 +102,17 @@ EOF
 
 # run <case> [extra install.sh args...] — always --offline; LOOM_LIVE/LOOM_BIN pinned inside the
 # fixture and DF_CLAUDE_BIN pointed at the stub, so nothing here can reach the real ~/.claude,
-# the real ~/.local/bin, or the real Claude CLI.
+# the real ~/.local/bin, or the real Claude CLI. Always --no-prove too, for the same reason
+# test-install-plugins.sh carries it: this fixture's T1 ships no prove.sh, and an absent one
+# costs the exit code -- a fact about a step this suite is not testing, and prove.sh's own
+# wiring has its own suite, test-install-prove.sh.
 run() {
   local c="$1"; shift
   ( cd "$WORK/$c/inst" \
       && LOOM_LIVE="$WORK/$c/inst/live" LOOM_BIN="$WORK/$c/inst/bin" \
          DF_CLAUDE_BIN="${DF_CLAUDE_BIN_OVERRIDE:-$WORK/$c/stub/claude}" \
          STUB_LOG="$WORK/$c/stub.log" \
-         bash install.sh --offline "$@" 2>&1 )
+         bash install.sh --offline --no-prove "$@" 2>&1 )
 }
 rc_of() {
   local c="$1"; shift
@@ -117,7 +120,7 @@ rc_of() {
       && LOOM_LIVE="$WORK/$c/inst/live" LOOM_BIN="$WORK/$c/inst/bin" \
          DF_CLAUDE_BIN="${DF_CLAUDE_BIN_OVERRIDE:-$WORK/$c/stub/claude}" \
          STUB_LOG="$WORK/$c/stub.log" \
-         bash install.sh --offline "$@" >/dev/null 2>&1 )
+         bash install.sh --offline --no-prove "$@" >/dev/null 2>&1 )
   echo $?
 }
 lock_of() { jq -c "$2" "$WORK/$1/inst/loom.lock.json"; }
