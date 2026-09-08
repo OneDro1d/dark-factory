@@ -27,6 +27,14 @@ HOOK="$SELF/../hooks/claim-gate.py"
 [ -f "$HOOK" ] || { echo "missing $HOOK"; exit 2; }
 command -v python3 >/dev/null || { echo "python3 required"; exit 2; }
 
+# HERMETIC TO THE DISPATCH ENVIRONMENT. Every helper below routes the hook invocation through
+# scrub_dispatch_env — see lib/dispatch-env-scrub.sh for why: a df-dispatched worker's OWN
+# process carries DF_TICKET/DF_SCRATCH/DF_CLAIM_COLUMNS/… and WORKER_*, and `env VAR=val` alone
+# does not clear those out from underneath a helper's explicit values.
+T1="$(cd "$SELF/../../.." && pwd)"
+# shellcheck source=boot-kit/scripts/tests/lib/dispatch-env-scrub.sh
+source "$T1/boot-kit/scripts/tests/lib/dispatch-env-scrub.sh"
+
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s -- %s\n' "$1" "$2"; }
@@ -49,14 +57,14 @@ else:
     print(((d.get("hookSpecificOutput") or {}).get("permissionDecision")) or "MALFORMED")'
 
 # armed: DF_TICKET set.  bare: DF_TICKET removed from the environment entirely.
-armed() { printf '%s' "$2" | env DF_TICKET="$1" python3 "$HOOK"; }
-bare()  { printf '%s' "$1" | env -u DF_TICKET python3 "$HOOK"; }
+armed() { printf '%s' "$2" | scrub_dispatch_env DF_TICKET="$1" python3 "$HOOK"; }
+bare()  { printf '%s' "$1" | scrub_dispatch_env -u DF_TICKET python3 "$HOOK"; }
 decide_armed() { armed "$1" "$2" | python3 -c "$CLASSIFY"; }
 decide_bare()  { bare "$1"      | python3 -c "$CLASSIFY"; }
 # scratch()/claimcols() layer DF_SCRATCH / DF_CLAIM_COLUMNS on top of an armed call.
-scratch()       { printf '%s' "$3" | env DF_TICKET="$1" DF_SCRATCH="$2" python3 "$HOOK"; }
+scratch()       { printf '%s' "$3" | scrub_dispatch_env DF_TICKET="$1" DF_SCRATCH="$2" python3 "$HOOK"; }
 decide_scratch() { scratch "$1" "$2" "$3" | python3 -c "$CLASSIFY"; }
-claimcols()      { printf '%s' "$3" | env DF_TICKET="$1" DF_CLAIM_COLUMNS="$2" python3 "$HOOK"; }
+claimcols()      { printf '%s' "$3" | scrub_dispatch_env DF_TICKET="$1" DF_CLAIM_COLUMNS="$2" python3 "$HOOK"; }
 decide_claimcols() { claimcols "$1" "$2" "$3" | python3 -c "$CLASSIFY"; }
 
 # generic() layers DF_CLAIM_TOOL / DF_CLAIM_ITEM_KEYS / DF_CLAIM_VALUES_KEY (and, when
@@ -71,7 +79,7 @@ generic() {  # ticket claim_tool item_keys vkey vmode claim_columns event
   [ -n "$keys" ] && envs+=(DF_CLAIM_ITEM_KEYS="$keys")
   if [ "$vmode" = "set" ]; then envs+=(DF_CLAIM_VALUES_KEY="$vkey"); fi
   [ -n "$cols" ] && envs+=(DF_CLAIM_COLUMNS="$cols")
-  printf '%s' "$ev" | env "${envs[@]}" python3 "$HOOK"
+  printf '%s' "$ev" | scrub_dispatch_env "${envs[@]}" python3 "$HOOK"
 }
 decide_generic() { generic "$1" "$2" "$3" "$4" "$5" "$6" "$7" | python3 -c "$CLASSIFY"; }
 
@@ -86,7 +94,7 @@ ev_tool() {  # hook_event_name cwd tool_name tool_input_json [tool_response_json
 # default_armed(): DF_TICKET set, but DF_CLAIM_TOOL / DF_CLAIM_ITEM_KEYS / DF_CLAIM_VALUES_KEY
 # / DF_CLAIM_COLUMNS explicitly UNSET — proves the three new vars change nothing when absent,
 # not merely that they happen not to have been set yet in this process.
-default_armed() { printf '%s' "$2" | env -u DF_CLAIM_TOOL -u DF_CLAIM_ITEM_KEYS -u DF_CLAIM_VALUES_KEY -u DF_CLAIM_COLUMNS DF_TICKET="$1" python3 "$HOOK"; }
+default_armed() { printf '%s' "$2" | scrub_dispatch_env -u DF_CLAIM_TOOL -u DF_CLAIM_ITEM_KEYS -u DF_CLAIM_VALUES_KEY -u DF_CLAIM_COLUMNS DF_TICKET="$1" python3 "$HOOK"; }
 decide_default() { default_armed "$1" "$2" | python3 -c "$CLASSIFY"; }
 
 ev_bash() {   # cwd
@@ -154,9 +162,9 @@ equals "C18 a claimed cwd does not unlock a different cwd" "deny" "$(decide_arme
 # how the claim gets skipped again — so armed + broken input is a DENY, never an allow.
 equals "C19 armed: malformed stdin DENIES"   "deny"    "$(decide_armed 123 'not json at all')"
 contains "C20 the deny says it is an internal error" "internal error" \
-  "$(printf 'not json at all' | env DF_TICKET=123 python3 "$HOOK")"
+  "$(armed 123 'not json at all')"
 equals "C21 unarmed: malformed stdin abstains" "abstain" "$(decide_bare 'not json at all')"
-printf 'not json' | env DF_TICKET=123 python3 "$HOOK" >/dev/null 2>&1
+armed 123 'not json' >/dev/null 2>&1
 equals "C22 a policy decision still exits 0"  "0" "$?"
 
 echo ""
@@ -312,6 +320,41 @@ if [ -f "$CWDG/.claim-done" ]; then ok "G2 default: PostToolUse still writes the
 else bad "G2 default: PostToolUse still writes the marker" "no $CWDG/.claim-done"; fi
 equals "G3 default: a write to ANOTHER item is still DENIED" "deny" \
   "$(decide_default 777 "$(ev_write "$CWDG" 888)")"
+
+echo ""
+# ── 12. HERMETIC TO THE DISPATCH ENVIRONMENT ────────────────────────────────────────────
+# ⛔ THE BUG THIS GUARDS. `env VAR=val cmd` only ADDS to the inherited environment, it does
+# not clear it. A df-dispatched worker's OWN process — the very process this suite runs in
+# when a worker is asked to fix or verify this file — carries DF_TICKET, DF_SCRATCH,
+# DF_CLAIM_COLUMNS (and friends) exported by df-worker, and WORKER_* exported by dispatch.sh.
+# Every helper above used to run `env DF_TICKET=... python3 "$HOOK"`, which let the WORKER's
+# own ticket, scratch dir and claim columns leak straight through underneath whatever the
+# case explicitly set. A maintainer running this suite by hand never has these set and never
+# saw it fail; two workers independently reported it as "pre-existing, reproduces in total
+# isolation" and were not isolated. These cases poison the SUITE's OWN environment — exactly
+# what a dispatched worker's shell already looks like — and prove the verdict is unchanged.
+POISON_SCRATCH="$WORK/poison-df-scratch"; mkdir -p "$POISON_SCRATCH"
+printf 'SOMEONE-ELSES-CLAIM\n' > "$POISON_SCRATCH/.claim-done"
+export DF_TICKET="POISON-TICKET"
+export DF_SCRATCH="$POISON_SCRATCH"
+export DF_CLAIM_COLUMNS='{"poison_col":"poison_value"}'
+export DF_CLAIM_VALUES_KEY="poisonKey"
+export WORKER_REPO="$WORK/poison-repo"
+export CLAUDE_CODE_ENTRYPOINT="sdk-cli"
+
+CWDH1="$WORK/scratchH1"; mkdir -p "$CWDH1"
+equals "H1 armed+unclaimed still DENIES despite a poisoned ambient DF_SCRATCH pointing at a pre-existing .claim-done" \
+  "deny" "$(decide_armed 999 "$(ev_bash "$CWDH1")")"
+
+CWDH2="$WORK/scratchH2"; mkdir -p "$CWDH2"
+equals "H2 armed+unclaimed: a matching write abstains (ambient mismatching DF_CLAIM_COLUMNS does not leak in)" \
+  "abstain" "$(decide_armed 1000 "$(ev_write "$CWDH2" 1000)")"
+armed 1000 "$(ev_post "$CWDH2" 1000)" >/dev/null
+if [ -f "$CWDH2/.claim-done" ]; then ok "H3 the marker lands at this call's own cwd, not the poisoned ambient DF_SCRATCH"
+else bad "H3 the marker lands at this call's own cwd, not the poisoned ambient DF_SCRATCH" "no $CWDH2/.claim-done"; fi
+if [ "$(cat "$POISON_SCRATCH/.claim-done")" = "SOMEONE-ELSES-CLAIM" ]; then
+  ok "H4 the poisoned ambient DF_SCRATCH marker is untouched"
+else bad "H4 the poisoned ambient DF_SCRATCH marker is untouched" "overwritten"; fi
 
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"

@@ -17,6 +17,14 @@ SELF="$(cd "$(dirname "$0")" && pwd)"
 T1="$(cd "$SELF/../../.." && pwd)"
 HOOK="$T1/hooks/mission-completeness-gate.py"
 
+# HERMETIC TO THE DISPATCH ENVIRONMENT. See lib/dispatch-env-scrub.sh: this hook reads
+# CLAUDE_CODE_ENTRYPOINT directly (it releases the turn under "sdk-cli", the value a headless
+# df-worker run carries), and every call below routes through scrub_dispatch_env so that a
+# df-dispatched worker running THIS suite does not hand its own entrypoint to the hook under
+# test.
+# shellcheck source=boot-kit/scripts/tests/lib/dispatch-env-scrub.sh
+source "$SELF/lib/dispatch-env-scrub.sh"
+
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s -- %s\n' "$1" "$2"; }
@@ -34,18 +42,18 @@ trap 'rm -rf "$TMPDIR"' EXIT
 echo "=== A: present, and safe on the critical path ==="
 if [ -f "$HOOK" ]; then ok "A: hook exists"; else bad "A: hook exists" "not found"; fi
 
-if printf '{"session_id":"t","cwd":"/tmp"}' | python3 "$HOOK" >/dev/null 2>&1; then
+if printf '{"session_id":"t","cwd":"/tmp"}' | scrub_dispatch_env python3 "$HOOK" >/dev/null 2>&1; then
   ok "A: exits 0 on a well-formed event"
 else bad "A: exits 0 on a well-formed event" "non-zero exit would block the turn"; fi
 
-if printf 'not json' | python3 "$HOOK" >/dev/null 2>&1; then
+if printf 'not json' | scrub_dispatch_env python3 "$HOOK" >/dev/null 2>&1; then
   ok "A: exits 0 on malformed stdin"
 else bad "A: exits 0 on malformed stdin" "a Stop hook that errors blocks the turn"; fi
 
 # ⚠️ A FRESH SESSION ID, because case A above already spent session "t"'s first firing and
 # the hook is quiet on repeats. Reusing an id across cases makes every later assertion read
 # the brief form and fail for a reason unrelated to what it is testing.
-OUT="$(printf '{"session_id":"full-form-case"}' | python3 "$HOOK" 2>/dev/null)"
+OUT="$(printf '{"session_id":"full-form-case"}' | scrub_dispatch_env python3 "$HOOK" 2>/dev/null)"
 
 echo "=== B: stdout is a single valid JSON object the harness can read ==="
 if printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
@@ -95,8 +103,8 @@ echo "=== F: full text once per session, brief reminder after ==="
 # five firings, the last three re-deriving an identical settled list. The guard must survive;
 # the wall of text must not.
 SID="gatetest-$$"
-F1="$(printf '{"session_id":"%s"}' "$SID" | python3 "$HOOK" 2>/dev/null)"
-F2="$(printf '{"session_id":"%s"}' "$SID" | python3 "$HOOK" 2>/dev/null)"
+F1="$(printf '{"session_id":"%s"}' "$SID" | scrub_dispatch_env python3 "$HOOK" 2>/dev/null)"
+F2="$(printf '{"session_id":"%s"}' "$SID" | scrub_dispatch_env python3 "$HOOK" 2>/dev/null)"
 
 case "$F1" in *"OPERATOR-ONLY"*) ok "F: first firing carries the full gate" ;;
   *) bad "F: first firing carries the full gate" "the full rules must appear once" ;; esac
@@ -111,13 +119,13 @@ case "$F2" in *"yours"*) ok "F: the brief form keeps the ownership rule" ;;
   *) bad "F: the brief form keeps the ownership rule" "the one sentence that decides" ;; esac
 
 # A DIFFERENT session is a different mission and gets the full text again.
-F3="$(printf '{"session_id":"other-%s"}' "$SID" | python3 "$HOOK" 2>/dev/null)"
+F3="$(printf '{"session_id":"other-%s"}' "$SID" | scrub_dispatch_env python3 "$HOOK" 2>/dev/null)"
 case "$F3" in *"OPERATOR-ONLY blocker"*) ok "F: a new session gets the full gate" ;;
   *) bad "F: a new session gets the full gate" "the marker leaked across sessions" ;; esac
 
 # ⚠️ FAIL TOWARD PROMPTING. A missing session_id means the hook cannot tell whether it has
 # fired, and a missed reminder is worse than a repeated one.
-F5="$(printf '{}' | python3 "$HOOK" 2>/dev/null)"
+F5="$(printf '{}' | scrub_dispatch_env python3 "$HOOK" 2>/dev/null)"
 case "$F5" in *"OPERATOR-ONLY blocker"*) ok "F: no session_id still gets the full gate" ;;
   *) bad "F: no session_id still gets the full gate" "an absent id must not mean already-fired" ;; esac
 
@@ -130,25 +138,56 @@ echo "=== G: it RELEASES the turn on re-entry ==="
 # ⚠️ AND THE EARLIER "GO QUIET" CHANGE DID NOT FIX IT. That made the message SHORTER while it
 # still BLOCKED. Verbosity was the symptom; never releasing the turn was the cause. Fixing the
 # visible half of a defect is how the real half survives a fix that looks like it worked.
-G1="$(printf '{"session_id":"reentry","stop_hook_active":true}' | python3 "$HOOK" 2>/dev/null)"
+G1="$(printf '{"session_id":"reentry","stop_hook_active":true}' | scrub_dispatch_env python3 "$HOOK" 2>/dev/null)"
 if [ -z "$G1" ]; then ok "G: emits NOTHING when stop_hook_active is true"
 else bad "G: emits NOTHING when stop_hook_active is true" \
         "any output re-blocks the turn and loops to the harness cap"; fi
 
-if printf '{"session_id":"reentry","stop_hook_active":true}' | python3 "$HOOK" >/dev/null 2>&1
+if printf '{"session_id":"reentry","stop_hook_active":true}' | scrub_dispatch_env python3 "$HOOK" >/dev/null 2>&1
 then ok "G: still exits 0 on re-entry"
 else bad "G: still exits 0 on re-entry" "a non-zero Stop hook blocks the turn"; fi
 
 # ...and a normal firing must be unaffected, or the release swallowed the gate.
-G2="$(printf '{"session_id":"normal-fire"}' | python3 "$HOOK" 2>/dev/null)"
+G2="$(printf '{"session_id":"normal-fire"}' | scrub_dispatch_env python3 "$HOOK" 2>/dev/null)"
 case "$G2" in *"OPERATOR-ONLY"*) ok "G: a normal firing still carries the gate" ;;
   *) bad "G: a normal firing still carries the gate" "the release silenced the hook entirely" ;; esac
 
 # an explicit false must behave like a normal firing, not like re-entry
 G3="$(printf '{"session_id":"explicit-false","stop_hook_active":false}' \
-        | python3 "$HOOK" 2>/dev/null)"
+        | scrub_dispatch_env python3 "$HOOK" 2>/dev/null)"
 case "$G3" in *"OPERATOR-ONLY"*) ok "G: stop_hook_active=false fires normally" ;;
   *) bad "G: stop_hook_active=false fires normally" "treated an explicit false as re-entry" ;; esac
+
+echo ""
+echo "=== H: hermetic to the dispatch environment ==="
+# ⛔ THE BUG THIS GUARDS. This hook reads CLAUDE_CODE_ENTRYPOINT directly and releases the turn
+# (emits nothing) when it equals "sdk-cli" — the value a headless df-worker run carries (see
+# the CLAUDE_CODE_ENTRYPOINT check above). A df-dispatched worker's OWN process therefore has
+# CLAUDE_CODE_ENTRYPOINT=sdk-cli exported already, plus DF_TICKET/DF_SCRATCH/DF_MISSION/DF_ROLE/
+# DF_MCP_MODE/DF_CLAIM_* from df-worker and WORKER_* from dispatch.sh. Before scrub_dispatch_env,
+# every `python3 "$HOOK"` call above inherited that ambient CLAUDE_CODE_ENTRYPOINT verbatim, and
+# since sdk-cli means "release", the hook emitted NOTHING for every case in this file — sections
+# B through G all failed together, for a reason that has nothing to do with the gate itself. A
+# maintainer running this suite by hand is always CLAUDE_CODE_ENTRYPOINT=cli (or unset) and
+# never saw it; two workers independently called this "pre-existing, reproduces in isolation".
+export CLAUDE_CODE_ENTRYPOINT=sdk-cli
+export DF_TICKET=POISON DF_SCRATCH=/nonexistent/poison DF_MISSION=POISON DF_ROLE=POISON \
+       DF_MCP_MODE=POISON DF_CLAIM_COLUMNS='{"poison":"poison"}' WORKER_REPO=/nonexistent/poison \
+       WORKER_MODEL=POISON
+
+H1="$(printf '{"session_id":"hermetic-%s"}' "$$" | scrub_dispatch_env python3 "$HOOK" 2>/dev/null)"
+case "$H1" in
+  *"OPERATOR-ONLY"*) ok "H: the gate still fires despite a poisoned ambient CLAUDE_CODE_ENTRYPOINT/DF_*/WORKER_* environment" ;;
+  *) bad "H: the gate still fires despite a poisoned ambient CLAUDE_CODE_ENTRYPOINT/DF_*/WORKER_* environment" \
+        "empty/short output -- the dispatch env's entrypoint reached the hook" ;;
+esac
+
+# stop_hook_active re-entry must still release, unaffected by the same ambient poison -- the
+# scrub must not accidentally un-release a genuine re-entry either.
+H2="$(printf '{"session_id":"hermetic-reentry-%s","stop_hook_active":true}' "$$" \
+        | scrub_dispatch_env python3 "$HOOK" 2>/dev/null)"
+if [ -z "$H2" ]; then ok "H: re-entry still releases despite the same poisoned ambient environment"
+else bad "H: re-entry still releases despite the same poisoned ambient environment" "emitted: $H2"; fi
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
