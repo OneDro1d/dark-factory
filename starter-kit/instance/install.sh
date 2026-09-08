@@ -468,7 +468,35 @@ fi
 step "marketplace plugins"
 MP_N="$(jq -r '(.install.marketplacePlugins // []) | length' "$LOCK")"
 if [ "$MP_N" -eq 0 ]; then
+  # ⛔ SAY HOW, NOT JUST "NONE". Operator request 2026-09-08. "none declared" is a true
+  # sentence that teaches nobody anything: a reader has no way to know this kit CAN install
+  # their /plugin choices, so third-party plugins stay a per-machine ritual that quietly
+  # differs on every box — the exact drift a lockfile exists to remove. The recipe prints on
+  # every install with none declared, because "why doesn't my new machine have playwright" is
+  # a question people ask while looking at this output.
   say "marketplace plugins: none declared"
+  say ""
+  say "  This kit CAN install them for you — playwright, context7, whatever you reach for."
+  say "  Add an entry to install.marketplacePlugins in $LOCK, then re-run this installer:"
+  say ""
+  say '      { "name": "playwright",'
+  say '        "marketplace": "claude-plugins-official",'
+  say '        "marketplaceSource": "anthropics/claude-plugins-official" }'
+  say ""
+  say "  Both names come straight off the machine you already set up by hand:"
+  say "      claude plugin list --json               \"id\" is <name>@<marketplace>"
+  say "      claude plugin marketplace list --json   the source to add it from"
+  say "  marketplaceSource is not optional in practice: a machine that has never been told"
+  say "  about a marketplace knows NONE of them — the official one included — and the install"
+  say "  fails with \"not found in marketplace\" without it."
+  say ""
+  say "  ⚠️ THIS PINS WHICH PLUGINS EVERY MACHINE GETS, NEVER WHICH VERSION."
+  say "     'claude plugin install' takes no version argument, so every machine installs"
+  say "     LATEST. That is the honest limit of the mechanism and nothing here can work"
+  say "     around it. What this kit does instead: it records the version each machine"
+  say "     actually resolved into probed.marketplacePlugins, and lock-verify L14 tells you"
+  say "     when that version has moved underneath you. Visible drift, not prevented drift."
+  say ""
 else
   # Overridable for the same reason LOOM_LIVE and LOOM_BIN are: a suite that has to shell out
   # to the real `claude` — and mutate the real ~/.claude/settings.json to prove a point — is a

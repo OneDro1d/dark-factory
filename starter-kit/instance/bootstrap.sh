@@ -202,6 +202,56 @@ for f in README.md settings.template.json mcp.template.json output-style.md; do
   cp "$SELF/boot-kit/$f" "$TARGET/boot-kit/$f" 2>/dev/null || say "WARN  could not copy boot-kit/$f"
 done
 
+# ---- the instance's own test harness -----------------------------------------
+# ⛔ ADDED 2026-09-08, AND ITS ABSENCE WAS A MEASURED GAP ACROSS THE WHOLE FLEET. This
+# template has shipped `boot-kit/scripts/run-tests.sh`, `boot-kit/tests/` and
+# `.github/workflows/gate.yml` since 2026-08-31 — and bootstrap.sh copied NONE of them, so
+# every instance ever minted came out with no runner, no suites and no CI. Measured on six
+# live records: one had them (added by hand, months later) and five had zero.
+#
+# ⚠️ AND A TIER-1 SUITE WAS GREEN THROUGHOUT. `test-instance-ci.sh` asserts "the kit ships
+# both halves" — and it is right, because it measures THIS DIRECTORY. Nothing measured what
+# the MINT produces. That is the same defect as the installer step that never reached an
+# existing machine: a check aimed at the template rather than at the thing the template
+# makes. `test-bootstrap-ships-tests.sh` now runs bootstrap.sh for real and reads the OUTPUT.
+#
+# ⚠️ The workflow is copied to `.github/workflows/gate.yml` in the INSTANCE, where it is that
+# repo's own CI. It runs the instance's suites and deliberately never runs install.sh: a CI
+# runner is not the machine the instance records, so a green tick there means the record is
+# well-formed, never that the install works. Only lock-verify on the target machine says that.
+#
+# ⛔ TWO TEST DIRECTORIES, AND COPYING THE WRONG ONE MAKES EVERY NEW KIT RED ON DAY ONE.
+#   boot-kit/tests/           tests OF THIS TEMPLATE. They stay here. `test-boot-kit.sh`
+#                             asserts `boot-kit/hooks/df-instance-start.sh` is present — true
+#                             in the template, FALSE in a minted instance, where the hook is
+#                             deliberately not copied because the lockfile declares it and the
+#                             installer takes it from the vendored upstream (one store, no
+#                             drift). Measured 2026-09-08: shipping that suite made a fresh
+#                             mint fail its own gate immediately, on a correct instance.
+#   boot-kit/instance-tests/  tests that SHIP, and that assert things TRUE OF A RECORD. They
+#                             land in the instance as boot-kit/tests/, which is where its own
+#                             runner looks.
+# The split is a directory rather than a naming convention on purpose: a convention is a rule
+# somebody has to remember at the moment of writing a new suite, and this one would fail
+# silently in the direction that looks green here and red on someone else's machine.
+mkdir -p "$TARGET/boot-kit/scripts" "$TARGET/boot-kit/tests" "$TARGET/.github/workflows"
+cp "$SELF/boot-kit/scripts/run-tests.sh" "$TARGET/boot-kit/scripts/run-tests.sh" 2>/dev/null \
+  || say "WARN  could not copy boot-kit/scripts/run-tests.sh — this instance has no test runner"
+chmod +x "$TARGET/boot-kit/scripts/run-tests.sh" 2>/dev/null
+TEST_N=0
+for t in "$SELF"/boot-kit/instance-tests/test-*.sh; do
+  [ -f "$t" ] || continue
+  cp "$t" "$TARGET/boot-kit/tests/" 2>/dev/null || { say "WARN  could not copy ${t##*/}"; continue; }
+  chmod +x "$TARGET/boot-kit/tests/${t##*/}" 2>/dev/null
+  TEST_N=$((TEST_N + 1))
+done
+cp "$SELF/.github/workflows/gate.yml" "$TARGET/.github/workflows/gate.yml" 2>/dev/null \
+  || say "WARN  could not copy .github/workflows/gate.yml — this instance has no CI"
+# Said out loud, with the count. "Shipped a test harness" and "shipped zero suites" both
+# leave a tests/ directory behind, and only one of them is worth anything.
+say "  test harness: run-tests.sh + $TEST_N suite(s) + .github/workflows/gate.yml"
+[ "$TEST_N" -eq 0 ] && say "WARN  zero suites copied — the runner treats that as a HARD FAILURE, by design"
+
 mkdir -p "$TARGET/.df/missions" "$TARGET/handoffs" "$TARGET/sessions"
 
 # The worked example mission. Copied rather than generated, and copied with a FIXED id, so
