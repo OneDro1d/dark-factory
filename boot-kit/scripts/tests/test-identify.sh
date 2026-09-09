@@ -331,6 +331,79 @@ O="$(CODER=true CODER_AGENT_URL=https://nowhere/ CODER_WORKSPACE_NAME=ghost bash
 contains "G: says nothing matched"          "no declared instance matches" "$O"
 contains "G: and says that is not proof"    "not proof"                    "$O"
 
+echo "=== M: --machine -- the block resolve_machine_lock()/find_lock() actually key on ==="
+# ⛔ WHY THIS EXISTS. --declare writes install.identity and REFUSES when one exists, but
+# never wrote the `machine` block ({platform, home}) that mcp-profile-config.py's
+# resolve_machine_lock() and df-preflight's find_lock() key candidate lockfiles on. Measured
+# 2026-09-09: five records with no `machine` block -> zero candidates matched -> every
+# worker launch refused, and a record that ALREADY declares an identity could never get one
+# via --declare (which refuses outright once install.identity is present).
+command -v python3 >/dev/null 2>&1 || { echo "python3 required for M"; exit 2; }
+
+echo "--- M1: absent -- written with the measured values and the note ---"
+M1_LOCK="$(mklock m1 '{"instance":"m1-machine","install":{}}')"
+O="$(bash "$ID" --machine "$M1_LOCK" 2>&1)"; rc=$?
+contains "M1: prints what it will write, before writing" "will write into" "$O"
+if [ "$rc" -eq 0 ]; then ok "M1: exits 0"; else bad "M1: exits 0" "exit $rc"; fi
+if [ "$(jq -r '.machine.platform // empty' "$M1_LOCK")" = "$(uname -s)" ]; then
+  ok "M1: machine.platform is the measured platform"
+else bad "M1: machine.platform is the measured platform" "$(cat "$M1_LOCK")"; fi
+if [ "$(jq -r '.machine.home // empty' "$M1_LOCK")" = "$HOME" ]; then
+  ok "M1: machine.home is the measured \$HOME"
+else bad "M1: machine.home is the measured \$HOME" "$(cat "$M1_LOCK")"; fi
+contains "M1: the note says MEASURED, and for which instance" "MEASURED" "$(jq -r '.machine["$machineNote"] // empty' "$M1_LOCK")"
+case "$(jq -r '.machine["$machineNote"] // empty' "$M1_LOCK")" in
+  *m1-machine*) ok "M1: the note names the instance it was measured for" ;;
+  *) bad "M1: the note names the instance it was measured for" "$(jq -r '.machine["$machineNote"]' "$M1_LOCK")" ;;
+esac
+# `machine` lands right after `instance`, per the spec's key-order requirement.
+KEYS1="$(jq -r 'keys_unsorted | join(",")' "$M1_LOCK")"
+case "$KEYS1" in
+  instance,machine,*) ok "M1: the machine key is inserted right after instance" ;;
+  *) bad "M1: the machine key is inserted right after instance" "$KEYS1" ;;
+esac
+
+echo "--- M2: matching -- unchanged (byte-compare), exit 0, idempotent ---"
+BEFORE_M2="$(cat "$M1_LOCK")"
+O="$(bash "$ID" --machine "$M1_LOCK" 2>&1)"; rc=$?
+contains "M2: confirms the match" "matches this machine" "$O"
+if [ "$rc" -eq 0 ]; then ok "M2: exits 0"; else bad "M2: exits 0" "exit $rc"; fi
+AFTER_M2="$(cat "$M1_LOCK")"
+if [ "$BEFORE_M2" = "$AFTER_M2" ]; then ok "M2: the file is byte-identical (untouched)"
+else bad "M2: the file is byte-identical (untouched)" "content changed"; fi
+
+echo "--- M3: differing -- refuse, exit 3, print both, file unchanged ---"
+M3_LOCK="$(mklock m3 '{"instance":"m3-machine","machine":{"platform":"NoSuchOS","home":"/nowhere"},"install":{}}')"
+BEFORE_M3="$(cat "$M3_LOCK")"
+O="$(bash "$ID" --machine "$M3_LOCK" 2>&1)"; rc=$?
+contains "M3: refuses" "DIFFERENT MACHINE" "$O"
+if [ "$rc" -eq 3 ]; then ok "M3: exits 3"; else bad "M3: exits 3" "exit $rc"; fi
+contains "M3: shows what the record says" "platform=NoSuchOS home=/nowhere" "$O"
+contains "M3: shows what this machine actually is" "platform=$(uname -s) home=$HOME" "$O"
+contains "M3: says never overwritten automatically" "Never overwritten" "$O"
+contains "M3: says to edit it by hand so the diff shows it" "edit it by hand" "$O"
+AFTER_M3="$(cat "$M3_LOCK")"
+if [ "$BEFORE_M3" = "$AFTER_M3" ]; then ok "M3: the file is byte-identical (untouched)"
+else bad "M3: the file is byte-identical (untouched)" "content changed"; fi
+
+echo "--- M4: no instance name -- exit 2, same as --declare ---"
+M4_LOCK="$(mklock m4 '{"install":{}}')"
+O="$(bash "$ID" --machine "$M4_LOCK" 2>&1)"; rc=$?
+contains "M4: says no instance name is declared" "no instance name" "$O"
+if [ "$rc" -eq 2 ]; then ok "M4: exits 2"; else bad "M4: exits 2" "exit $rc"; fi
+
+echo "--- M5: --declare on a record with no identity AND no machine block -- BOTH written ---"
+M5_LOCK="$(mklock m5 '{"instance":"m5-machine","install":{}}')"
+O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --declare "$M5_LOCK" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "M5: --declare exits 0"; else bad "M5: --declare exits 0" "exit $rc: $O"; fi
+if [ -n "$(jq -r '.install.identity.hostname // empty' "$M5_LOCK")" ]; then
+  ok "M5: install.identity was written"
+else bad "M5: install.identity was written" "nothing landed"; fi
+if [ "$(jq -r '.machine.platform // empty' "$M5_LOCK")" = "$(uname -s)" ] \
+   && [ "$(jq -r '.machine.home // empty' "$M5_LOCK")" = "$HOME" ]; then
+  ok "M5: machine ({platform, home}) was ALSO written, in the same call"
+else bad "M5: machine was also written" "$(cat "$M5_LOCK")"; fi
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"

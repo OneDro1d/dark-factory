@@ -167,21 +167,50 @@ equals "I: git status allows" "{}" "$O"
 O="$(run_hook "$NOTEPAD_A" "git -C $CODEREPO_A push origin main")"
 equals "I: git push allows" "{}" "$O"
 
-echo "=== J: an untokenisable command (apostrophe in a heredoc body) -- prose passes, a bare commit does not ==="
+echo "=== J: an untokenisable command (unbalanced quote, no heredoc) -- prose passes, a bare commit does not ==="
 # Same lexer and same failure as merge-gate.py (third homelab run, 2026-09-08). Here the
 # previous tree failed OPEN: the ValueError reached main() and printed a systemMessage, so a
 # commit smuggled behind an unbalanced quote was allowed. J3 is red against that tree.
+#
+# ⚠️ CORRECTED 2026-09-09, alongside the strip_heredoc_bodies fix (see section K below). The
+# fixture here used to be a heredoc whose BODY carried the stray apostrophe
+# (`commit -F - <<EOF\nwip it's\nEOF`) -- a well-formed, properly-terminated heredoc. Once
+# strip_heredoc_bodies runs before tokenising, that heredoc's body (apostrophe included) is
+# removed before shlex ever sees it, so the command is no longer untokenisable at all: it now
+# hits the new STDIN case in section K instead, which is what this file measures there. This
+# section keeps its own genuinely-untokenisable fixture -- an unbalanced double quote with NO
+# heredoc anywhere in it, so stripping is a no-op and the ValueError this section is about
+# still fires -- the same shape as merge-gate.py's own X3 case.
 HEREDOC_PROSE=$'cat > /tmp/t2.txt <<\'EOF\'\nthe machine\'s record\nEOF'
 O="$(run_hook "$NOTEPAD_A" "$HEREDOC_PROSE")"
 equals "J1: an apostrophe inside a heredoc body, no commit anywhere -> {}" "{}" "$O"
-COMMIT_UNBAL=$'git -C '"$CODEREPO_A"$' commit -F - <<EOF\nwip it\'s\nEOF'
+COMMIT_UNBAL=$'git -C '"$CODEREPO_A"$' commit -m "it\'s not closed'
 O="$(run_hook "$NOTEPAD_A" "$COMMIT_UNBAL")"
 contains "J2: an untokenisable command whose text mentions a git commit is DENIED" "permissionDecision" "$O"
 contains "J3: the reason names the parse failure" "could not be tokenised" "$O"
 not_contains "J4: it is not reported as an internal error" "internal error" "$O"
-COMMIT_UNBAL_ID=$'git -C '"$CODEREPO_A"$' commit -F - <<EOF\n'"$MISSION_ID"$': wip it\'s\nEOF'
+COMMIT_UNBAL_ID=$'git -C '"$CODEREPO_A"$' commit -m "'"$MISSION_ID"$': it\'s not closed'
 O="$(run_hook "$NOTEPAD_A" "$COMMIT_UNBAL_ID")"
 equals "J5: the same command naming the mission anywhere in its text -> {}" "{}" "$O"
+
+echo "=== K: strip_heredoc_bodies -- Deliverable A applied to the mission gate, and -F - fed by a heredoc ==="
+echo "--- K1: a heredoc body mentioning a commit is prose, not a command -> {} ---"
+K1_CMD=$'cat > /tmp/mcg-k1.txt <<EOF\n- earlier, git commit -m wip happened here.\nEOF'
+O="$(run_hook "$NOTEPAD_A" "$K1_CMD")"
+equals "K1: heredoc body mentioning a commit, no real commit on the operator line -> {}" "{}" "$O"
+
+echo "--- K2: a REAL commit fed by a heredoc (-F -) -- the id, if any, is in the command text ---"
+# `-F -` reads the message from stdin; the heredoc's own body is exactly that stdin content,
+# but strip_heredoc_bodies has already removed it by the time the tokens are inspected. The
+# id rule falls back to the WHOLE (unstripped) command text, the same fallback the
+# untokenisable case above uses -- named in the body -> {}; not named anywhere -> deny.
+K2_CMD_ID=$'git -C '"$CODEREPO_A"$' commit -F - <<EOF\n'"$MISSION_ID"$': x\nEOF'
+O="$(run_hook "$NOTEPAD_A" "$K2_CMD_ID")"
+equals "K2: -F - fed by a heredoc naming the mission in its body -> {}" "{}" "$O"
+K2_CMD_NOID=$'git -C '"$CODEREPO_A"$' commit -F - <<EOF\nwip, no id anywhere in here\nEOF'
+O="$(run_hook "$NOTEPAD_A" "$K2_CMD_NOID")"
+contains "K2: -F - fed by a heredoc with no id anywhere -> deny" "permissionDecision" "$O"
+contains "K2: reason names the stdin source" "read from stdin" "$O"
 
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"

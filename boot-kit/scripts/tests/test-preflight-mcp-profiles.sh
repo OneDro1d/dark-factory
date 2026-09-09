@@ -163,6 +163,25 @@ n="$(jq -r '[.findings[]|select(.check=="mcp" and .target=="nosuchprofile")]|len
 [ "$n" = "0" ] && ok "H: no spurious proposal when no connector name matches" \
               || bad "H: no spurious proposal when no connector name matches" "got $n finding(s)"
 
+# ⛔ MEASURED 2026-09-09 on two machines: the old sanitise_mcp_name regex ([^A-Za-z0-9])
+# folded a hyphen the same as a dot or a space, so a hub-config server named `onedroid-dev`
+# was proposed/denied under `mcp__onedroid_dev__*` -- a prefix nothing actually exposes.
+# sanitise_mcp_name is a second, independent copy of mcp-profile-config.py's sanitise_name;
+# both must sanitise the SAME name identically, since a proposal this file writes is what
+# mcp-profile-config.py later acts on.
+CLAUDE_CONNECTED_HUBC='#!/usr/bin/env bash
+if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
+  printf "claude.ai Hub-C: https://example.invalid - \xe2\x9c\x94 Connected\n"
+  exit 0
+fi
+exit 1'
+
+echo "=== S1: sanitise_mcp_name -- a hyphen in the connector name survives the proposal ==="
+report '{}' "hub-c" "$CLAUDE_CONNECTED_HUBC"
+pt="$(jq -r '.findings[]|select(.check=="mcp" and .target=="hub-c")|.proposal.value.toolPrefix // "none"' "$TMP/pf.json")"
+[ "$pt" = "mcp__claude_ai_Hub-C__" ] && ok "S1 proposal toolPrefix keeps the hyphen ('claude.ai Hub-C' -> 'claude_ai_Hub-C')" \
+                                     || bad "S1 proposal toolPrefix keeps the hyphen" "got '$pt'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"

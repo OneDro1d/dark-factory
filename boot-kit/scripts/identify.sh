@@ -35,9 +35,17 @@
 #   identify.sh                          print the fingerprint
 #   identify.sh --lock <lockfile>        also CHECK it against that lockfile's install.identity
 #   identify.sh --match <instances-dir>  list which declared instances match this machine
-#   identify.sh --declare <lockfile>     WRITE this machine's measured identity into it
+#   identify.sh --declare <lockfile>     WRITE this machine's measured identity into it,
+#                                         and its `machine` block if absent (see --machine)
+#   identify.sh --machine <lockfile>     WRITE (or CHECK, if already present) this record's
+#                                         `machine` block ({platform, home}) -- the thing
+#                                         resolve_machine_lock() and df-preflight's
+#                                         find_lock() actually key candidate lockfiles on.
+#                                         Idempotent: matches -> untouched, exit 0. Never
+#                                         overwrites a differing block -- refuses, exit 3.
 #
-# exit: 0 = agrees, or nothing to disagree with   3 = the lockfile describes another machine
+# exit: 0 = agrees, or nothing to disagree with   2 = cannot check (no instance name, etc.)
+#       3 = the lockfile (or its machine block) describes another machine
 set -uo pipefail
 
 MODE=print
@@ -51,7 +59,9 @@ while [ $# -gt 0 ]; do
     --match=*) MODE=match; DIR="${1#--match=}"; shift ;;
     --declare)  MODE=declare; LOCK="${2:-}"; shift 2 ;;
     --declare=*) MODE=declare; LOCK="${1#--declare=}"; shift ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    --machine)  MODE=machine; LOCK="${2:-}"; shift 2 ;;
+    --machine=*) MODE=machine; LOCK="${1#--machine=}"; shift ;;
+    -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
     *) printf 'FATAL unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -251,6 +261,97 @@ check_one() {
   return 0
 }
 
+# ---- the `machine` block: {platform, home} -- what a lockfile is actually KEYED ON --------
+# ⛔ WHY THIS EXISTS. `--declare` writes `install.identity` and REFUSES when one already
+# exists, but it never wrote the `machine` block ({platform, home}) that
+# resolve_machine_lock() (mcp-profile-config.py) and df-preflight's find_lock() actually key
+# candidate lockfiles on. Measured 2026-09-09: five records with no `machine` block -> zero
+# candidates matched -> every worker launch refused, and "confirm the machine block with
+# --declare" could not be carried out on a record that already declares an identity (--declare
+# refuses outright once install.identity is present, so it never reaches this write either).
+#
+# Read with python3 (object_pairs_hook preserves key order) and written back with
+# `indent=2, ensure_ascii=False` plus a trailing newline, so a fresh `machine` block lands
+# right after `instance` rather than wherever json.dump would otherwise put a new key.
+#
+# write_machine_block <lockfile> -- prints its own messages (identify.sh's `say` style) and
+# returns: 0 = already matches, or was just written   2 = no instance name to measure for
+# 3 = an existing block describes a DIFFERENT machine (never overwritten)
+write_machine_block() {
+  local lf="$1"
+  command -v python3 >/dev/null 2>&1 || {
+    say "   (python3 absent — cannot check/write the machine block)"
+    return 2
+  }
+  python3 - "$lf" "$(uname -s 2>/dev/null || echo unknown)" "$HOME" <<'PY'
+import collections
+import datetime
+import json
+import os
+import sys
+
+lock_path, platform_val, home_val = sys.argv[1], sys.argv[2], sys.argv[3]
+
+with open(lock_path, encoding="utf-8") as fh:
+    data = json.load(fh, object_pairs_hook=collections.OrderedDict)
+
+inst = data.get("instance")
+inst_name = None
+if isinstance(inst, dict):
+    inst_name = inst.get("name") or None
+elif isinstance(inst, str):
+    inst_name = inst or None
+
+if not inst_name:
+    print("   ⚠️ this record declares no instance name, so the machine block cannot say")
+    print("      what it was measured for. Add \"instance\" to the lockfile first.")
+    sys.exit(2)
+
+existing = data.get("machine")
+if isinstance(existing, dict) and existing:
+    if existing.get("platform") == platform_val and existing.get("home") == home_val:
+        print("   ✓ the lockfile's machine block matches this machine")
+        sys.exit(0)
+    print("")
+    print("⛔ THIS LOCKFILE'S MACHINE BLOCK DESCRIBES A DIFFERENT MACHINE.")
+    print("   lockfile : %s" % lock_path)
+    print("   it says  : platform=%s home=%s" % (existing.get("platform", "-"), existing.get("home", "-")))
+    print("   you are  : platform=%s home=%s" % (platform_val, home_val))
+    print("")
+    print("   Never overwritten automatically. If it is wrong, edit it by hand so the")
+    print("   change is visible in the diff.")
+    sys.exit(3)
+
+when = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+note = "MEASURED %s by identify.sh --machine on %s" % (when, inst_name)
+machine_block = collections.OrderedDict(
+    [("platform", platform_val), ("home", home_val), ("$machineNote", note)]
+)
+
+new_data = collections.OrderedDict()
+for k, v in data.items():
+    new_data[k] = v
+    if k == "instance":
+        new_data["machine"] = machine_block
+if "machine" not in new_data:
+    new_data["machine"] = machine_block
+
+print("   will write into %s:" % lock_path)
+print("\n".join("     " + ln for ln in json.dumps(machine_block, indent=2).splitlines()))
+print("")
+
+tmp = lock_path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(new_data, fh, indent=2, ensure_ascii=False)
+    fh.write("\n")
+os.replace(tmp, lock_path)
+
+print("   written. ⚠️ COMMIT AND PUSH IT.")
+sys.exit(0)
+PY
+  return $?
+}
+
 if [ "$MODE" = "check" ]; then
   [ -f "$LOCK" ] || { say "FATAL: no lockfile at $LOCK"; exit 2; }
 
@@ -343,7 +444,18 @@ if [ "$MODE" = "declare" ]; then
   jq --argjson id "$NEWID" '.install.identity = $id' "$LOCK" > "$tmp" && mv "$tmp" "$LOCK"
   say "   written. ⚠️ COMMIT AND PUSH IT — a record that exists only on the machine it"
   say "   describes is one rebuild away from gone."
+  # ⚠️ A DECLARATION THAT LEAVES THE RECORD UNRESOLVABLE IS HALF A DECLARATION. identity
+  # alone is not enough for resolve_machine_lock()/find_lock() to pick this record out --
+  # they key on the `machine` block. Write it too, in the same call, when it is absent.
+  say ""
+  write_machine_block "$LOCK"
   exit 0
+fi
+
+if [ "$MODE" = "machine" ]; then
+  [ -f "$LOCK" ] || { say "FATAL: no lockfile at $LOCK"; exit 2; }
+  write_machine_block "$LOCK"
+  exit $?
 fi
 
 if [ "$MODE" = "match" ]; then
