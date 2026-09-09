@@ -994,6 +994,26 @@ CLAUDE_BIN="${LOCK_VERIFY_CLAUDE_BIN:-claude}"
 # re-derived by hand after the fact.
 l13_provenance() {  # $1 = what was read/run to produce this drift (a file list or a command)
   note "measured from cwd: $PWD; listing/config read: $1"
+
+  # ⛔ EXTENDED 2026-09-09, MEASURED ON A PROVISIONED CODER WORKSPACE. A project-scope
+  # `.mcp.json` server's approval was found NOT in $CLAUDE_JSON's own `.projects` map (every
+  # entry there was `[]` on the box measured) but as `enabledMcpjsonServers` in the STARTING
+  # DIRECTORY's own `<dir>/.claude/settings.local.json`. Both kinds of source are real and
+  # neither alone is the whole answer, so both are read: $CLAUDE_JSON's `.projects` map, AND
+  # `.claude/settings.local.json` under $PWD, every ancestor of $PWD up to $HOME inclusive,
+  # $HOME itself, and every directory $CLAUDE_JSON's own `.projects` map names — the same set
+  # of directories a real approval could actually have been written into.
+  l13_emit() {  # $1 = dir  $2 = names (comma-joined)  $3 = source file
+    case $'\n'"$L13_EMITTED_DIRS"$'\n' in
+      *$'\n'"$1"$'\n'*) return ;;  # already emitted for this dir — dedup by directory
+    esac
+    L13_EMITTED_DIRS="$L13_EMITTED_DIRS"$'\n'"$1"
+    L13_ANY=1
+    note "approved in $1: $2  (via $3)"
+  }
+  L13_EMITTED_DIRS=""
+  L13_ANY=0
+
   L13_APPROVED=""
   if [ -f "$CLAUDE_JSON" ]; then
     L13_APPROVED="$(jq -r '
@@ -1005,10 +1025,46 @@ l13_provenance() {  # $1 = what was read/run to produce this drift (a file list 
   if [ -n "$L13_APPROVED" ]; then
     while IFS=$'\t' read -r l13dir l13names; do
       [ -n "$l13dir" ] || continue
-      note "approved in $l13dir: $l13names"
+      l13_emit "$l13dir" "$l13names" "$CLAUDE_JSON"
     done <<<"$L13_APPROVED"
-  else
-    note "no directory in $CLAUDE_JSON has enabledMcpjsonServers — nothing is approved anywhere on this box"
+  fi
+
+  # Candidate directories for a per-directory .claude/settings.local.json: cwd, every ancestor
+  # of cwd up to $HOME, $HOME itself, and every project key $CLAUDE_JSON names.
+  L13_DIRS=""
+  d="$PWD"
+  while :; do
+    L13_DIRS="$L13_DIRS"$'\n'"$d"
+    [ "$d" = "$HOME" ] && break
+    [ "$d" = "/" ] && break
+    l13parent="$(dirname "$d")"
+    [ "$l13parent" = "$d" ] && break
+    d="$l13parent"
+  done
+  L13_DIRS="$L13_DIRS"$'\n'"$HOME"
+  if [ -f "$CLAUDE_JSON" ]; then
+    while IFS= read -r l13pdir; do
+      [ -n "$l13pdir" ] && L13_DIRS="$L13_DIRS"$'\n'"$l13pdir"
+    done < <(jq -r '(.projects // {}) | keys[]' "$CLAUDE_JSON" 2>/dev/null)
+  fi
+
+  L13_SEEN=""
+  while IFS= read -r l13cand; do
+    [ -n "$l13cand" ] || continue
+    case $'\n'"$L13_SEEN"$'\n' in
+      *$'\n'"$l13cand"$'\n'*) continue ;;  # already checked this directory
+    esac
+    L13_SEEN="$L13_SEEN"$'\n'"$l13cand"
+    L13_SL="$l13cand/.claude/settings.local.json"
+    [ -f "$L13_SL" ] || continue
+    L13_SL_NAMES="$(jq -r '(.enabledMcpjsonServers // []) | select(length > 0) | join(", ")' \
+      "$L13_SL" 2>/dev/null)"
+    [ -n "$L13_SL_NAMES" ] || continue
+    l13_emit "$l13cand" "$L13_SL_NAMES" "$L13_SL"
+  done <<<"$L13_DIRS"
+
+  if [ "$L13_ANY" -eq 0 ]; then
+    note "no directory in $CLAUDE_JSON or any .claude/settings.local.json has enabledMcpjsonServers — nothing is approved anywhere on this box"
   fi
 }
 L13_PROFILES="$(jq -r '(.mcp.profiles // {}) | keys[] | select(startswith("$") | not)' "$LOCK")"
@@ -1092,21 +1148,31 @@ else
             # provisioned box. Servers declared in a project-scope .mcp.json arrive as
             # "Pending approval", not Connected. Approval happens ONCE, INTERACTIVELY, in a real
             # `claude` session -- there is no non-interactive approve (only
-            # `claude mcp reset-project-choices`), and setting `enabledMcpjsonServers` in
-            # ~/.claude.json alone was MEASURED not to flip them (homelab Coder, 2026-09-08).
+            # `claude mcp reset-project-choices`).
             #
-            # ⚠️ AND IT DOES NOT PERSIST THE WAY THE CONFIG DOES. On a Coder workspace ~/.claude
-            # is a symlink into shared NFS, so hooks/skills/settings survive fleet-wide -- but
-            # ~/.claude.json, where the approval is stored, is workspace-LOCAL. Every fresh
-            # workspace re-prompts even though nothing about the config changed.
+            # ⛔ CORRECTED 2026-09-09, MEASURED ON A PROVISIONED CODER WORKSPACE. This block used
+            # to say the approval "lives in workspace-local ~/.claude.json". WRONG on the version
+            # measured: `~/.claude.json` .projects[*].enabledMcpjsonServers was `[]` for EVERY
+            # project on that box, while the operator's approval of the very servers a DRIFT here
+            # names existed as `enabledMcpjsonServers` in the STARTING DIRECTORY's own
+            # `.claude/settings.local.json`. `claude mcp list` is a SEPARATE PROCESS that carries
+            # no session state and reflects neither file either way.
             #
-            # So this DRIFT is not necessarily a broken record. It is the one genuinely
-            # interactive step in the whole install, and it is called out here rather than
-            # left to hide behind "fill in the tokens".
+            # ⚠️ AND IF THIS BOX'S SESSIONS ACTUALLY HAVE WORKING HUBS, THIS DRIFT IS NOT ABOUT
+            # APPROVAL AT ALL -- it is the RECORD's `kind` being wrong. A hub declared in
+            # `~/.mcp.json` (see L13 `hubs`, above) verifies by FILE PRESENCE alone; no approval
+            # is involved. `kind: connector` is for an actual claude.ai CONNECTOR, which appears
+            # in no file. A `kind: connector` DRIFT on a box whose sessions have working hubs
+            # means the record should say `kind: "hubs"` instead — chasing an approval here
+            # chases a problem that was never the real one.
             note "if this box is provisioned (Coder): the servers may be PENDING APPROVAL, not absent."
             note "approve once in an interactive 'claude' session — there is no non-interactive"
-            note "approve, and the approval lives in workspace-local ~/.claude.json, so a fresh"
-            note "workspace re-prompts even when the config came from shared storage unchanged."
+            note "approve. The approval is recorded in the STARTING DIRECTORY's own"
+            note "'.claude/settings.local.json' (enabledMcpjsonServers), NOT ~/.claude.json --"
+            note "'claude mcp list' is a separate process and reflects neither file."
+            note "if this box's sessions actually have working hubs, this DRIFT is the record's"
+            note "kind being wrong: a hub declared in ~/.mcp.json verifies by file presence, no"
+            note "approval involved -- the right record here is kind: \"hubs\", not connector."
           fi
         fi
         ;;

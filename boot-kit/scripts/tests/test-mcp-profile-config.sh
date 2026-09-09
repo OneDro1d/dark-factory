@@ -423,6 +423,85 @@ if [ "$SD5RC" -ne 0 ]; then ok "SD5 exits non-zero"; else bad "SD5 exits non-zer
 contains "SD5 the message names --profile" "--profile" "$SD5OUT"
 contains "SD5 the message names --session-deny" "--session-deny" "$SD5OUT"
 
+echo ""
+# ══ MJ: --mcp-json — a second hub source, unioned with --config ═══════════════════════════
+# ⛔ MEASURED 2026-09-09 ON A PROVISIONED CODER WORKSPACE: two estate hubs with literal bearer
+# tokens lived in ~/.mcp.json, never in ~/.claude.json (which held no mcpServers at all), and
+# `--config` alone refused "no mcpServers" while the hubs were right there. L13 has searched
+# both files since #139; this script did not until now.
+MJCFG_EMPTY="$WORK/mj-empty-config.json"
+printf '{}\n' > "$MJCFG_EMPTY"
+MJ_MCPJSON="$WORK/mj-mcp.json"
+cat > "$MJ_MCPJSON" <<'JSON'
+{"mcpServers": {
+  "mj-a": {"url": "https://x/mj-a/mcp"},
+  "mj-b": {"url": "https://x/mj-b/mcp"}
+}}
+JSON
+LOCK_MJ_HUBS="$WORK/mj-hubs.lock.json"
+cat > "$LOCK_MJ_HUBS" <<'JSON'
+{"mcp": {"profiles": {"onedroid": {"kind": "hubs", "servers": ["mj-a", "mj-b"]}}}}
+JSON
+
+echo "=== MJ1: --config has NO mcpServers, --mcp-json names both declared hubs ==="
+MJ1OUT="$(python3 "$GATE" --profile onedroid --config "$MJCFG_EMPTY" --mcp-json "$MJ_MCPJSON" \
+          --lock "$LOCK_MJ_HUBS" --out "$WORK/mj1.json" 2>&1)"; MJ1RC=$?
+echo "  MJ1 stderr: $MJ1OUT"
+if [ "$MJ1RC" -eq 0 ]; then ok "MJ1 exits 0"; else bad "MJ1 exits 0" "rc=$MJ1RC: $MJ1OUT"; fi
+MJ1BODY="$(cat "$WORK/mj1.json" 2>/dev/null)"
+contains "MJ1 mj-a (from --mcp-json) is written"     '"mj-a"'        "$MJ1BODY"
+contains "MJ1 mj-b (from --mcp-json) is written"     '"mj-b"'        "$MJ1BODY"
+absent   "MJ1 nothing printed about no mcpServers"   "no mcpServers" "$MJ1OUT"
+
+echo "=== MJ2: LOOM_MCP_JSON env (no --mcp-json flag) -- same result as MJ1 ==="
+MJ2OUT="$(env -u LOOM_MCP_JSON LOOM_MCP_JSON="$MJ_MCPJSON" python3 "$GATE" --profile onedroid \
+          --config "$MJCFG_EMPTY" --lock "$LOCK_MJ_HUBS" --out "$WORK/mj2.json" 2>&1)"; MJ2RC=$?
+if [ "$MJ2RC" -eq 0 ]; then ok "MJ2 LOOM_MCP_JSON alone exits 0"; else bad "MJ2 LOOM_MCP_JSON alone exits 0" "rc=$MJ2RC: $MJ2OUT"; fi
+MJ2BODY="$(cat "$WORK/mj2.json" 2>/dev/null)"
+contains "MJ2 mj-a is written via LOOM_MCP_JSON" '"mj-a"' "$MJ2BODY"
+contains "MJ2 mj-b is written via LOOM_MCP_JSON" '"mj-b"' "$MJ2BODY"
+
+echo "=== MJ3: a server declared in BOTH files -- --config wins, a WARN names it ==="
+MJCFG_COLLIDE="$WORK/mj-collide-config.json"
+printf '{"mcpServers": {"mj-a": {"url": "https://config-wins/mj-a"}}}\n' > "$MJCFG_COLLIDE"
+MJ_MCPJSON_COLLIDE="$WORK/mj-collide-mcp.json"
+printf '{"mcpServers": {"mj-a": {"url": "https://mcpjson-loses/mj-a"}, "mj-b": {"url": "https://x/mj-b"}}}\n' \
+  > "$MJ_MCPJSON_COLLIDE"
+MJ3OUT="$(python3 "$GATE" --profile onedroid --config "$MJCFG_COLLIDE" --mcp-json "$MJ_MCPJSON_COLLIDE" \
+          --lock "$LOCK_MJ_HUBS" --out "$WORK/mj3.json" 2>&1)"; MJ3RC=$?
+if [ "$MJ3RC" -eq 0 ]; then ok "MJ3 exits 0"; else bad "MJ3 exits 0" "rc=$MJ3RC: $MJ3OUT"; fi
+MJ3BODY="$(cat "$WORK/mj3.json" 2>/dev/null)"
+contains "MJ3 --config's mj-a entry wins"       "config-wins"                            "$MJ3BODY"
+absent   "MJ3 --mcp-json's mj-a entry is gone"  "mcpjson-loses"                          "$MJ3BODY"
+contains "MJ3 the collision WARN names mj-a"    "'mj-a' is declared in both"             "$MJ3OUT"
+contains "MJ3 the WARN says --config wins"      "$MJCFG_COLLIDE wins"                    "$MJ3OUT"
+
+echo "=== MJ4: neither file has servers -- the refusal names BOTH paths ==="
+MJCFG_EMPTY2="$WORK/mj-empty-config-2.json"
+printf '{}\n' > "$MJCFG_EMPTY2"
+MJ_MCPJSON_EMPTY="$WORK/mj-empty-mcp.json"
+printf '{}\n' > "$MJ_MCPJSON_EMPTY"
+MJ4OUT="$(python3 "$GATE" --profile onedroid --config "$MJCFG_EMPTY2" --mcp-json "$MJ_MCPJSON_EMPTY" \
+          --out "$WORK/mj4.json" 2>&1)"; MJ4RC=$?
+echo "  MJ4 stderr: $MJ4OUT"
+if [ "$MJ4RC" -eq 3 ]; then ok "MJ4 exits 3 (both readable, both empty)"; else bad "MJ4 exits 3" "rc=$MJ4RC: $MJ4OUT"; fi
+contains "MJ4 the refusal names --config's path"   "$MJCFG_EMPTY2"     "$MJ4OUT"
+contains "MJ4 the refusal names --mcp-json's path" "$MJ_MCPJSON_EMPTY" "$MJ4OUT"
+if [ -f "$WORK/mj4.json" ]; then bad "MJ4 nothing is written" "a file was written anyway"
+else ok "MJ4 nothing is written"; fi
+
+echo "=== MJ5: a --mcp-json entry with an unset \${VAR} ref is reported like --config's would be ==="
+MJ_MCPJSON_VARS="$WORK/mj-vars-mcp.json"
+printf '{"mcpServers": {"mj-a": {"headers": {"Authorization": "Bearer ${MJ_TEST_UNSET}"}}}}\n' \
+  > "$MJ_MCPJSON_VARS"
+LOCK_MJ_ONE="$WORK/mj-one.lock.json"
+printf '{"mcp": {"profiles": {"onedroid": {"kind": "hubs", "servers": ["mj-a"]}}}}\n' > "$LOCK_MJ_ONE"
+MJ5OUT="$(unset MJ_TEST_UNSET; python3 "$GATE" --profile onedroid --config "$MJCFG_EMPTY" \
+          --mcp-json "$MJ_MCPJSON_VARS" --lock "$LOCK_MJ_ONE" --out "$WORK/mj5.json" 2>&1)"; MJ5RC=$?
+if [ "$MJ5RC" -eq 0 ]; then ok "MJ5 still exits 0 (warns, does not refuse)"; else bad "MJ5 exits 0" "rc=$MJ5RC: $MJ5OUT"; fi
+contains "MJ5 the unset var from --mcp-json is named" "MJ_TEST_UNSET" "$MJ5OUT"
+contains "MJ5 the hub it belongs to is named"         "mj-a"          "$MJ5OUT"
+
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]

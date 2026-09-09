@@ -54,8 +54,21 @@ When no entry exists for the profile, this falls back to the ORIGINAL name-prefi
 and says so once on stderr (INFO, not a warning: an undeclared profile is not a defect, only a
 fact worth surfacing) -- `df-preflight --profile <p>` proposes the entry once it can see one.
 
+⛔ MEASURED 2026-09-09 ON A PROVISIONED CODER WORKSPACE, READ-ONLY OVER SSH. Two estate hubs
+with LITERAL bearer tokens lived in `~/.mcp.json` (a symlink into shared storage), never in
+`~/.claude.json`, which held no `mcpServers` at all. L13 in lock-verify.sh has searched both
+files since #139; this script searched only `--config` (default `~/.claude.json`), so on that
+box a `kind: hubs` record refused every worker launch with "no mcpServers in ~/.claude.json"
+even though the hubs were right there. `--mcp-json <path>` (default
+`${LOOM_MCP_JSON:-~/.mcp.json}`) is the second source. It is read leniently, exactly like
+`--config`, and the server pool for the `hubs` path and the name-prefix fallback is the UNION
+of both files -- `--config` wins a name collision, WARNed on stderr. `need_servers()` now
+refuses only when BOTH files yield no servers, and names both. A provisioned box materialises
+hub config from shared storage into `~/.mcp.json` and NEVER into `~/.claude.json`; searching
+only one taught people to copy a bearer token into the wrong file to satisfy this check.
+
 Usage: mcp-profile-config.py --profile <name> --out <file>
-           [--config ~/.claude.json] [--lock <instance-lockfile>]
+           [--config ~/.claude.json] [--mcp-json ~/.mcp.json] [--lock <instance-lockfile>]
        mcp-profile-config.py --session-deny <out> [--lock <instance-lockfile>] [--kit-root <dir>]
 Exit 0 with either a written file OR a printed PLAN line, or non-zero with neither and a
 reason on stderr.
@@ -414,6 +427,11 @@ def main():
                           "instead of a worker's --mcp-config, and exit -- --profile/--out are "
                           "not used in this mode")
     ap.add_argument("--config", default=os.path.expanduser("~/.claude.json"))
+    ap.add_argument("--mcp-json",
+                     default=os.environ.get("LOOM_MCP_JSON") or os.path.expanduser("~/.mcp.json"),
+                     help="second hub source, unioned with --config on the hubs path and the "
+                          "name-prefix fallback (default: $LOOM_MCP_JSON or ~/.mcp.json) -- a "
+                          "provisioned box materialises hub config here and NEVER into --config")
     ap.add_argument("--lock", default=None,
                      help="instance lockfile to read mcp.profiles from (else auto-resolved "
                           "the same way df-preflight resolves the machine's lockfile)")
@@ -449,15 +467,42 @@ def main():
         cfg_err = "%s" % e
     servers = cfg.get("mcpServers") or {}
 
+    # ⛔ MJ: --mcp-json IS THE SECOND HUB SOURCE, read leniently exactly like --config (same
+    # try/except shape -- a missing or unreadable file is not fatal by itself, only "yields no
+    # servers"). See the module docstring: a provisioned box materialises hub config here and
+    # NEVER into --config.
+    mcp_json_err = None
+    mcp_json_cfg = {}
+    try:
+        with open(a.mcp_json, encoding="utf-8") as fh:
+            mcp_json_cfg = json.load(fh) or {}
+    except Exception as e:
+        mcp_json_err = "%s" % e
+    mcp_json_servers = mcp_json_cfg.get("mcpServers") or {}
+
+    # The pool used by the `hubs` path and the name-prefix fallback: the UNION of both files.
+    # --config wins a name collision (it is the more specific, explicitly-passed source), and
+    # the collision is WARNed rather than silently resolved, so a duplicate declaration is
+    # visible instead of one copy quietly shadowing the other.
+    pool = dict(mcp_json_servers)
+    for _n in sorted(set(servers) & set(mcp_json_servers)):
+        print("mcp-profile-config: WARN %r is declared in both %s and %s — %s wins"
+              % (_n, a.config, a.mcp_json, a.config), file=sys.stderr)
+    pool.update(servers)
+
     def need_servers():
-        """Refuse, with the same exit codes as before, for a shape that needs mcpServers."""
+        """Refuse only when BOTH --config and --mcp-json yield no servers; the message names
+        both paths so the reader knows both were checked before being told to fix something."""
+        if pool:
+            return 0
         if cfg_err is not None:
-            print("mcp-profile-config: cannot read %s: %s" % (a.config, cfg_err), file=sys.stderr)
+            print("mcp-profile-config: cannot read %s: %s (and no mcpServers in %s%s)"
+                  % (a.config, cfg_err, a.mcp_json,
+                     "" if mcp_json_err is None else ": %s" % mcp_json_err), file=sys.stderr)
             return 2
-        if not servers:
-            print("mcp-profile-config: no mcpServers in %s" % a.config, file=sys.stderr)
-            return 3
-        return 0
+        print("mcp-profile-config: no mcpServers in %s or %s" % (a.config, a.mcp_json),
+              file=sys.stderr)
+        return 3
 
     # LOOM_LOCK sits between the explicit flag and the path-derived guess. It is how
     # df-preflight and df-mission are told which instance this is on a VENDORED kit (START-HERE
@@ -486,13 +531,14 @@ def main():
             rc = need_servers()
             if rc:
                 return rc
-            missing_hubs = [n for n in want if n not in servers]
+            missing_hubs = [n for n in want if n not in pool]
             if missing_hubs:
                 print("mcp-profile-config: mcp.profiles.%s (hubs) names server(s) missing "
-                      "from %s mcpServers: %s" % (a.profile, a.config, ", ".join(missing_hubs)),
+                      "from mcpServers in %s and %s: %s"
+                      % (a.profile, a.config, a.mcp_json, ", ".join(missing_hubs)),
                       file=sys.stderr)
                 return 2
-            keep = {n: servers[n] for n in want}
+            keep = {n: pool[n] for n in want}
             return write_config(keep, a.out, a.profile,
                                 "mcp.profiles.%s (hubs) declares no servers" % a.profile)
         if kind == "connector":
@@ -554,10 +600,10 @@ def main():
     print("mcp-profile-config: INFO mcp.profiles is undeclared for profile %r — using the "
           "name-prefix rule (run df-preflight --profile %s to get a proposal)"
           % (a.profile, a.profile), file=sys.stderr)
-    keep = {n: s for n, s in servers.items() if n.startswith(a.profile)}
+    keep = {n: s for n, s in pool.items() if n.startswith(a.profile)}
     return write_config(keep, a.out, a.profile,
-                         "no hub in %s starts with %r (have: %s)"
-                         % (a.config, a.profile, ", ".join(sorted(servers))))
+                         "no hub in %s or %s starts with %r (have: %s)"
+                         % (a.config, a.mcp_json, a.profile, ", ".join(sorted(pool))))
 
 
 if __name__ == "__main__":

@@ -165,6 +165,56 @@ contains "I: hubs drift also names the measuring cwd" "measured from cwd: $I" "$
 contains "I: hubs drift also carries the nothing-approved note" "nothing is approved anywhere" "$li"
 
 echo ""
+# ══ AP: settings.local.json is ALSO an approval source, and the wording says where it lives ═
+# ⛔ MEASURED 2026-09-09 ON A PROVISIONED CODER WORKSPACE: $CLAUDE_JSON's own `.projects` map
+# had NO enabledMcpjsonServers anywhere, while the operator's approval of the very servers a
+# DRIFT here names existed in the STARTING DIRECTORY's own `.claude/settings.local.json`.
+mkinst_settings() { # $1 = dir  $2 = server names (jq array literal, e.g. '["onedroid"]')
+  mkdir -p "$1/.claude"
+  jq -n --argjson names "$2" '{enabledMcpjsonServers: $names}' > "$1/.claude/settings.local.json"
+}
+
+echo "=== AP3: approval ONLY in <cwd>/.claude/settings.local.json (LOOM_CLAUDE_JSON, no projects) ==="
+AP3="$TMP/ap3"; mkinst "$AP3"
+jq -n '{vendorDir:"vendor", upstreams:{}, mcp:{profiles:{onedroid:{kind:"connector", servers:["claude.ai Example"], toolPrefix:"mcp__claude_ai_Example__"}}}}' \
+  > "$AP3/loom.lock.json"
+mkinst_settings "$AP3" '["onedroid-x"]'
+CLAUDEJSON_AP3="$AP3/claude.json"
+jq -n '{projects: {}}' > "$CLAUDEJSON_AP3"
+outAP3="$(cd "$AP3" && LOOM_CLAUDE_JSON="$CLAUDEJSON_AP3" LOCK_VERIFY_CLAUDE_BIN="$STUB_ABSENT" bash "$LV" --lock=loom.lock.json 2>&1)"
+lap3="$(l13_block "$outAP3")"
+contains "AP3 approved in cwd, via settings.local.json" \
+  "approved in $AP3: onedroid-x  (via $AP3/.claude/settings.local.json)" "$lap3"
+
+echo "=== AP4: approval only in an ANCESTOR of cwd -- printed with that ancestor's directory ==="
+AP4="$TMP/ap4"; mkinst "$AP4"; mkdir -p "$AP4/somewhere/deep"
+jq -n '{vendorDir:"vendor", upstreams:{}, mcp:{profiles:{onedroid:{kind:"connector", servers:["claude.ai Example"], toolPrefix:"mcp__claude_ai_Example__"}}}}' \
+  > "$AP4/loom.lock.json"
+mkinst_settings "$AP4" '["onedroid-y"]'
+CLAUDEJSON_AP4="$AP4/claude.json"
+jq -n '{projects: {}}' > "$CLAUDEJSON_AP4"
+outAP4="$(cd "$AP4/somewhere/deep" && LOOM_CLAUDE_JSON="$CLAUDEJSON_AP4" LOCK_VERIFY_CLAUDE_BIN="$STUB_ABSENT" bash "$LV" --lock="../../loom.lock.json" 2>&1)"
+lap4="$(l13_block "$outAP4")"
+contains "AP4 names the measuring cwd (two levels below the approved dir)" \
+  "measured from cwd: $AP4/somewhere/deep" "$lap4"
+contains "AP4 approval printed with the ANCESTOR directory, not cwd" \
+  "approved in $AP4: onedroid-y  (via $AP4/.claude/settings.local.json)" "$lap4"
+absent "AP4 the ancestor's approval is not misattributed to cwd" \
+  "approved in $AP4/somewhere/deep: onedroid-y" "$lap4"
+
+echo "=== AP5: wording says settings.local.json, drops the old ~/.claude.json claim, points at kind: hubs ==="
+AP5="$TMP/ap5"; mkinst "$AP5"
+jq -n '{vendorDir:"vendor", upstreams:{}, mcp:{profiles:{eso:{kind:"connector", servers:["claude.ai Example"], toolPrefix:"mcp__claude_ai_Example__"}}}}' \
+  > "$AP5/loom.lock.json"
+CLAUDEJSON_AP5="$AP5/claude.json"
+jq -n '{projects: {}}' > "$CLAUDEJSON_AP5"
+outAP5="$(cd "$AP5" && LOOM_CLAUDE_JSON="$CLAUDEJSON_AP5" LOCK_VERIFY_CLAUDE_BIN="$STUB_ABSENT" bash "$LV" --lock=loom.lock.json 2>&1)"
+lap5="$(l13_block "$outAP5")"
+contains "AP5 the wording names settings.local.json"        "settings.local.json"                          "$lap5"
+absent   "AP5 the old wrong claim is gone"                  "lives in workspace-local ~/.claude.json"      "$lap5"
+contains "AP5 the wording points at kind: hubs"              "kind: \"hubs\""                               "$lap5"
+
+echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1
