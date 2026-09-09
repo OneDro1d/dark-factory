@@ -264,6 +264,35 @@ $(find "$ROOT" \( -name .git -o -name vendor -o -name node_modules \) -prune \
 REPO
 check "B10 every test-*.sh in this repo declares an assertion count" "$missing" "0"
 
+# B11 — the runner pins LOOM_BIN and LOOM_LIVE away from the real home for every suite.
+# MEASURED 2026-09-09: a full run from a worktree left ~/.local/bin/df-mission pointing into
+# that worktree; removing the worktree dangled the link and every df-worker dispatch on the
+# machine refused. A fake suite prints what it sees; both must be under a scratch dir, never
+# under $HOME/.local/bin or $HOME/.claude, and a value the caller pre-set must be honoured.
+H="$WORK/hermetic"
+mkdir -p "$H"
+cat > "$H/test-env.sh" <<'HERM'
+#!/usr/bin/env bash
+touch "$MARKDIR/$(basename "$0")"
+echo "BIN=${LOOM_BIN:-unset}"
+echo "LIVE=${LOOM_LIVE:-unset}"
+echo "ASSERTIONS: 1"
+exit 1
+HERM
+chmod +x "$H/test-env.sh"
+# exit 1 on purpose: the runner prints a failing suite's tail, which is how we read the values.
+( unset LOOM_BIN LOOM_LIVE; run_runner m18 --root "$H"; printf '%s\n' "$OUT" > "$WORK/b11.out" )
+B11="$(cat "$WORK/b11.out")"
+case "$B11" in *"BIN=$HOME/.local/bin"*|*"BIN=unset"*) bad "B11a LOOM_BIN is pinned away from ~/.local/bin" "output: $B11" ;;
+                *"BIN="*) ok "B11a LOOM_BIN is pinned away from ~/.local/bin" ;;
+                *) bad "B11a LOOM_BIN is pinned away from ~/.local/bin" "no BIN= line: $B11" ;; esac
+case "$B11" in *"LIVE=$HOME/.claude"*|*"LIVE=unset"*) bad "B11b LOOM_LIVE is pinned away from ~/.claude" "output: $B11" ;;
+                *"LIVE="*) ok "B11b LOOM_LIVE is pinned away from ~/.claude" ;;
+                *) bad "B11b LOOM_LIVE is pinned away from ~/.claude" "no LIVE= line: $B11" ;; esac
+( LOOM_BIN="$WORK/mybin" run_runner m19 --root "$H"; printf '%s\n' "$OUT" > "$WORK/b11c.out" )
+case "$(cat "$WORK/b11c.out")" in *"BIN=$WORK/mybin"*) ok "B11c a caller's LOOM_BIN is honoured, not overridden" ;;
+                                   *) bad "B11c a caller's LOOM_BIN is honoured" "output: $(cat "$WORK/b11c.out")" ;; esac
+
 # This suite must obey its own contract.
 echo "ASSERTIONS: $((PASSED + FAILED))"
 
