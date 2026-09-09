@@ -47,7 +47,7 @@ this method; spending it on retrieval is the exact waste the method exists to re
 `bin/df-operator-todo` maintains one file at the notepad root, next to `NOTES.md`:
 
 ```sh
-df-operator-todo add  --id eso-install --task "Run bash install.sh on the ESO laptop" \
+df-operator-todo add  --id eso-install --category access --task "Run bash install.sh on the ESO laptop" \
                       --why "only you can reach that machine" --do "git pull; bash install.sh" \
                       [--blocking]
 df-operator-todo done --id eso-install (--verified "<what you saw>" | --by-operator)
