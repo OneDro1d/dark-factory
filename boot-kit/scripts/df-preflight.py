@@ -1026,6 +1026,18 @@ def probe_mcp(profile=None, scope=None, notes=None, lock=None):
     visibly matches the requested profile by name -- so a machine that never declared its
     MCP source can be walked to one, the same way an uncloned repo is walked to
     `scope.excludedRepos`.
+
+    MEASURED 2026-09-09 on a provisioned Coder workspace (read-only, over ssh): its two
+    estate hubs are declared in `~/.mcp.json` (a symlink into shared storage) with bearer
+    tokens, while `~/.claude.json` holds NO `mcpServers` at all. `lock-verify` L13 already
+    searches both files for a `kind: hubs` profile (T1 #139); this probe used to read
+    `~/.claude.json` alone and reported a `kind: hubs` record on that box as drift -- "not
+    present in ~/.claude.json mcpServers" for a declared name, or "no MCP servers configured
+    in ~/.claude.json" for an undeclared one -- against a box that was fully, correctly
+    configured. So the second file is now read too, leniently: the server pool is the UNION
+    of `~/.claude.json` and `${LOOM_MCP_JSON:-~/.mcp.json}` (the same variable L13 honours),
+    `~/.claude.json` wins a name collision, and every message that used to name only
+    `~/.claude.json` now names both paths.
     """
     out = []
     cfg_path = os.path.expanduser("~/.claude.json")
@@ -1034,7 +1046,30 @@ def probe_mcp(profile=None, scope=None, notes=None, lock=None):
     except Exception as e:
         return [finding("mcp", cfg_path, "unknown", "could not read config: %s" % e)]
 
-    servers = cfg.get("mcpServers") or {}
+    # Second hub source, read LENIENTLY: missing or unreadable is not a finding by itself
+    # -- ~/.mcp.json (or LOOM_MCP_JSON) simply not existing on this machine is the common
+    # case, not a defect. ~/.claude.json above is held to a stricter standard because its
+    # absence/unreadability is itself the finding this probe exists to report.
+    mcp_json_path = os.environ.get("LOOM_MCP_JSON") or os.path.expanduser("~/.mcp.json")
+    try:
+        mcp_json_cfg = load_json(mcp_json_path)
+    except Exception:
+        mcp_json_cfg = {}
+
+    claude_servers = cfg.get("mcpServers") or {}
+    hub_json_servers = mcp_json_cfg.get("mcpServers") or {}
+    servers = dict(hub_json_servers)
+    servers.update(claude_servers)          # ~/.claude.json wins a name collision
+
+    collisions = sorted(set(claude_servers) & set(hub_json_servers))
+    if collisions and notes is not None:
+        notes.append(
+            "%d MCP server name(s) declared in both %s and %s -- %s wins each collision "
+            "(the other copy is not probed): %s"
+            % (len(collisions), cfg_path, mcp_json_path, cfg_path, ", ".join(collisions)))
+
+    both_paths = "%s and %s" % (cfg_path, mcp_json_path)
+
     mcp_profiles = ((lock or {}).get("mcp") or {}).get("profiles") or {}
     prof_entry = mcp_profiles.get(profile) if profile else None
 
@@ -1044,14 +1079,14 @@ def probe_mcp(profile=None, scope=None, notes=None, lock=None):
         if kind == "hubs":
             if not servers:
                 return [finding("mcp", "mcpServers", "drift",
-                                "no MCP servers configured in %s" % cfg_path)]
+                                "no MCP servers configured in %s" % both_paths)]
             for name in want:
                 s = servers.get(name)
                 if s is None:
                     out.append(finding(
                         "mcp", name, "drift",
                         "declared in mcp.profiles.%s but not present in %s mcpServers"
-                        % (profile, cfg_path)))
+                        % (profile, both_paths)))
                     continue
                 out.append(probe_one_mcp_server(name, s))
             skipped = sorted(n for n in servers if n not in want)
@@ -1080,9 +1115,9 @@ def probe_mcp(profile=None, scope=None, notes=None, lock=None):
                         "mcp.profiles.%s has unrecognised kind %r (expected 'hubs' or "
                         "'connector')" % (profile, kind))]
 
-    # ---- no declaration: the ORIGINAL name-prefix rule, unchanged ----------------------
+    # ---- no declaration: the ORIGINAL name-prefix rule, now over the union -------------
     if not servers:
-        out.append(finding("mcp", "mcpServers", "drift", "no MCP servers configured in %s" % cfg_path))
+        out.append(finding("mcp", "mcpServers", "drift", "no MCP servers configured in %s" % both_paths))
     else:
         # A DENOMINATOR THAT SHRINKS IN SILENCE IS A LIE THE REPORT TELLS BY OMISSION.
         # `--profile onedroid` skips every hub whose name lacks that prefix. That filtering
