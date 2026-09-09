@@ -121,6 +121,24 @@ export RUN_TESTS_ACTIVE=1
 # not found". A suite that changes the machine it runs on is not a test; it is an install
 # with no record. Pin both here, once, for every suite, unless the caller already did (a
 # suite that wants its own scratch sets them narrower, never wider).
+# ⛔ AND NO SUITE MAY INHERIT THIS MACHINE'S INSTANCE RECORD. The two above are REDIRECTED to a
+# scratch, because an installer has to write somewhere; these two are UNSET, because there is no
+# safe value -- the whole point is that a suite's own fixture lockfile is the one that gets read.
+# ⚠️ MEASURED 2026-09-09 on the Poland Coder: `boot-kit/tests/test-engine-pin.sh` builds scratch
+# instances and drives the REAL install.sh over them, and install.sh line 1 is
+# `LOCK="${LOOM_LOCK:-loom.lock.json}"`. Every provisioned Coder exports LOOM_LOCK from ~/.bashrc,
+# so all eight fixtures were silently replaced by the machine's live record: 10 of 44 assertions
+# failed, and the suite had spent the whole run measuring the wrong subject.
+# 🔴 THE LAPTOP RESULT WAS THE DANGEROUS ONE. There LOOM_LOCK is unset, so the same suite passed
+# 44/44 -- correct by luck of environment, not by construction. A suite whose subject depends on
+# whether one variable happens to be exported is not hermetic anywhere; it merely fails visibly on
+# the machines that export it. This is the same lesson as the block above, one variable further on.
+# DF_PROFILE is unset with it: not measured failing, but it is the SIBLING PATH to the same sink --
+# df-mission's precedence is $DF_PROFILE > $LOOM_LOCK > the record's own defaultProfile, so it
+# selects what a suite sees by exactly the mechanism LOOM_LOCK does. A suite that wants either sets
+# it itself, narrowly, the way a suite that wants its own scratch sets LOOM_LIVE.
+unset LOOM_LOCK DF_PROFILE
+
 RUN_TESTS_SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/run-tests-scratch.XXXXXX")"
 export LOOM_BIN="${LOOM_BIN:-$RUN_TESTS_SCRATCH/bin}"
 export LOOM_LIVE="${LOOM_LIVE:-$RUN_TESTS_SCRATCH/live}"
