@@ -18,26 +18,58 @@
 # contract forbids launching a real one to find out, so this is as far as "measured" goes
 # without a session, and is why the check is spelled out here rather than assumed silently.
 #
+# `--headless` runs the session non-interactively, so a run can be started over ssh with no
+# TTY: `"$CLAUDE_BIN" -p "/df-governed:validate" --permission-mode bypassPermissions
+# --output-format text`. `--permission-mode bypassPermissions` is load-bearing here, not
+# decoration -- a `-p` (print-mode) session has no TTY and nobody to answer a permission
+# prompt, so without it every tool call the validate skill makes is denied and the run
+# reports nothing at all. Interactive mode (no flag) is unchanged. Either way, the mode is
+# printed -- `mode headless` / `mode interactive` -- before the session launches.
+#
 # `--kit-root` overrides discovery. Left unset, the kit root is resolved from a lockfile,
 # walking UP from $PWD -- never from $0, because this script is meant to run vendored, under
 # a Tier-3 instance's `vendor/dark-factory/boot-kit/scripts/`, where $0's own ancestry is the
 # CACHE, not the kit being validated. This is the same walk Task 0 of VALIDATE-INSTALL.md
 # does by hand, and the same rule `lock-verify.sh` follows for its `--lock` default.
 #
-# `--keep` skips teardown (and says so) -- useful for inspecting a failed run by hand.
+# `--keep` skips teardown (and says so) -- useful for inspecting a failed run by hand. The
+# report commit/push (below) still happens under `--keep`: the report lands at the kit root,
+# outside the throwaway notepad `--keep` is preserving, so there is nothing for teardown to
+# protect it from.
 # `VALIDATE_CLAUDE_BIN` overrides the binary, so a test suite can stub it and never launch a
 # real session.
 #
-# Usage: validate.sh [--kit-root <dir> | --kit-root=<dir>] [--keep]
-# Exit:  0 validated and torn down clean (or --keep, which always exits 0 and says so).
+# The report is named `VALIDATE-REPORT-<date>T<HHMM>Z-<instance>.md` (and, if the session
+# raised anything for the operator, `VALIDATE-OPERATOR-TODO-<same stamp>-<instance>.md`
+# alongside it). `<instance>` comes from `env.LOOM_LOCK` in the armed notepad's own
+# `.claude/settings.json` -- the value validate-arm.sh merged in there: that lockfile's own
+# `.instance` field (a string, or `.instance.name` when it is an object). Falling back, in
+# order: the kit root's own single `*.lock.json`'s `.instance`; then the literal string
+# `kit`. Sanitised to `[A-Za-z0-9._-]` either way, so a stray character in a lockfile can't
+# smuggle a path separator into a filename this script is about to `git add`.
+#
+# The report (and the operator-todo, when one was raised) is committed and pushed FROM THE
+# KIT ROOT, default ON. `--no-push` opts out of BOTH the commit and the push -- the file
+# still lands at the kit root, just uncommitted. The add uses an EXPLICIT pathspec, never
+# `-A`, so a kit that was already dirty before this run (see the STATUS_BEFORE comment
+# below) is never swept into the commit. A push failure never loses the commit -- it is
+# reported and the script's own exit code becomes 3, but only after the teardown proof below
+# has still run and printed.
+#
+# Usage: validate.sh [--kit-root <dir> | --kit-root=<dir>] [--keep] [--headless] [--no-push]
+# Exit:  0 validated and torn down clean (or --keep, which exits 0 unless the push below
+#          failed -- see 3).
 #        1 the session ran but teardown left drift.
 #        2 bad arguments, no lockfile found, or no claude binary on PATH.
+#        3 the report was committed but the push failed -- push it by hand.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 KIT_ROOT=""
 KEEP=0
+HEADLESS=0
+NO_PUSH=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --kit-root)   KIT_ROOT="${2:?--kit-root needs a path}"; shift 2 ;;
@@ -45,7 +77,9 @@ while [ $# -gt 0 ]; do
                   [ -n "$KIT_ROOT" ] || { echo "FATAL: --kit-root= needs a path" >&2; exit 2; }
                   shift ;;
     --keep) KEEP=1; shift ;;
-    -h|--help) sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --headless) HEADLESS=1; shift ;;
+    --no-push) NO_PUSH=1; shift ;;
+    -h|--help) sed -n '2,64p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'FATAL unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -76,6 +110,36 @@ fi
 ARM="$HERE/validate-arm.sh"
 [ -f "$ARM" ] || { printf 'FATAL: missing sibling script: %s\n' "$ARM" >&2; exit 2; }
 
+# Deliverable B: the <instance> token for the report name. `$2` is the ARMED notepad, whose
+# .claude/settings.json carries the env.LOOM_LOCK value validate-arm.sh already resolved (or
+# copied from the kit's own settings.local.json) -- this reads that same value rather than
+# re-deriving it, so the filename always names the record the session actually ran under.
+_resolve_instance() {  # $1 = kit root, $2 = armed notepad -> sanitised instance string
+  local kit_root="$1" np="$2" settings lock="" val=""
+  settings="$np/.claude/settings.json"
+  if [ -f "$settings" ] && command -v jq >/dev/null 2>&1; then
+    lock="$(jq -r '.env.LOOM_LOCK // empty' "$settings" 2>/dev/null || true)"
+    case "$lock" in
+      /*|"") : ;;
+      *) lock="$kit_root/$lock" ;;
+    esac
+  fi
+  if [ -n "$lock" ] && [ -f "$lock" ]; then
+    val="$(jq -r 'if (.instance|type)=="object" then (.instance.name // empty) else (.instance // empty) end' "$lock" 2>/dev/null || true)"
+  fi
+  if [ -z "$val" ]; then
+    local locks
+    locks=("$kit_root"/*.lock.json)
+    if [ "${#locks[@]}" -eq 1 ] && [ -f "${locks[0]}" ] && command -v jq >/dev/null 2>&1; then
+      val="$(jq -r 'if (.instance|type)=="object" then (.instance.name // empty) else (.instance // empty) end' "${locks[0]}" 2>/dev/null || true)"
+    fi
+  fi
+  [ -n "$val" ] || val="kit"
+  val="$(printf '%s' "$val" | tr -c 'A-Za-z0-9._-' '_')"
+  [ -n "$val" ] || val="kit"
+  printf '%s' "$val"
+}
+
 printf 'validate.sh: kit root %s\n' "$KIT_ROOT"
 
 # "Leave the tree as you found it" is measured against how it was FOUND, not against empty.
@@ -101,14 +165,26 @@ if [ ! -d "$NP" ]; then
   exit 1
 fi
 
+if [ "$HEADLESS" -eq 1 ]; then
+  printf 'validate.sh: mode headless\n'
+else
+  printf 'validate.sh: mode interactive\n'
+fi
+
 SESSION_RC=0
-( cd "$NP" && "$CLAUDE_BIN" "/df-governed:validate" ) || SESSION_RC=$?
+if [ "$HEADLESS" -eq 1 ]; then
+  ( cd "$NP" && "$CLAUDE_BIN" -p "/df-governed:validate" --permission-mode bypassPermissions --output-format text ) || SESSION_RC=$?
+else
+  ( cd "$NP" && "$CLAUDE_BIN" "/df-governed:validate" ) || SESSION_RC=$?
+fi
 printf 'validate.sh: session exited %d\n' "$SESSION_RC"
 
-REPORT_DATE="$(date -u +%Y-%m-%d)"
+STAMP="$(date -u +%Y-%m-%dT%H%MZ)"
+INSTANCE="$(_resolve_instance "$KIT_ROOT" "$NP")"
+
 REPORT_BASENAME=""
 if [ -f "$NP/REPORT.md" ]; then
-  REPORT_BASENAME="VALIDATE-REPORT-$REPORT_DATE.md"
+  REPORT_BASENAME="VALIDATE-REPORT-${STAMP}-${INSTANCE}.md"
   cp "$NP/REPORT.md" "$KIT_ROOT/$REPORT_BASENAME"
   printf 'validate.sh: report copied to %s\n' "$KIT_ROOT/$REPORT_BASENAME"
 else
@@ -121,13 +197,59 @@ fi
 # every open item out beside the report; an empty page leaves nothing behind.
 TODO_BASENAME=""
 if [ -f "$NP/operator-todo.md" ] && grep -q '^- \[ \]' "$NP/operator-todo.md"; then
-  TODO_BASENAME="VALIDATE-OPERATOR-TODO-$REPORT_DATE.md"
+  TODO_BASENAME="VALIDATE-OPERATOR-TODO-${STAMP}-${INSTANCE}.md"
   cp "$NP/operator-todo.md" "$KIT_ROOT/$TODO_BASENAME"
   printf 'validate.sh: the session raised item(s) for the operator -- copied to %s\n' "$KIT_ROOT/$TODO_BASENAME"
 fi
 
+# --- Deliverable C: commit + push the report (and any operator-todo) from the kit root ----
+# Default ON. `--no-push` opts out of BOTH the commit and the push -- the file still lands
+# at the kit root, just uncommitted, so a hand run can inspect it before deciding. Only when
+# a report was actually copied AND the kit root is a git work tree: a kit with no report (the
+# session raised nothing) or no git history has nothing here to commit.
+PUSH_FAILED=0
+if [ "$NO_PUSH" -eq 1 ]; then
+  if [ -n "$REPORT_BASENAME" ]; then
+    printf 'validate.sh: --no-push set, report left uncommitted\n'
+  fi
+elif [ -n "$REPORT_BASENAME" ] && git -C "$KIT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  ADD_PATHS=("$REPORT_BASENAME")
+  [ -n "$TODO_BASENAME" ] && ADD_PATHS+=("$TODO_BASENAME")
+  # Explicit pathspec, NEVER `-A` -- a pre-existing dirty file in the kit (an operator's
+  # uncommitted edit, an install's probed.* write) stays exactly as it was, staged or not.
+  git -C "$KIT_ROOT" add -- "${ADD_PATHS[@]}"
+
+  ID_ARGS=()
+  if [ -z "$(git -C "$KIT_ROOT" config user.email 2>/dev/null)" ]; then
+    ID_ARGS=(-c "user.name=validate.sh" -c "user.email=validate.sh@$(hostname)")
+  fi
+  COMMIT_MSG="M-VALIDATE: validation report — ${INSTANCE} ${STAMP} [M-VALIDATE]"
+  if git -C "$KIT_ROOT" "${ID_ARGS[@]+"${ID_ARGS[@]}"}" commit -q -m "$COMMIT_MSG"; then
+    COMMIT_SHA="$(git -C "$KIT_ROOT" rev-parse --short HEAD)"
+    printf 'validate.sh: report committed %s\n' "$COMMIT_SHA"
+
+    CURRENT_BRANCH="$(git -C "$KIT_ROOT" symbolic-ref --short -q HEAD || true)"
+    if git -C "$KIT_ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+      PUSH_OUT="$(git -C "$KIT_ROOT" push 2>&1)"; PUSH_RC=$?
+    else
+      PUSH_OUT="$(git -C "$KIT_ROOT" push -u origin "$CURRENT_BRANCH" 2>&1)"; PUSH_RC=$?
+    fi
+    if [ "$PUSH_RC" -eq 0 ]; then
+      REMOTE_URL="$(git -C "$KIT_ROOT" remote get-url origin 2>/dev/null || true)"
+      printf 'validate.sh: report pushed to %s (%s)\n' "$REMOTE_URL" "$CURRENT_BRANCH"
+    else
+      FIRST_ERR="$(printf '%s\n' "$PUSH_OUT" | head -1)"
+      printf 'validate.sh: report committed, push FAILED: %s -- push it by hand\n' "$FIRST_ERR"
+      PUSH_FAILED=1
+    fi
+  else
+    printf 'validate.sh: FATAL: could not commit the report -- see above\n' >&2
+  fi
+fi
+
 if [ "$KEEP" -eq 1 ]; then
   printf 'validate.sh: --keep set, leaving %s in place -- teardown skipped\n' "$NP"
+  [ "$PUSH_FAILED" -eq 1 ] && exit 3
   exit 0
 fi
 
@@ -176,6 +298,7 @@ CLEAN=1
 
 if [ "$CLEAN" -eq 1 ]; then
   printf 'validate.sh: teardown clean\n'
+  [ "$PUSH_FAILED" -eq 1 ] && exit 3
   exit 0
 else
   printf 'validate.sh: teardown left drift -- see status above\n' >&2

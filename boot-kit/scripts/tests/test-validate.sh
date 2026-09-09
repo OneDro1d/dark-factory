@@ -53,17 +53,25 @@ STUBEOF
 chmod +x "$STUB"
 
 # _fresh_kit NAME -> prints the path to a new throwaway git repo with a lockfile, an
-# origin remote (a reserved, never-resolvable host per RFC 2606 -- same convention
-# test-identify.sh uses for the same reason: this repo is public and scanned for landmarks),
+# origin remote (a real, LOCAL bare repo under mktemp -- reachable, so Deliverable C's
+# default-on push actually succeeds against it, but it carries no hostname at all, which
+# satisfies the same "no real host in this public repo" rule a fake RFC 2606 URL used to),
 # and a clean baseline (`git status --porcelain` empty) before anything touches it.
+_bare_origin() {  # NAME -> prints the path to a fresh local bare repo
+  local b="$T/$1.git"
+  git init -q --bare "$b"
+  printf '%s' "$b"
+}
+
 _fresh_kit() {
-  local k="$T/$1"
+  local k="$T/$1" origin
+  origin="$(_bare_origin "$1-origin")"
   mkdir -p "$k"
   git -C "$k" init -q
   printf '{"kit":"%s"}\n' "$1" > "$k/loom.lock.json"
   git -C "$k" -c user.name=t -c user.email=t@example.invalid add -A
   git -C "$k" -c user.name=t -c user.email=t@example.invalid commit -q -m init
-  git -C "$k" remote add origin "https://git.example.invalid/$1.git"
+  git -C "$k" remote add origin "$origin"
   printf '%s' "$k"
 }
 
@@ -303,6 +311,151 @@ else
     "vendor@line=$VEND_LINE kit-root@line=$KITROOT_LINE"
 fi
 contains "W2: --max-budget-usd 3 appears in §6" "--max-budget-usd 3" "$(cat "$VMD" 2>/dev/null)"
+
+echo "=== H1: --headless assembles the print-mode argv and says so ==="
+KITH1="$(_fresh_kit kith1)"
+LOGH1="$T/logh1"; : > "$LOGH1"
+VH1_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOGH1" bash "$VALIDATE" --kit-root "$KITH1" --headless 2>&1)"; VH1_RC=$?
+[ "$VH1_RC" -eq 0 ] && ok "H1: validate.sh --headless exits 0" || bad "H1: validate.sh --headless exits 0" "rc=$VH1_RC: $VH1_OUT"
+LOGH1_CONTENT="$(cat "$LOGH1")"
+contains "H1: argv[1]=-p"                    "argv[1]=-p" "$LOGH1_CONTENT"
+contains "H1: argv[2]=/df-governed:validate" "argv[2]=/df-governed:validate" "$LOGH1_CONTENT"
+contains "H1: argv[3]=--permission-mode"     "argv[3]=--permission-mode" "$LOGH1_CONTENT"
+contains "H1: argv[4]=bypassPermissions"     "argv[4]=bypassPermissions" "$LOGH1_CONTENT"
+contains "H1: argv[5]=--output-format"       "argv[5]=--output-format" "$LOGH1_CONTENT"
+contains "H1: argv[6]=text"                  "argv[6]=text" "$LOGH1_CONTENT"
+contains "H1: transcript says mode headless" "mode headless" "$VH1_OUT"
+
+echo "=== H2: without --headless, argv[1] is still the slash command and says mode interactive ==="
+KITH2="$(_fresh_kit kith2)"
+LOGH2="$T/logh2"; : > "$LOGH2"
+VH2_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOGH2" bash "$VALIDATE" --kit-root "$KITH2" 2>&1)"; VH2_RC=$?
+[ "$VH2_RC" -eq 0 ] && ok "H2: validate.sh (interactive) exits 0" || bad "H2: validate.sh (interactive) exits 0" "rc=$VH2_RC: $VH2_OUT"
+contains "H2: argv[1]=/df-governed:validate"    "argv[1]=/df-governed:validate" "$(cat "$LOGH2")"
+contains "H2: transcript says mode interactive" "mode interactive" "$VH2_OUT"
+
+echo "=== R1: the report basename carries a timestamp + the kit's own single lock's instance ==="
+KITR1="$(_fresh_kit kitr1)"
+printf '{"kit":"kitr1","instance":"kitr1-box"}\n' > "$KITR1/loom.lock.json"
+git -C "$KITR1" -c user.name=t -c user.email=t@example.invalid add -A
+git -C "$KITR1" -c user.name=t -c user.email=t@example.invalid commit -q -m instance
+LOGR1="$T/logr1"; : > "$LOGR1"
+VR1_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOGR1" STUB_WRITE_REPORT="r1 report" \
+  bash "$VALIDATE" --kit-root "$KITR1" 2>&1)"; VR1_RC=$?
+[ "$VR1_RC" -eq 0 ] && ok "R1: validate.sh exits 0" || bad "R1: validate.sh exits 0" "rc=$VR1_RC: $VR1_OUT"
+R1_BASENAME="$(basename "$(ls "$KITR1"/VALIDATE-REPORT-*.md 2>/dev/null | head -1)" 2>/dev/null)"
+case "$R1_BASENAME" in
+  VALIDATE-REPORT-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9][0-9][0-9]Z-kitr1-box.md)
+    ok "R1: report basename matches the timestamp+instance pattern" ;;
+  *) bad "R1: report basename matches the timestamp+instance pattern" "got '$R1_BASENAME'" ;;
+esac
+
+echo "=== R2: env.LOOM_LOCK from an armed settings.local.json carries the instance through ==="
+KITR2="$(_fresh_kit kitr2)"
+mkdir -p "$KITR2/instances/x" "$KITR2/.claude"
+printf '{"instance":"box-x"}\n' > "$KITR2/instances/x/loom.lock.json"
+printf '{"env":{"LOOM_LOCK":"instances/x/loom.lock.json"}}\n' > "$KITR2/.claude/settings.local.json"
+git -C "$KITR2" -c user.name=t -c user.email=t@example.invalid add -A
+git -C "$KITR2" -c user.name=t -c user.email=t@example.invalid commit -q -m loom-lock
+LOGR2="$T/logr2"; : > "$LOGR2"
+VR2_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOGR2" STUB_WRITE_REPORT="r2 report" \
+  bash "$VALIDATE" --kit-root "$KITR2" 2>&1)"; VR2_RC=$?
+[ "$VR2_RC" -eq 0 ] && ok "R2: validate.sh exits 0" || bad "R2: validate.sh exits 0" "rc=$VR2_RC: $VR2_OUT"
+R2_FILE="$(ls "$KITR2"/VALIDATE-REPORT-*.md 2>/dev/null | head -1)"
+contains "R2: report basename carries box-x" "box-x" "$(basename "${R2_FILE:-}" 2>/dev/null)"
+
+echo "=== C1: commit + push succeeds against a local bare origin with an upstream already set ==="
+KITC1="$(_fresh_kit kitc1)"
+BRANCH_C1="$(git -C "$KITC1" symbolic-ref --short HEAD)"
+git -C "$KITC1" push -q -u origin "$BRANCH_C1"
+LOGC1="$T/logc1"; : > "$LOGC1"
+VC1_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOGC1" STUB_WRITE_REPORT="c1 report" \
+  bash "$VALIDATE" --kit-root "$KITC1" 2>&1)"; VC1_RC=$?
+[ "$VC1_RC" -eq 0 ] && ok "C1: validate.sh exits 0" || bad "C1: validate.sh exits 0" "rc=$VC1_RC: $VC1_OUT"
+contains "C1: transcript says report committed" "report committed" "$VC1_OUT"
+contains "C1: transcript says report pushed"    "report pushed" "$VC1_OUT"
+C1_SUBJECT="$(git -C "$KITC1" log -1 --format=%s)"
+contains "C1: HEAD commit subject names M-VALIDATE" "M-VALIDATE" "$C1_SUBJECT"
+C1_REPORT="$(basename "$(ls "$KITC1"/VALIDATE-REPORT-*.md 2>/dev/null | head -1)")"
+C1_INSTANCE="$(printf '%s' "$C1_REPORT" | sed -E 's/^VALIDATE-REPORT-[0-9-]+T[0-9]+Z-(.*)\.md$/\1/')"
+contains "C1: HEAD commit subject names the report's own instance" "$C1_INSTANCE" "$C1_SUBJECT"
+C1_STATUS="$(git -C "$KITC1" status --porcelain -- "$C1_REPORT" 2>&1)"
+[ -z "$C1_STATUS" ] && ok "C1: git status --porcelain for the report is empty" \
+  || bad "C1: git status --porcelain for the report is empty" "$C1_STATUS"
+C1_LOCAL_HEAD="$(git -C "$KITC1" rev-parse HEAD)"
+C1_REMOTE_HEAD="$(git -C "$KITC1" ls-remote origin "$BRANCH_C1" | cut -f1)"
+[ "$C1_LOCAL_HEAD" = "$C1_REMOTE_HEAD" ] && ok "C1: git ls-remote origin <branch> equals the local head" \
+  || bad "C1: git ls-remote origin <branch> equals the local head" "local=$C1_LOCAL_HEAD remote=$C1_REMOTE_HEAD"
+
+echo "=== C2: a pre-existing dirty file in the kit is untouched by the commit ==="
+KITC2="$(_fresh_kit kitc2)"
+printf 'untracked scratch\n' > "$KITC2/dirty.txt"
+printf 'kit\n' > "$KITC2/tracked.txt"
+git -C "$KITC2" -c user.name=t -c user.email=t@example.invalid add tracked.txt
+git -C "$KITC2" -c user.name=t -c user.email=t@example.invalid commit -q -m tracked
+printf 'kit changed\n' > "$KITC2/tracked.txt"
+PRE_C2="$(git -C "$KITC2" status --porcelain -- dirty.txt tracked.txt)"
+LOGC2="$T/logc2"; : > "$LOGC2"
+VC2_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOGC2" STUB_WRITE_REPORT="c2 report" \
+  bash "$VALIDATE" --kit-root "$KITC2" 2>&1)"; VC2_RC=$?
+[ "$VC2_RC" -eq 0 ] && ok "C2: validate.sh exits 0" || bad "C2: validate.sh exits 0" "rc=$VC2_RC: $VC2_OUT"
+POST_C2="$(git -C "$KITC2" status --porcelain -- dirty.txt tracked.txt)"
+[ "$PRE_C2" = "$POST_C2" ] && ok "C2: dirty.txt/tracked.txt status is unchanged" \
+  || bad "C2: dirty.txt/tracked.txt status is unchanged" "before: $PRE_C2 | after: $POST_C2"
+C2_COMMIT_FILES="$(git -C "$KITC2" show --stat --format= HEAD 2>/dev/null)"
+absent "C2: dirty.txt is not in the commit"   "dirty.txt"   "$C2_COMMIT_FILES"
+absent "C2: tracked.txt is not in the commit" "tracked.txt" "$C2_COMMIT_FILES"
+
+echo "=== C3: --no-push opts out of commit and push; the report stays untracked ==="
+KITC3="$(_fresh_kit kitc3)"
+BEFORE_HEAD_C3="$(git -C "$KITC3" rev-parse HEAD)"
+LOGC3="$T/logc3"; : > "$LOGC3"
+VC3_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOGC3" STUB_WRITE_REPORT="c3 report" \
+  bash "$VALIDATE" --kit-root "$KITC3" --no-push 2>&1)"; VC3_RC=$?
+[ "$VC3_RC" -eq 0 ] && ok "C3: validate.sh --no-push exits 0" || bad "C3: validate.sh --no-push exits 0" "rc=$VC3_RC: $VC3_OUT"
+C3_FILE="$(ls "$KITC3"/VALIDATE-REPORT-*.md 2>/dev/null | head -1)"
+[ -n "$C3_FILE" ] && ok "C3: the report file exists" || bad "C3: the report file exists" "missing"
+C3_STATUS="$(git -C "$KITC3" status --porcelain -- "$(basename "${C3_FILE:-}")" 2>&1)"
+case "$C3_STATUS" in
+  '?? '*) ok "C3: the report is untracked" ;;
+  *) bad "C3: the report is untracked" "$C3_STATUS" ;;
+esac
+AFTER_HEAD_C3="$(git -C "$KITC3" rev-parse HEAD)"
+[ "$BEFORE_HEAD_C3" = "$AFTER_HEAD_C3" ] && ok "C3: no new commit was made" \
+  || bad "C3: no new commit was made" "before=$BEFORE_HEAD_C3 after=$AFTER_HEAD_C3"
+contains "C3: transcript says the report was left uncommitted" "uncommitted" "$VC3_OUT"
+
+echo "=== C4: no remote configured -> commit made, push fails, exit 3, teardown proof still runs ==="
+KITC4="$T/kitc4"
+mkdir -p "$KITC4"
+git -C "$KITC4" init -q
+printf '{"kit":"kitc4"}\n' > "$KITC4/loom.lock.json"
+git -C "$KITC4" -c user.name=t -c user.email=t@example.invalid add -A
+git -C "$KITC4" -c user.name=t -c user.email=t@example.invalid commit -q -m init
+LOGC4="$T/logc4"; : > "$LOGC4"
+VC4_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOGC4" STUB_WRITE_REPORT="c4 report" \
+  bash "$VALIDATE" --kit-root "$KITC4" 2>&1)"; VC4_RC=$?
+[ "$VC4_RC" -eq 3 ] && ok "C4: validate.sh exits 3" || bad "C4: validate.sh exits 3" "rc=$VC4_RC: $VC4_OUT"
+contains "C4: transcript says report committed" "report committed" "$VC4_OUT"
+contains "C4: transcript says push FAILED"      "push FAILED" "$VC4_OUT"
+contains "C4: teardown proof still ran (git status line printed)" \
+  "git -C $KITC4 status --porcelain" "$VC4_OUT"
+[ ! -d "$KITC4/.df-validate" ] && ok "C4: .df-validate/ is still torn down despite the push failure" \
+  || bad "C4: .df-validate/ is still torn down despite the push failure" "still present"
+
+echo "=== C5: a repo with no user.email still commits with a validate.sh@<host> fallback ==="
+KITC5="$(_fresh_kit kitc5)"
+NOHOME_C5="$T/nohome-c5"; mkdir -p "$NOHOME_C5"
+LOGC5="$T/logc5"; : > "$LOGC5"
+VC5_OUT="$(env HOME="$NOHOME_C5" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+  VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOGC5" STUB_WRITE_REPORT="c5 report" \
+  bash "$VALIDATE" --kit-root "$KITC5" 2>&1)"; VC5_RC=$?
+[ "$VC5_RC" -eq 0 ] && ok "C5: validate.sh exits 0" || bad "C5: validate.sh exits 0" "rc=$VC5_RC: $VC5_OUT"
+C5_AUTHOR_EMAIL="$(git -C "$KITC5" log -1 --format=%ae)"
+case "$C5_AUTHOR_EMAIL" in
+  validate.sh@*) ok "C5: commit author email starts with validate.sh@" ;;
+  *) bad "C5: commit author email starts with validate.sh@" "got '$C5_AUTHOR_EMAIL'" ;;
+esac
 
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
