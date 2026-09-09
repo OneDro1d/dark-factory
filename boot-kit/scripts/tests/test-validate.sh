@@ -291,6 +291,19 @@ V14B_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOG14B" bash "$VALIDATE" --ki
 [ -z "$(ls "$KIT14B"/VALIDATE-OPERATOR-TODO-*.md 2>/dev/null)" ] && ok "14: a run that raised nothing leaves no todo file" \
   || bad "14: no todo file when nothing raised" "file present"
 
+echo "=== W1/W2: validate.md names the vendored identify path first, and gives each CALL probe a real budget (SPEC D) ==="
+VMD="$REPO_ROOT/plugins/df-governed/commands/validate.md"
+file_exists "W: validate.md exists" "$VMD"
+VEND_LINE="$(grep -Fn 'vendor/dark-factory/boot-kit/scripts/identify.sh' "$VMD" | head -1 | cut -d: -f1)"
+KITROOT_LINE="$(grep -Fn '<kit-root>/boot-kit/scripts/identify.sh' "$VMD" | head -1 | cut -d: -f1)"
+if [ -n "$VEND_LINE" ] && [ -n "$KITROOT_LINE" ] && [ "$VEND_LINE" -lt "$KITROOT_LINE" ]; then
+  ok "W1: the vendored identify path appears before the kit-root one in Task 1"
+else
+  bad "W1: the vendored identify path appears before the kit-root one in Task 1" \
+    "vendor@line=$VEND_LINE kit-root@line=$KITROOT_LINE"
+fi
+contains "W2: --max-budget-usd 3 appears in §6" "--max-budget-usd 3" "$(cat "$VMD" 2>/dev/null)"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
