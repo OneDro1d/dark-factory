@@ -243,6 +243,68 @@ V10C_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOG10C" bash "$VALIDATE" --ki
   || bad "10c: a report-less session that exits 0 still exits 0" "rc=$V10C_RC: $V10C_OUT"
 contains "10c: but it WARNS that nothing was validated" "produced NO report" "$V10C_OUT"
 
+echo "=== 10d: a LIVE validate.sh owning .df-validate/ is refused (exit 5), nothing touched ==="
+# ⛔ MEASURED 2026-09-09 on the Poland Coder: two --headless runs against one kit, four minutes
+# apart. The second re-armed the LIVE notepad with a fresh `git init`, the two sessions then
+# interleaved commits in the same repo, and whichever exits first removes .df-validate/ --
+# including the other run's REPORT.md -- before that run can copy it out. Neither errored.
+# A --keep leftover and a running peer are indistinguishable on disk, so the directory now
+# names its owner.
+KIT10D="$(_fresh_kit kit10d)"
+mkdir -p "$KIT10D/.df-validate"
+# A LIVE owner: a real sleeping process whose command line contains validate.sh, so the check's
+# two halves -- alive, AND still a validate.sh -- are both genuinely satisfied rather than stubbed.
+LIVE_OWNER="$T/live-validate.sh"
+printf '#!/usr/bin/env bash\nsleep 30\n' > "$LIVE_OWNER"
+chmod +x "$LIVE_OWNER"
+bash "$LIVE_OWNER" &
+LIVE_PID=$!
+printf '%s\n' "$LIVE_PID" > "$KIT10D/.df-validate/.validate-owner"
+printf 'sentinel\n' > "$KIT10D/.df-validate/DO-NOT-DELETE.txt"
+V10D_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$T/log10d" bash "$VALIDATE" --kit-root "$KIT10D" 2>&1)"; V10D_RC=$?
+[ "$V10D_RC" -eq 5 ] && ok "10d: exits 5" || bad "10d: exits 5" "rc=$V10D_RC: $V10D_OUT"
+contains "10d: names the live pid"        "$LIVE_PID"      "$V10D_OUT"
+contains "10d: says nothing was touched"  "Nothing was touched" "$V10D_OUT"
+file_exists "10d: the live run's directory is intact" "$KIT10D/.df-validate/DO-NOT-DELETE.txt"
+kill "$LIVE_PID" 2>/dev/null
+wait "$LIVE_PID" 2>/dev/null
+
+echo "=== 10e: an owner file naming a DEAD pid is just a leftover -- the run proceeds ==="
+# The other half. A stale owner must not refuse forever: pids are reused and processes die.
+KIT10E="$(_fresh_kit kit10e)"
+mkdir -p "$KIT10E/.df-validate"
+DEAD_OWNER="$T/dead-validate.sh"
+printf '#!/usr/bin/env bash\ntrue\n' > "$DEAD_OWNER"
+chmod +x "$DEAD_OWNER"
+bash "$DEAD_OWNER" &
+DEAD_PID=$!
+wait "$DEAD_PID" 2>/dev/null
+printf '%s\n' "$DEAD_PID" > "$KIT10E/.df-validate/.validate-owner"
+V10E_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$T/log10e" bash "$VALIDATE" --kit-root "$KIT10E" 2>&1)"; V10E_RC=$?
+[ "$V10E_RC" -eq 0 ] && ok "10e: a dead owner does not block the run" \
+  || bad "10e: a dead owner does not block the run" "rc=$V10E_RC: $V10E_OUT"
+contains "10e: it is treated as a leftover" "leftover" "$V10E_OUT"
+
+echo "=== 10f: a normal run claims the directory, so a peer would see an owner ==="
+KIT10F="$(_fresh_kit kit10f)"
+STUB10F="$T/claude-stub-owner.sh"
+cat > "$STUB10F" <<'STUBEOF'
+#!/usr/bin/env bash
+# record what the owner file said WHILE the session was running -- after teardown it is gone
+cp .validate-owner "$OWNER_COPY" 2>/dev/null || echo "MISSING" > "$OWNER_COPY"
+exit 0
+STUBEOF
+chmod +x "$STUB10F"
+OWNER_COPY="$T/owner-seen.txt"; export OWNER_COPY
+VALIDATE_CLAUDE_BIN="$STUB10F" bash "$VALIDATE" --kit-root "$KIT10F" >/dev/null 2>&1
+SEEN="$(cat "$OWNER_COPY" 2>/dev/null || echo MISSING)"
+case "$SEEN" in
+  ''|MISSING|*[!0-9$'\n']*) bad "10f: the run wrote a numeric owner pid" "saw [$SEEN]" ;;
+  *) ok "10f: the run wrote a numeric owner pid" ;;
+esac
+[ ! -e "$KIT10F/.df-validate" ] && ok "10f: the owner file goes with the notepad at teardown" \
+  || bad "10f: the owner file goes with the notepad at teardown" ".df-validate still present"
+
 echo "=== 11: the kit's PROJECT-level settings (commit/push gates) reach the armed notepad ==="
 # MEASURED 2026-09-08 on the first real run: the commit gate is wired in the kit root's
 # .claude/settings.json only, the armed notepad is its own repo under its own cwd, so

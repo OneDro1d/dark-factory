@@ -56,6 +56,14 @@
 # reported and the script's own exit code becomes 3, but only after the teardown proof below
 # has still run and printed.
 #
+#        5 ANOTHER validate.sh is already running against this same kit root -- refused, and
+#          nothing was touched. ⚠️ MEASURED 2026-09-09 on the Poland Coder: two --headless runs
+#          were started against one kit a few minutes apart, and the second one's arm re-`git
+#          init`ed the SAME .df-validate/ under the first, which was still live. The two
+#          sessions then interleaved commits in one repo and each reported on a notepad the
+#          other had been rewriting. The step below could not tell a `--keep` LEFTOVER from a
+#          RUNNING peer, because nothing recorded an owner; now it does.
+#
 # Usage: validate.sh [--kit-root <dir> | --kit-root=<dir>] [--keep] [--headless] [--no-push]
 # Exit:  0 validated and torn down clean (or --keep, which exits 0 unless the push below
 #          failed -- see 3).
@@ -158,8 +166,32 @@ if git -C "$KIT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 NP="$KIT_ROOT/.df-validate"
+OWNER="$NP/.validate-owner"
 # A leftover from a `--keep` run is throwaway by contract; this is the one command the
 # installer points at, so it must not strand the user on validate-arm.sh's refusal.
+#
+# ⛔ BUT A LEFTOVER AND A LIVE PEER LOOK IDENTICAL ON DISK, and until 2026-09-09 this step
+# treated both as leftovers. MEASURED that day on the Poland Coder: a second --headless run
+# started while the first was still going, `--force`d the same .df-validate/ out from under
+# it, re-`git init`ed the notepad, and the two sessions then interleaved commits in one repo
+# -- each writing a report about a working directory the other kept rewriting. Neither run
+# errored. So the directory now names its owner, and a live owner is refused.
+#
+# ⚠️ THE PID ALONE IS NOT ENOUGH: pids are reused, and a stale file naming a recycled pid
+# would refuse forever for no reason. The command line is checked too, so "alive" means
+# "alive AND still a validate.sh", which is the claim being made.
+if [ -e "$OWNER" ]; then
+  OWNER_PID="$(head -1 "$OWNER" 2>/dev/null || true)"
+  case "$OWNER_PID" in
+    ''|*[!0-9]*) OWNER_PID="" ;;
+  esac
+  if [ -n "$OWNER_PID" ] && kill -0 "$OWNER_PID" 2>/dev/null &&
+     ps -p "$OWNER_PID" -o command= 2>/dev/null | grep -q 'validate\.sh'; then
+    printf 'FATAL: another validate.sh (pid %s) is already running against %s\n' "$OWNER_PID" "$KIT_ROOT" >&2
+    printf '       Nothing was touched. Wait for it to finish, or kill it and remove %s\n' "$NP" >&2
+    exit 5
+  fi
+fi
 ARM_ARGS=()
 if [ -e "$NP" ]; then
   printf 'validate.sh: removing leftover %s from a previous --keep run\n' "$NP"
@@ -171,6 +203,11 @@ if [ ! -d "$NP" ]; then
   printf 'FATAL: validate-arm.sh reported success but %s is missing\n' "$NP" >&2
   exit 1
 fi
+
+# Claim the directory for THIS process, so a concurrent run refuses above instead of forcing
+# its way in. Written after the arm, because the arm creates (and with --force recreates) the
+# directory. It goes with the notepad at teardown -- there is nothing extra to clean up.
+printf '%s\n' "$$" > "$OWNER"
 
 if [ "$HEADLESS" -eq 1 ]; then
   printf 'validate.sh: mode headless\n'
