@@ -240,6 +240,31 @@ contains "8: P5 reports SKIPPED"        "SKIPPED  --no-tests" "$OUT8"
 absent   "8: the real run-tests.sh was never invoked" "run-tests: discovered" "$OUT8"
 
 echo ""
+echo "=== 9: an instance record (<kit>/instances/<name>/loom.lock.json) resolves the kit root two levels up ==="
+# MEASURED 2026-09-09 on a Coder workspace: with the default kit root = the lockfile's directory,
+# every install on an instance record ended "PASS (1 unknown -- P5 kit suites)" because P5 looked
+# for instances/<name>/boot-kit/scripts/run-tests.sh. The fixture is a kit whose ROOT ships a
+# runner stub and whose lockfile lives under instances/x/; P5 must find the runner and run it.
+mk_engine inst clean
+mk_fixture inst '{"skills":[],"skillSources":{},"hooks":[],"hookSources":{}}'
+mkdir -p "$WORK/inst/instances/x" "$WORK/inst/boot-kit/scripts"
+mv "$WORK/inst/loom.lock.json" "$WORK/inst/instances/x/loom.lock.json"
+# vendorDir is relative to the lockfile's directory: give the record the same vendor symlink a
+# real instance record carries, so P2 (lock-verify) still resolves Tier 1.
+ln -s ../../vendor "$WORK/inst/instances/x/vendor"
+# P5 quotes only the runner's "=== N passed" line, so the stub speaks that line.
+printf '#!/usr/bin/env bash\necho "=== 1 passed, 0 failed (instance-fixture stub) ==="\nexit 0\n' > "$WORK/inst/boot-kit/scripts/run-tests.sh"
+INST_ROOT="$(cd "$WORK/inst" && pwd)"   # prove.sh prints the normalised path; mktemp may hand back a double slash
+chmod +x "$WORK/inst/boot-kit/scripts/run-tests.sh"
+OUT9="$( cd "$WORK/inst" && LOOM_LIVE="$WORK/inst/live" bash "$WORK/inst/engine/prove.sh" --lock instances/x/loom.lock.json 2>&1 )"
+contains "9: kit-root is the directory holding instances/" "kit-root = $INST_ROOT"$'\n' "$OUT9"
+absent   "9: P5 does not report a missing runner"           "ships no runner" "$OUT9"
+contains "9: P5 ran the kit's runner"                       "instance-fixture stub" "$OUT9"
+OUT9B="$( cd "$WORK/inst" && LOOM_LIVE="$WORK/inst/live" bash "$WORK/inst/engine/prove.sh" --lock instances/x/loom.lock.json --kit-root "$INST_ROOT/instances/x" 2>&1 )"
+contains "9b: --kit-root still overrides the default"       "kit-root = $INST_ROOT/instances/x" "$OUT9B"
+contains "9b: and P5 reports the runner absent there"       "ships no runner" "$OUT9B"
+
+echo ""
 printf 'prove.sh suite: %d ok, %d failed\n' "$PASS" "$FAIL"
 # run-tests.sh treats a suite that exits 0 with no declared count as UNMEASURED, not a pass.
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"

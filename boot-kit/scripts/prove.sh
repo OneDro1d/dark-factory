@@ -123,7 +123,19 @@ resolve_lock() {
 resolve_lock
 LOCK="$(cd "$(dirname "$LOCK")" && pwd)/$(basename "$LOCK")"
 
-[ -n "$KITROOT" ] || KITROOT="$(dirname "$LOCK")"
+# MEASURED 2026-09-09 on a Coder workspace (M-KITLOOP): the default kit root was the lockfile's
+# own directory, and an INSTANCE record lives at <kit>/instances/<name>/loom.lock.json -- a
+# directory holding the record, MACHINE.md and a `vendor` symlink, never boot-kit/. So P5 looked
+# for <kit>/instances/<name>/boot-kit/scripts/run-tests.sh, found nothing, and every install on
+# every instance record ended "PROVE: PASS (1 unknown -- P5 kit suites)" while the kit's runner
+# sat two levels up. An instance record's kit root is the directory that holds `instances/`; a
+# root record's is its own directory; --kit-root overrides both.
+if [ -z "$KITROOT" ]; then
+  KITROOT="$(dirname "$LOCK")"
+  if [ "$(basename "$(dirname "$KITROOT")")" = "instances" ]; then
+    KITROOT="$(dirname "$(dirname "$KITROOT")")"
+  fi
+fi
 [ -d "$KITROOT" ] || { echo "FATAL: --kit-root $KITROOT is not a directory" >&2; exit 2; }
 
 LIVE="${LOOM_LIVE:-$HOME/.claude}"
