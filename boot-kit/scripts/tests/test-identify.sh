@@ -404,6 +404,23 @@ if [ "$(jq -r '.machine.platform // empty' "$M5_LOCK")" = "$(uname -s)" ] \
   ok "M5: machine ({platform, home}) was ALSO written, in the same call"
 else bad "M5: machine was also written" "$(cat "$M5_LOCK")"; fi
 
+echo "=== M6: --match fails CLOSED — a dir whose only record is for another machine -> exit 3 ==="
+# ⛔ WHY THIS EXISTS. --match used to print "no declared instance matches this machine." and
+# exit 0 regardless — anything gating on its exit status accepted the wrong machine silently.
+mkdir -p "$T/instances-m6/a"
+printf '%s\n' "$AWS" > "$T/instances-m6/a/loom.lock.json"
+O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --match "$T/instances-m6" 2>&1)"; rc=$?
+contains "M6: says no declared instance matches" "no declared instance matches this machine" "$O"
+if [ "$rc" -eq 3 ]; then ok "M6: exits 3"; else bad "M6: exits 3" "exit $rc -- a refusal that exits 0 is invisible"; fi
+
+echo "=== M7: --match with a record declared for THIS machine (via --declare) -> exit 0, MATCHES: ==="
+mkdir -p "$T/instances-m7/self"
+printf '{"instance":"m7-self"}\n' > "$T/instances-m7/self/loom.lock.json"
+env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --declare "$T/instances-m7/self/loom.lock.json" >/dev/null 2>&1
+O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --match "$T/instances-m7" 2>&1)"; rc=$?
+contains "M7: names the matching record" "MATCHES:" "$O"
+if [ "$rc" -eq 0 ]; then ok "M7: exits 0"; else bad "M7: exits 0" "exit $rc"; fi
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
