@@ -367,7 +367,7 @@ fi
 # ⚠️ T1-C, MEASURED ON TWO MACHINES 2026-09-09: this used to fall through
 # WORKER_MCP_PROFILE, the mission's profile file, then straight to the LITERAL "default" —
 # never the resolved record's own `defaultProfile`. A kit whose record says
-# `"defaultProfile": "catalyst"` refused every launch with "no MCP config for profile
+# `"defaultProfile": "estate-b"` refused every launch with "no MCP config for profile
 # 'default'", and the owner had to alias `default` into five records to get a worker up.
 # The record's declared default now sits between the mission file and the literal
 # fallback, read the same way the instance root already is: from $LOOM_LOCK when set, else
