@@ -542,6 +542,68 @@ NLEFT="$(ls "$NP/workers/dev" 2>/dev/null | grep -c '^55506-' || true)"
 if [ "${NLEFT:-0}" -eq 0 ]; then ok "IR4c (SPEC R4) no workers/dev/55506-* directory was created"
 else bad "IR4c (SPEC R4) no workers/dev/55506-* directory was created" "found $NLEFT"; fi
 
+echo ""
+# ── case 20 (SPEC A: HS1-HS3) — the Hard stops: line is decided from what the frame
+# actually holds, not hardcoded to "none supplied". A dedicated notepad/mission set, since
+# $NP by this point in the file carries two RUNNING missions (case 7) and WORKER_MISSION
+# must name the mission directly rather than rely on the single-RUNNING scan. ────────────
+HSNP="$WORK/hsnp"
+mkdir -p "$HSNP/.df/missions/M-HS1" "$HSNP/.df/missions/M-HS2" "$HSNP/.df/missions/M-HS3"
+printf 'notes\n' > "$HSNP/NOTES.md"
+
+# HS1: HARD-STOPS.md present -> unchanged text, and it wins even when MISSION.md ALSO
+# carries the phrase (regression guard: HARD-STOPS.md takes priority, may be green on main).
+printf 'RUNNING\n' > "$HSNP/.df/missions/M-HS1/state"
+printf '# hard stops\n' > "$HSNP/.df/missions/M-HS1/HARD-STOPS.md"
+printf 'Hard stops: touch nothing outside this directory. They are absolute.\n' > "$HSNP/.df/missions/M-HS1/MISSION.md"
+OUTHS1="$( (cd "$HSNP" && env WORKER_MCP_PROFILE=tp WORKER_MCP_SOURCE="$CFG" WORKER_MISSION=M-HS1 "$WORKER" dev 90000 "p" --dry-run) 2>&1)"; RCHS1=$?
+if [ "$RCHS1" -eq 0 ]; then ok "HS1a --dry-run exits 0"; else bad "HS1a --dry-run exits 0" "rc=$RCHS1: $OUTHS1"; fi
+BRIEFHS1="$(printf '%s\n' "$OUTHS1" | awk '/^---- prompt ----$/{p=1;next} p')"
+contains "HS1 brief names HARD-STOPS.md (wins even though MISSION.md also has the phrase)" \
+  "Hard stops: read ./HARD-STOPS.md in this directory FIRST. They are absolute." "$BRIEFHS1"
+
+# HS2: no HARD-STOPS.md, MISSION.md contains "hard stop" (case-insensitive) -> names ./MISSION.md.
+printf 'RUNNING\n' > "$HSNP/.df/missions/M-HS2/state"
+printf 'Hard stops: touch nothing outside this directory. They are absolute.\n' > "$HSNP/.df/missions/M-HS2/MISSION.md"
+OUTHS2="$( (cd "$HSNP" && env WORKER_MCP_PROFILE=tp WORKER_MCP_SOURCE="$CFG" WORKER_MISSION=M-HS2 "$WORKER" dev 90001 "p" --dry-run) 2>&1)"; RCHS2=$?
+if [ "$RCHS2" -eq 0 ]; then ok "HS2a --dry-run exits 0"; else bad "HS2a --dry-run exits 0" "rc=$RCHS2: $OUTHS2"; fi
+BRIEFHS2="$(printf '%s\n' "$OUTHS2" | awk '/^---- prompt ----$/{p=1;next} p')"
+contains "HS2 brief names ./MISSION.md and carries the reason" \
+  "Hard stops: read ./MISSION.md in this directory FIRST — it carries them. They are absolute." "$BRIEFHS2"
+case "$BRIEFHS2" in
+  *"none supplied"*) bad "HS2 does not also say none supplied" "it did" ;;
+  *) ok "HS2 does not also say none supplied" ;;
+esac
+
+# HS3: MISSION.md present but WITHOUT the phrase -> falls through to "none supplied".
+printf 'RUNNING\n' > "$HSNP/.df/missions/M-HS3/state"
+printf 'This is a plain mission frame with no such phrase.\n' > "$HSNP/.df/missions/M-HS3/MISSION.md"
+OUTHS3="$( (cd "$HSNP" && env WORKER_MCP_PROFILE=tp WORKER_MCP_SOURCE="$CFG" WORKER_MISSION=M-HS3 "$WORKER" dev 90002 "p" --dry-run) 2>&1)"; RCHS3=$?
+if [ "$RCHS3" -eq 0 ]; then ok "HS3a --dry-run exits 0"; else bad "HS3a --dry-run exits 0" "rc=$RCHS3: $OUTHS3"; fi
+BRIEFHS3="$(printf '%s\n' "$OUTHS3" | awk '/^---- prompt ----$/{p=1;next} p')"
+contains "HS3 brief says none supplied when MISSION.md lacks the phrase" \
+  "Hard stops: none supplied with this mission frame" "$BRIEFHS3"
+
+echo ""
+# ── case 21 (SPEC B: DD1) — DISALLOW_LIST is deduplicated once, exact string equality,
+# first occurrence kept. The same name arrives twice via --disallow-tool AND once more via
+# the connector STUB's own PLAN (case 14's stub disallows mcp__onedroid__* already) — both
+# the dry run's disallow: lines and the argv's --disallowedTools list must carry it once. ─
+OUTDD1="$(run_dry env WORKER_MCP_PROFILE=tp MCP_PROFILE_CONFIG="$STUB" "$WORKER" dev 12345 "p" \
+        --disallow-tool "mcp__onedroid__*" --disallow-tool "mcp__onedroid__*" --dry-run)"; RCDD1=$?
+if [ "$RCDD1" -eq 0 ]; then ok "DD1a --dry-run exits 0"; else bad "DD1a --dry-run exits 0" "rc=$RCDD1: $OUTDD1"; fi
+DD1_LINE_COUNT="$(printf '%s\n' "$OUTDD1" | grep -Fxc -- 'disallow: mcp__onedroid__*')"
+if [ "$DD1_LINE_COUNT" = "1" ]; then ok "DD1b dry-run disallow: line for the duplicated name appears exactly once"
+else bad "DD1b dry-run disallow: line for the duplicated name appears exactly once" "count=$DD1_LINE_COUNT"; fi
+ARGVDD1="$(printf '%s\n' "$OUTDD1" | awk '/^---- argv ----$/{a=1;next} /^---- prompt ----$/{a=0} a')"
+DD1_ARGV_COUNT="$(printf '%s\n' "$ARGVDD1" | grep -Fxc -- 'mcp__onedroid__*')"
+if [ "$DD1_ARGV_COUNT" = "1" ]; then ok "DD1c argv --disallowedTools carries the duplicated name exactly once"
+else bad "DD1c argv --disallowedTools carries the duplicated name exactly once" "count=$DD1_ARGV_COUNT"; fi
+# and the OTHER plan entries (never duplicated) still each appear exactly once, unaffected.
+DD1_OTHER1="$(printf '%s\n' "$ARGVDD1" | grep -Fxc -- 'mcp__hub_b__*')"
+[ "$DD1_OTHER1" = "1" ] && ok "DD1d a non-duplicated plan entry still appears exactly once" \
+  || bad "DD1d a non-duplicated plan entry still appears exactly once" "count=$DD1_OTHER1"
+
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]

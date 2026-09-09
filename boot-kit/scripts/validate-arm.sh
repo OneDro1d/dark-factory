@@ -210,6 +210,17 @@ touch nothing outside this directory except read-only probes of the kit; do not 
 cwd yourself -- \`validate.sh\` removes it after the session ends.
 EOF
 
+# T1 SPEC-A: also write a standalone HARD-STOPS.md carrying the same two hard stops --
+# df-worker's HARDSTOP_LINE fallback (grep for "hard stop" in a copied MISSION.md) exists
+# for frames that never get one of these; a validate run should not depend on that
+# fallback when its own frame can carry the real file.
+cat > "$NP/.df/missions/M-VALIDATE/HARD-STOPS.md" <<EOF
+# M-VALIDATE — hard stops
+
+- touch nothing outside this directory except read-only probes of the kit.
+- do not \`rm\` this cwd yourself -- \`validate.sh\` removes it after the session ends.
+EOF
+
 # T1-F, MEASURED 2026-09-09: `.df/missions/M-VALIDATE/` used to get MISSION.md and state
 # only -- no `profile` -- so df-worker inside a validate run always hit the "no defaultProfile
 # fallback" bug (T1-C) even on a kit whose record declares one. Write the resolved record's

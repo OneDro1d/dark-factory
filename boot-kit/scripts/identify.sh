@@ -46,6 +46,8 @@
 #
 # exit: 0 = agrees, or nothing to disagree with   2 = cannot check (no instance name, etc.)
 #       3 = the lockfile (or its machine block) describes another machine
+#       --match: 0 = at least one declared record matches this machine
+#                3 = zero records match (not proof none exists -- see the warning it prints)
 set -uo pipefail
 
 MODE=print
@@ -504,6 +506,7 @@ if [ "$MODE" = "match" ]; then
   if [ "$n" -eq 0 ]; then
     say "   no declared instance matches this machine."
     say "   ⚠️ That is not proof none exists — a record with no install.identity cannot match."
+    exit 3
   fi
   exit 0
 fi
