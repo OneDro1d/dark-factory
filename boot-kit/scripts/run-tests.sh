@@ -111,6 +111,21 @@ if [ -n "${RUN_TESTS_ACTIVE:-}" ]; then
 fi
 export RUN_TESTS_ACTIVE=1
 
+# ⛔ NO SUITE MAY REACH THE REAL ~/.local/bin OR ~/.claude. Every installer this repo ships
+# (install.sh, rehydrate.sh, bootstrap.sh) writes PATH links into ${LOOM_BIN:-$HOME/.local/bin}
+# and the live tree into ${LOOM_LIVE:-$HOME/.claude}. Suites that pin both are safe; twelve did
+# not, and MEASURED 2026-09-09 on the maintainer's laptop: a full run from a worktree left
+# `~/.local/bin/df-mission` pointing INTO that worktree (starter-kit install.sh step 4 links
+# with -f), the worktree was removed an hour later, the link dangled, and df-worker's
+# on-PATH fallback died — every dispatch on the machine refused with "mcp-profile-config.py
+# not found". A suite that changes the machine it runs on is not a test; it is an install
+# with no record. Pin both here, once, for every suite, unless the caller already did (a
+# suite that wants its own scratch sets them narrower, never wider).
+RUN_TESTS_SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/run-tests-scratch.XXXXXX")"
+export LOOM_BIN="${LOOM_BIN:-$RUN_TESTS_SCRATCH/bin}"
+export LOOM_LIVE="${LOOM_LIVE:-$RUN_TESTS_SCRATCH/live}"
+mkdir -p "$LOOM_BIN" "$LOOM_LIVE"
+
 # Prune the generated and vendored trees. `vendor/` is a per-instance cache that can hold
 # a COPY of these very suites; running those would report on the cache, not on this repo.
 SUITES="$(find "$ROOT" \

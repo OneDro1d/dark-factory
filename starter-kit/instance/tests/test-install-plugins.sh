@@ -156,6 +156,31 @@ fi
 RC_E="$(rc_of e --dry-run)"
 eqnum "E dry-run always exits 0 (existing install.sh contract)" "0" "$RC_E"
 
+echo "=== F: an NFS silly-rename in the dest is left alone; a stale file is still deleted ==="
+# MEASURED on a Coder whose ~/.claude is an NFS symlink, 2026-09-09: replacing a file another
+# process holds open makes NFS rename it aside as .nfsXXXXXXXX; `rsync --delete` then tries to
+# unlink the ghost, NFS answers EBUSY, rsync exits 23 and the WHOLE plugin is refused. The
+# exclusion has to be NARROW: a genuinely stale file beside the ghost must still go, or the
+# copy stops matching the pin. EBUSY itself cannot be reproduced on a local disk, so this case
+# asserts the two halves that can be: the ghost survives, the stale file does not. Against the
+# previous tree F1 fails (rsync deletes the ghost) and F3 is the control.
+mk_instance f "$DECL"
+run f >/dev/null 2>&1
+DEST_F="$WORK/f/inst/live/skills/df-governed"
+mkdir -p "$DEST_F/hooks"
+printf 'ghost\n' > "$DEST_F/hooks/.nfs000000000008007d00000005"
+printf 'stale\n' > "$DEST_F/hooks/ZZZ-stale-from-an-older-pin.sh"
+OUT_F="$(run f 2>&1)"
+contains "F the second install still materialises (no rsync failure)" "materialised from" "$OUT_F"
+if [ -f "$DEST_F/hooks/.nfs000000000008007d00000005" ]; then ok "F1 the .nfs* ghost survives --delete"
+else bad "F1 the .nfs* ghost survives --delete" "the ghost was unlinked"; fi
+if [ -e "$DEST_F/hooks/ZZZ-stale-from-an-older-pin.sh" ]; then bad "F2 a genuinely stale file is still deleted" "ZZZ-stale-from-an-older-pin.sh survived"
+else ok "F2 a genuinely stale file is still deleted"; fi
+DIFF_F="$(diff -r --brief --exclude='.nfs*' "$WORK/f/t1/plugins/df-governed" "$DEST_F" 2>&1)"
+eqnum "F3 apart from the ghost the copy matches the pin" "" "$DIFF_F"
+RC_F="$(rc_of f)"
+eqnum "F4 the run exits 0" "0" "$RC_F"
+
 echo ""
 printf 'install.sh plugins step: %d ok, %d failed\n' "$PASS" "$FAIL"
 # run-tests.sh treats a suite that exits 0 with no declared count as UNMEASURED, not a pass.
