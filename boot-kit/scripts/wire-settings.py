@@ -23,25 +23,40 @@ a backup, not a copy. This estate had already written that pattern down before a
 WHAT IT TOUCHES, AND WHAT IT REFUSES TO TOUCH
 ---------------------------------------------
   ADDS      hook commands from the template that are not already wired for that event.
-  NEVER     removes, reorders or rewrites an existing entry.
-  NEVER     writes any top-level key but `hooks`. `permissions` is a security posture and
-            `outputStyle` changes the operator's UI; a difference in either is REPORTED and
-            left alone. An installer that quietly widens permissions is a worse bug than an
-            unwired hook.
+            This is the FIRST key this tool writes: `hooks`, sourced from the shared
+            template and filtered by --lock.
+  ADDS      (from --deny-file only) entries to the top-level `deniedMcpServers` list. This
+            is the SECOND key this tool writes, and it is ADD-ONLY the same way `hooks` is:
+            an entry already present (by `==`) is skipped, nothing is ever removed or
+            reordered. ⚠️ THIS IS NOT THE CLOBBERING THE `permissions` RULE BELOW GUARDS
+            AGAINST. `permissions` is a security POSTURE an operator set; widening it without
+            asking is the hazard. A deny entry only NARROWS what a session can reach, and it
+            is derived from the lockfile -- the authority this whole tool already answers to
+            for `hooks`. Narrowing by the authority's own record is not the clobbering that
+            rule exists to prevent; it is the same discipline applied to a second key.
+  NEVER     removes, reorders or rewrites an existing entry, in EITHER key above.
+  NEVER     writes any top-level key but `hooks` and `deniedMcpServers`. `permissions` is a
+            security posture and `outputStyle` changes the operator's UI; a difference in
+            either is REPORTED and left alone. An installer that quietly widens permissions
+            is a worse bug than an unwired hook.
   REFUSES   to write at all if the live file exists and is not valid JSON. It may be
             recoverable by hand; overwriting it destroys the only copy.
-  WIRES     ONLY what --lock declares. The template is SHARED across instances; the lockfile
-            is PER-INSTANCE and is the authority. Skips are printed, never silent.
+  REFUSES   (from --deny-file only) to write ANYTHING if any entry in the deny file is not
+            an object with exactly one of `serverName` / `serverUrl` / `serverCommand` -- a
+            malformed entry in a denylist is worse than none, because it reads as coverage.
+  WIRES     hooks ONLY what --lock declares. The template is SHARED across instances; the
+            lockfile is PER-INSTANCE and is the authority. Skips are printed, never silent.
   PRUNES    with --prune-broken only, and only an entry that is BOTH wired AND missing its
             file -- a chain that errors on every event, where nothing is lost by removing it
             because the file it names is not there to run. That is the sole removal this tool
             will make, and it is repair, not clobbering.
 
-Idempotent: a second run adds nothing and says so.
+Idempotent: a second run adds nothing and says so, for hooks and for deny entries alike.
 
 usage:
   wire-settings.py --template <settings.json.template> --live <settings.json>
                    --lock <instance lockfile> [--home <dir>] [--dry-run] [--prune-broken]
+                   [--deny-file <deny.json>]
 
 Engram is one of the memory stores whose hooks this wires. What it is and how to reach it is
 documented in exactly one place:
@@ -114,6 +129,52 @@ def filter_hooks(chains, declared, dropped=None):
     return out
 
 
+DENY_KEYS = ("serverName", "serverUrl", "serverCommand")
+
+
+def deny_label(entry):
+    """`serverName=<name>` (or serverUrl=/serverCommand=) for one deny entry -- the same
+    shape as a hook's `event  basename` label, for the same reason: enough to read at a
+    glance, not the whole object."""
+    for k in DENY_KEYS:
+        if k in entry:
+            return "%s=%s" % (k, entry[k])
+    return "?"
+
+
+def load_deny_file(path):
+    """Every entry in <path>'s `deniedMcpServers`, or raise ValueError naming the first
+    malformed one. An entry must be an object with EXACTLY ONE key, and that key must be
+    one of serverName/serverUrl/serverCommand -- Claude Code's own `deniedMcpServers` shape.
+    Refusing outright on the first bad entry, before anything is merged, matches the FATAL
+    discipline the rest of this tool already uses for unparseable JSON: a malformed entry in
+    a denylist is worse than none, because it reads as coverage."""
+    try:
+        d = json.loads(open(path, encoding="utf-8").read())
+    except Exception as e:
+        raise ValueError("cannot read %s: %s" % (path, e))
+    out = []
+    for e in (d.get("deniedMcpServers") or []):
+        if not isinstance(e, dict) or len(e) != 1 or next(iter(e)) not in DENY_KEYS:
+            raise ValueError("malformed deniedMcpServers entry in %s (must be an object with "
+                              "exactly one of serverName/serverUrl/serverCommand): %r"
+                              % (path, e))
+        out.append(e)
+    return out
+
+
+def merge_deny(existing, entries):
+    """ADD-ONLY, same rule as hook wiring: an entry is added when no existing entry is `==`
+    to it; the existing list is never reordered or pruned. Returns (new_list, added_labels)."""
+    out = list(existing or [])
+    added = []
+    for e in entries:
+        if e not in out:
+            out.append(e)
+            added.append(deny_label(e))
+    return out, added
+
+
 def wired_paths(settings, event):
     out = set()
     for group in (settings.get("hooks") or {}).get(event, []) or []:
@@ -147,7 +208,19 @@ def main():
                     help="instance lockfile; ONLY hooks it declares are wired")
     ap.add_argument("--prune-broken", action="store_true",
                     help="also REMOVE wired entries whose target file is absent (repair)")
+    ap.add_argument("--deny-file", default="",
+                    help="JSON file with a deniedMcpServers list; merged ADD-ONLY into the "
+                         "live file's top-level deniedMcpServers (see mcp-profile-config.py "
+                         "--session-deny, which derives this file)")
     a = ap.parse_args()
+
+    deny_entries = []
+    if a.deny_file:
+        try:
+            deny_entries = load_deny_file(a.deny_file)
+        except ValueError as e:
+            print("FATAL: %s" % e, file=sys.stderr)
+            return 1
 
     declared = None
     if a.lock:
@@ -186,6 +259,10 @@ def main():
         seeded = dict(tmpl)
         seeded["hooks"] = filter_hooks(tmpl.get("hooks") or {}, declared)
         skipped = count_hooks(tmpl.get("hooks") or {}) - count_hooks(seeded["hooks"])
+        deny_added = []
+        if a.deny_file:
+            new_deny, deny_added = merge_deny(seeded.get("deniedMcpServers") or [], deny_entries)
+            seeded["deniedMcpServers"] = new_deny
         suffix = " (dry run — nothing written)" if a.dry_run else ""
         print("   no live settings.json — writing the rendered template%s" % suffix)
         if not a.dry_run:
@@ -196,6 +273,13 @@ def main():
         if skipped:
             print("   skipped %d template entr(y/ies) this lockfile does not declare — wiring"
                   " them would break the chain every session" % skipped)
+        if a.deny_file:
+            for label in deny_added:
+                print("   + deniedMcpServers %s" % label)
+            if deny_added:
+                print("   denied %d server(s)%s" % (len(deny_added), suffix))
+            else:
+                print("   every server the deny file names is already denied — no change")
         return 0
 
     try:
@@ -269,7 +353,14 @@ def main():
     else:
         pruned = False
 
-    if added or pruned:
+    deny_suffix = " (dry run — nothing written)" if a.dry_run else ""
+    deny_added = []
+    if a.deny_file:
+        new_deny, deny_added = merge_deny(live.get("deniedMcpServers") or [], deny_entries)
+        if deny_added:
+            live["deniedMcpServers"] = new_deny
+
+    if added or pruned or deny_added:
         if not a.dry_run:
             # ⚠️ NOT `utcnow()`. It is deprecated and PRINTS A WARNING mid-run on Python 3.12+,
             # which landed in the middle of this tool's output on the Poland Coder — noise from
@@ -282,10 +373,19 @@ def main():
             print("   backup: %s" % backup)
         for line in added:
             print("   + %s" % line)
-        print("   wired %d hook(s)%s" % (len(added), " (dry run — nothing written)"
-                                         if a.dry_run else ""))
+        if added or pruned:
+            print("   wired %d hook(s)%s" % (len(added), " (dry run — nothing written)"
+                                             if a.dry_run else ""))
     else:
         print("   every hook the template wires is already wired — no change")
+
+    if a.deny_file:
+        for label in deny_added:
+            print("   + deniedMcpServers %s" % label)
+        if deny_added:
+            print("   denied %d server(s)%s" % (len(deny_added), deny_suffix))
+        else:
+            print("   every server the deny file names is already denied — no change")
 
     if undeclared:
         # ⚠️ REPORTED, NEVER SILENT. A skip nobody can see is indistinguishable from a check
