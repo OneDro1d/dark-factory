@@ -476,6 +476,42 @@ contains "Y6: denies" "permissionDecision" "$O"
 contains "Y6: names the real cause (no origin remote)" "no origin remote" "$O"
 not_contains "Y6: does not say 'not a git checkout' -- it is one" "not a git checkout" "$O"
 
+echo "--- Y7: a NEWLINE separates commands -- the spelling this estate mandates ---"
+# ⛔ MEASURED 2026-09-09 on the Poland Coder, live, during a validate run: `cd <repo>` and
+# `gh pr merge 999999` on two LINES reached GitHub and came back with gh's own error rather
+# than a merge-gate denial. shlex(whitespace_split=True) treats a newline as ordinary
+# whitespace, so both lines arrived as ONE token list starting with `cd`, and the cd branch
+# `continue`d past the merge sitting in that same list.
+# 🔴 This estate's OWN PreToolUse hook refuses `&&`, `||` and `;`, so the newline form is the
+# multi-step idiom every agent here is pushed toward: the gate split on every separator an
+# agent may not type and on nothing it is told to use.
+#
+# Each case below MIRRORS case D (a repo that ships a publish gate, with no record -> deny)
+# and changes ONE thing: the separator. Same repo, same flags, same expected verdict -- so a
+# failure here can only be the splitting, not the gate's policy.
+REPO_NL="$(mk_repo 1)"
+O="$(run_hook "$REPO_NL" "$(printf 'cd %s\ngh pr merge 1 --repo %s' "$REPO_NL" "$ORIGIN_REPO")")"
+contains     "Y7: the newline form is DENIED"          "permissionDecision" "$O"
+contains     "Y7: and the reason is the gate's own, the same as case D" "no record"          "$O"
+not_contains "Y7: it did not simply allow"             '"{}"'               "$O"
+
+echo "--- Y7b: cd second -- order must not matter ---"
+O="$(run_hook "$REPO_NL" "$(printf 'gh pr merge 1 --repo %s\ncd %s' "$ORIGIN_REPO" "$REPO_NL")")"
+contains "Y7b: denied" "permissionDecision" "$O"
+
+echo "--- Y7c: three lines, the merge buried in the middle ---"
+O="$(run_hook "$REPO_NL" "$(printf 'cd %s\ngh pr merge 1 --repo %s\necho done' "$REPO_NL" "$ORIGIN_REPO")")"
+contains "Y7c: denied" "permissionDecision" "$O"
+
+echo "--- Y7d: a LINE CONTINUATION is not a separator -- still ONE command, still denied ---"
+# The half of the change that could over-reach: joining continued lines must not lose the merge.
+O="$(run_hook "$REPO_NL" "$(printf 'gh pr merge 1 \\\n  --repo %s' "$ORIGIN_REPO")")"
+contains "Y7d: denied" "permissionDecision" "$O"
+
+echo "--- Y7e: a harmless two-line command is still ALLOWED (no over-blocking) ---"
+O="$(run_hook "$REPO_NL" "$(printf 'cd %s\ngit status --porcelain' "$REPO_NL")")"
+equals "Y7e: allows with {}" "{}" "$O"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
