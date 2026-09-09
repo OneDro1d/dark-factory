@@ -54,6 +54,11 @@ done
 KIT_ROOT="$(cd "$KIT_ROOT" && pwd)"
 
 NP="$KIT_ROOT/.df-validate"
+# T1-F/T1-I: the record that names this machine's defaultProfile and its own LOOM_LOCK
+# path, resolved the same way df-worker resolves them -- via mcp-profile-config.py's own
+# resolve_machine_lock()/kit_records(), executed standalone (runpy, never imported: see
+# that script's own "stays standalone" precedent) so this arm carries no import coupling.
+MCP_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mcp-profile-config.py"
 
 # `git -C "$KIT_ROOT" rev-parse --git-path info/exclude` resolves through a worktree's real
 # gitdir, unlike hand-building "$KIT_ROOT/.git/info/exclude" -- a worktree's .git is a file,
@@ -80,6 +85,77 @@ _remove_exclude_line() {
   [ "$KIT_IS_GIT" -eq 1 ] || return 0
   [ -n "$EXCL" ] && [ -f "$EXCL" ] || return 0
   grep -vxF '.df-validate/' "$EXCL" > "$EXCL.tmp" 2>/dev/null && mv "$EXCL.tmp" "$EXCL"
+}
+
+# T1-F: which record picks this machine's defaultProfile -- resolve_machine_lock()'s own
+# pick, falling back to a record directly at the kit root when resolve_machine_lock cannot
+# disambiguate (0 candidates, or an unresolved tie between several).
+_pick_record() {  # $1 = kit root -> the resolved record path, or empty
+  [ -f "$MCP_TOOL" ] || return 0
+  python3 -c "
+import os, runpy, sys
+kit_root = os.path.abspath(sys.argv[1])
+mod = runpy.run_path(sys.argv[2], run_name='_validate_arm')
+lock = mod['resolve_machine_lock'](kit_root)
+if not lock:
+    for r in mod['kit_records'](kit_root):
+        if os.path.dirname(os.path.abspath(r)) == kit_root:
+            lock = r
+            break
+print(lock or '')
+" "$1" "$MCP_TOOL" 2>/dev/null || true
+}
+
+# T1-I: env.LOOM_LOCK the notepad's copied settings.json should carry -- the kit's own
+# settings.local.json when it declares one, else the record that resolves unambiguously
+# for THIS machine (same resolver, no fallback to an ambiguous tie: a guess here would put
+# a worker on the wrong estate's record).
+# ⚠️ A resolved record is only trusted here when it actually SELF-DECLARES a `machine`
+# block -- resolve_machine_lock() also returns a lone lockfile with NO machine info at all
+# (its own documented "a single candidate wins outright" rule), and a bare, unaddressed
+# lockfile is not evidence this machine is the one it describes. Every fixture in this repo
+# that means "resolved for THIS machine" writes that block explicitly (platform+home); one
+# that never did is not this machine's record, it is an untyped placeholder.
+_resolved_loom_lock() {  # $1 = kit root -> the resolved record's absolute path, or empty
+  [ -f "$MCP_TOOL" ] || return 0
+  python3 -c "
+import json, os, runpy, sys
+kit_root = os.path.abspath(sys.argv[1])
+mod = runpy.run_path(sys.argv[2], run_name='_validate_arm')
+lock = mod['resolve_machine_lock'](kit_root)
+if lock:
+    try:
+        with open(lock, encoding='utf-8') as fh:
+            d = json.load(fh) or {}
+    except Exception:
+        d = {}
+    if not isinstance(d.get('machine'), dict) or not d.get('machine'):
+        lock = None
+print(os.path.abspath(lock) if lock else '')
+" "$1" "$MCP_TOOL" 2>/dev/null || true
+}
+
+_merge_env_loom_lock() {  # $1 = settings.json path, $2 = value for env.LOOM_LOCK
+  mkdir -p "$(dirname "$1")"
+  python3 -c "
+import json, os, sys
+path, val = sys.argv[1], sys.argv[2]
+doc = {}
+if os.path.isfile(path):
+    try:
+        with open(path, encoding='utf-8') as fh:
+            doc = json.load(fh) or {}
+    except Exception:
+        doc = {}
+env = doc.get('env')
+if not isinstance(env, dict):
+    env = {}
+env['LOOM_LOCK'] = val
+doc['env'] = env
+with open(path, 'w', encoding='utf-8') as fh:
+    json.dump(doc, fh, indent=2)
+    fh.write('\n')
+" "$1" "$2"
 }
 
 if [ -e "$NP" ]; then
@@ -134,6 +210,27 @@ touch nothing outside this directory except read-only probes of the kit; do not 
 cwd yourself -- \`validate.sh\` removes it after the session ends.
 EOF
 
+# T1-F, MEASURED 2026-09-09: `.df/missions/M-VALIDATE/` used to get MISSION.md and state
+# only -- no `profile` -- so df-worker inside a validate run always hit the "no defaultProfile
+# fallback" bug (T1-C) even on a kit whose record declares one. Write the resolved record's
+# own defaultProfile here when it has one; omit the file when it does not (df-worker's own
+# fallback chain then continues to "default", exactly as it does with no file at all).
+PICKED_RECORD="$(_pick_record "$KIT_ROOT")"
+if [ -n "$PICKED_RECORD" ] && [ -f "$PICKED_RECORD" ]; then
+  DEFAULT_PROFILE="$(python3 -c "
+import json, sys
+try:
+    with open(sys.argv[1], encoding='utf-8') as fh:
+        d = json.load(fh) or {}
+except Exception:
+    d = {}
+print(d.get('defaultProfile') or '')
+" "$PICKED_RECORD" 2>/dev/null || true)"
+  if [ -n "$DEFAULT_PROFILE" ]; then
+    printf '%s\n' "$DEFAULT_PROFILE" > "$NP/.df/missions/M-VALIDATE/profile"
+  fi
+fi
+
 printf '[]\n' > "$NP/sessions/index.json"
 
 # The commit and push gates are wired at PROJECT level — in the kit root's own
@@ -154,6 +251,36 @@ if [ -f "$KIT_ROOT/.claude/settings.json" ]; then
   if [ -d "$KIT_ROOT/.claude/hooks" ]; then
     cp -R "$KIT_ROOT/.claude/hooks" "$NP/.claude/hooks"
   fi
+fi
+
+# T1-I, MEASURED 2026-09-08: the arm above copies the kit's .claude/settings.json and
+# .claude/hooks/ into the notepad but never the env.LOOM_LOCK an installer wrote into
+# <kit>/.claude/settings.local.json -- so the validate session, the one session that must
+# launch a worker, is the one where the record is unknown. settings.local.json's own value
+# wins outright (it is what the installer actually resolved for this machine); only when it
+# names none do we fall back to resolving the record ourselves, and only when exactly one
+# resolves -- never guessed.
+LOOM_LOCK_VALUE=""
+LOOM_LOCK_VIA=""
+if [ -f "$KIT_ROOT/.claude/settings.local.json" ]; then
+  LOOM_LOCK_VALUE="$(python3 -c "
+import json, sys
+try:
+    with open(sys.argv[1], encoding='utf-8') as fh:
+        d = json.load(fh) or {}
+except Exception:
+    d = {}
+print(((d.get('env') or {}).get('LOOM_LOCK')) or '')
+" "$KIT_ROOT/.claude/settings.local.json" 2>/dev/null || true)"
+  [ -n "$LOOM_LOCK_VALUE" ] && LOOM_LOCK_VIA="settings.local.json"
+fi
+if [ -z "$LOOM_LOCK_VALUE" ]; then
+  LOOM_LOCK_VALUE="$(_resolved_loom_lock "$KIT_ROOT")"
+  [ -n "$LOOM_LOCK_VALUE" ] && LOOM_LOCK_VIA="resolved record"
+fi
+if [ -n "$LOOM_LOCK_VALUE" ]; then
+  _merge_env_loom_lock "$NP/.claude/settings.json" "$LOOM_LOCK_VALUE"
+  printf 'arm: LOOM_LOCK=%s (via %s)\n' "$LOOM_LOCK_VALUE" "$LOOM_LOCK_VIA"
 fi
 
 git -C "$NP" init -q

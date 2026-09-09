@@ -65,6 +65,14 @@
 # bearer tokens, and mcp-profile-config.py refuses to write inside a git work tree for that
 # reason. This is the matching half of that refusal.
 #
+# ⚠️ T1-C/D/E, MEASURED ON TWO MACHINES 2026-09-09: the profile resolution used to fall
+# through to the LITERAL "default" and never the resolved record's own `defaultProfile`; the
+# instance root used to be derived ONLY from df-mission's realpath, landing on a vendored
+# engine's dir (which holds no lockfile) with no fallback; and the scratch dir used to be
+# created BEFORE the MCP refusal, so every refused launch left a tree behind. All three are
+# fixed below, in the order the launch actually needs them: instance root, then profile,
+# then the MCP allow-list (which may refuse), and ONLY THEN the scratch dir.
+#
 # Env:
 #   WORKER_PERMISSION_MODE  default bypassPermissions (a hardcoded bypass is a guarantee
 #                           you cannot lower; this is the default value, not the only one)
@@ -72,9 +80,15 @@
 #   WORKER_MODEL            model alias; the tier is a launch-profile decision, so no model
 #                           name is ever hardcoded in this file
 #   WORKER_MISSION          mission id override (otherwise resolved from the notepad state)
-#   WORKER_MCP_PROFILE      MCP profile name (otherwise the mission's `profile` file)
+#   WORKER_MCP_PROFILE      MCP profile name (otherwise the mission's `profile` file, then
+#                           the resolved record's `defaultProfile`, then "default")
 #   WORKER_MCP_SOURCE       source MCP config to scope (default ~/.claude.json)
 #   WORKER_DRY_RUN=1        same as --dry-run
+#   LOOM_LOCK               instance lockfile path. When set and the file exists, it names
+#                           BOTH the instance root (its kit root, computed the same way
+#                           mcp-profile-config.py's own kit_root_of() does) and the record
+#                           `defaultProfile` is read from, ahead of every other source; it is
+#                           also passed through to mcp-profile-config.py as --lock.
 set -uo pipefail
 
 SELF="$(cd "$(dirname "$0")" && pwd)"
@@ -100,17 +114,82 @@ MCP_TOOL="${MCP_PROFILE_CONFIG:-$KIT_ROOT/boot-kit/scripts/mcp-profile-config.py
 # from the instance's engine dir, so the instance root is derived from that and handed to
 # mcp-profile-config as --kit-root whenever it resolves. Which COPY of the tool runs still
 # follows the rule above; WHERE it looks for the lockfile no longer depends on it.
+#
+# ⚠️ T1-D, MEASURED ON TWO MACHINES 2026-09-09: on a kit that VENDORS the engine, the
+# df-mission-realpath derivation above lands on <kit>/vendor/dark-factory -- a directory
+# with no lockfile of its own, so the other-estates deny-list union scans a root with no
+# mcp.profiles and the T1 #152 security fix is silently defeated. `LOOM_LOCK` (the path of
+# the record describing THIS machine) is checked FIRST, below, and its kit root computed
+# the same way mcp-profile-config.py's own kit_root_of() does. When it is not set, the
+# df-mission derivation is still tried, but now WALKS UP from the derived directory until
+# it finds one that actually holds a `*.lock.json` or an `instances/` dir (a vendored
+# engine sits at <kit>/vendor/dark-factory/boot-kit/scripts; two levels up is
+# <kit>/vendor/dark-factory, which has none; four levels up is <kit>, which does). The walk
+# never crosses $HOME or / unnoticed -- if nothing is found by then, INSTANCE_ROOT is left
+# empty exactly as before this fix.
 INSTANCE_ROOT=""
+INSTANCE_ROOT_VIA=""
+LOOM_LOCK_RESOLVED=0
+
+_kit_root_of() {  # $1 = lockfile path -> the kit root it lives in (mirrors mcp-profile-
+                   # config.py's own kit_root_of(): the file's own directory, or three
+                   # levels up when the file is <kit>/instances/<name>/loom.lock.json)
+  python3 -c '
+import os, sys
+p = os.path.abspath(sys.argv[1])
+d = os.path.dirname(p)
+if os.path.basename(os.path.dirname(d)) == "instances":
+    print(os.path.dirname(os.path.dirname(d)))
+else:
+    print(d)
+' "$1"
+}
+
+_has_record() {  # $1 = directory -> true if it holds a *.lock.json or an instances/ dir
+  local _f
+  [ -d "$1" ] || return 1
+  for _f in "$1"/*.lock.json; do
+    [ -e "$_f" ] && return 0
+    break
+  done
+  [ -d "$1/instances" ] && return 0
+  return 1
+}
+
+if [ -n "${LOOM_LOCK:-}" ] && [ -f "$LOOM_LOCK" ]; then
+  INSTANCE_ROOT="$(_kit_root_of "$LOOM_LOCK")"
+  INSTANCE_ROOT_VIA="LOOM_LOCK"
+  LOOM_LOCK_RESOLVED=1
+fi
+
 _dm="$(command -v df-mission 2>/dev/null || true)"
 if [ -n "$_dm" ]; then
   _eng="$(python3 -c 'import os,sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$_dm" 2>/dev/null || true)"
   if [ -n "$_eng" ]; then
-    INSTANCE_ROOT="$(cd "$_eng/../.." 2>/dev/null && pwd || true)"
     if [ ! -f "$MCP_TOOL" ] && [ -f "$_eng/mcp-profile-config.py" ]; then
       MCP_TOOL="$_eng/mcp-profile-config.py"
     fi
+    if [ -z "$INSTANCE_ROOT" ]; then
+      _cand="$(cd "$_eng/../.." 2>/dev/null && pwd || true)"
+      if [ -n "$_cand" ]; then
+        _walk="$_cand"
+        while [ -n "$_walk" ] && ! _has_record "$_walk"; do
+          if [ "$_walk" = "/" ] || [ "$_walk" = "$HOME" ]; then
+            _walk=""
+            break
+          fi
+          _walk="$(dirname "$_walk")"
+        done
+        if [ -n "$_walk" ]; then
+          INSTANCE_ROOT="$_walk"
+          INSTANCE_ROOT_VIA="df-mission"
+        fi
+      fi
+    fi
   fi
 fi
+
+[ -n "$INSTANCE_ROOT" ] && printf 'instance-root: %s (via %s)\n' "$INSTANCE_ROOT" "$INSTANCE_ROOT_VIA" >&2
 
 die() { printf 'df-worker: %s\n' "$1" >&2; exit 2; }
 
@@ -284,7 +363,112 @@ if [ -z "$MISSION" ]; then
   [ "$_n" -eq 1 ] && MISSION="$_found"
 fi
 
+# ── profile resolution + MCP allow-list, or refuse ───────────────────────────────────────
+# ⚠️ T1-C, MEASURED ON TWO MACHINES 2026-09-09: this used to fall through
+# WORKER_MCP_PROFILE, the mission's profile file, then straight to the LITERAL "default" —
+# never the resolved record's own `defaultProfile`. A kit whose record says
+# `"defaultProfile": "catalyst"` refused every launch with "no MCP config for profile
+# 'default'", and the owner had to alias `default` into five records to get a worker up.
+# The record's declared default now sits between the mission file and the literal
+# fallback, read the same way the instance root already is: from $LOOM_LOCK when set, else
+# from the single lockfile directly under $INSTANCE_ROOT.
+PROFILE=""
+PROFILE_VIA=""
+if [ -n "${WORKER_MCP_PROFILE:-}" ]; then
+  PROFILE="$WORKER_MCP_PROFILE"
+  PROFILE_VIA="WORKER_MCP_PROFILE"
+elif [ -n "$MISSION" ] && [ -f "$NOTEPAD/.df/missions/$MISSION/profile" ]; then
+  PROFILE="$(tr -d '[:space:]' < "$NOTEPAD/.df/missions/$MISSION/profile")"
+  PROFILE_VIA="mission profile file"
+else
+  _defprof=""
+  if [ "$LOOM_LOCK_RESOLVED" = "1" ]; then
+    _defprof="$(jq -r '.defaultProfile // empty' "$LOOM_LOCK" 2>/dev/null || true)"
+  elif [ -n "$INSTANCE_ROOT" ]; then
+    _lockn=0
+    _onelock=""
+    for _f in "$INSTANCE_ROOT"/*.lock.json; do
+      [ -e "$_f" ] || continue
+      _lockn=$((_lockn + 1))
+      _onelock="$_f"
+    done
+    if [ "$_lockn" -eq 1 ]; then
+      _defprof="$(jq -r '.defaultProfile // empty' "$_onelock" 2>/dev/null || true)"
+    fi
+  fi
+  if [ -n "$_defprof" ]; then
+    PROFILE="$_defprof"
+    PROFILE_VIA="defaultProfile"
+  else
+    PROFILE="default"
+    PROFILE_VIA="default"
+  fi
+fi
+printf 'profile: %s (via %s)\n' "$PROFILE" "$PROFILE_VIA" >&2
+
+[ -f "$MCP_TOOL" ] || die "mcp-profile-config.py not found at $MCP_TOOL — refusing to launch a worker with no MCP allow-list (a worker with no tracker cannot report that it has none)"
+
+MCPDIR="$(mktemp -d "${TMPDIR:-/tmp}/df-worker.XXXXXX")" || die "mktemp failed"
+chmod 700 "$MCPDIR" 2>/dev/null || true
+trap 'rm -rf "$MCPDIR"' EXIT
+MCP_CFG="$MCPDIR/mcp-$PROFILE.json"
+
+LOOM_LOCK_FOR_MCP=""
+[ "$LOOM_LOCK_RESOLVED" = "1" ] && LOOM_LOCK_FOR_MCP="$LOOM_LOCK"
+
+# ── B24: mcp-profile-config.py may answer in one of TWO shapes now ──────────────────────
+# `hubs`      — the original shape: it writes $MCP_CFG, and this launcher allow-lists it via
+#               --mcp-config/--strict-mcp-config, exactly as before.
+# `connector` — a claude.ai CONNECTOR is not a file-based server at all (measured: it
+#               appears in NO file, not even ~/.claude.json), so there is nothing to write
+#               into a strict config. mcp-profile-config.py instead prints a machine-readable
+#               `PLAN {...}` line on STDOUT and writes no file; this launcher reads that line
+#               and scopes the connector by DENYING every other server's tools via the
+#               existing --disallowedTools mechanism, rather than allow-listing one.
+# Stdout is captured (never merged into stderr, unlike before) so the PLAN line can be told
+# apart from the WARN/INFO lines mcp-profile-config.py prints on stderr; stderr still flows
+# through live, exactly as it did when both fds were merged.
+MCP_STDOUT="$(python3 "$MCP_TOOL" --profile "$PROFILE" --out "$MCP_CFG" \
+        --config "${WORKER_MCP_SOURCE:-$HOME/.claude.json}" \
+        ${INSTANCE_ROOT:+--kit-root "$INSTANCE_ROOT"} \
+        ${LOOM_LOCK_FOR_MCP:+--lock "$LOOM_LOCK_FOR_MCP"})"
+MCP_RC=$?
+MCP_REFUSAL="no MCP config for profile '$PROFILE' — REFUSING to launch. A worker with no tracker cannot report that it has none, so this failure would be silent by construction. Declare mcp.profiles.$PROFILE in the instance lockfile, or run df-preflight --profile $PROFILE which proposes it."
+[ "$MCP_RC" -eq 0 ] || die "$MCP_REFUSAL"
+
+MCP_PLAN_LINE="$(printf '%s\n' "$MCP_STDOUT" | grep -m1 '^PLAN ')"
+if [ -n "$MCP_PLAN_LINE" ]; then
+  MCP_MODE="connector"
+  MCP_PLAN_JSON="${MCP_PLAN_LINE#PLAN }"
+  MCP_CONNECTOR_NAME="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$MCP_PLAN_JSON")" \
+    || die "$MCP_REFUSAL (PLAN line could not be parsed)"
+  # The plan's own disallow entries join the caller's --disallow-tool values in ONE list —
+  # same mechanism, same argv shape, so a connector-mode worker's tool denial is asserted
+  # exactly like every other --disallow-tool case.
+  while IFS= read -r pd; do
+    [ -n "$pd" ] && DISALLOW_LIST="$DISALLOW_LIST$pd
+"
+  done < <(python3 -c '
+import json, sys
+for d in json.loads(sys.argv[1]).get("disallow", []):
+    print(d)
+' "$MCP_PLAN_JSON")
+elif [ -f "$MCP_CFG" ]; then
+  MCP_MODE="hubs"
+else
+  # mcp-profile-config.py exited 0 but produced NEITHER a config file NOR a PLAN line — the
+  # same silent-by-construction shape the original refusal exists to catch, one layer up.
+  die "$MCP_REFUSAL (exited 0 but wrote no config and printed no PLAN line)"
+fi
+export DF_MCP_MODE="$MCP_MODE"
+
 # ── the worker scratch: the child's cwd, and its own project settings scope ─────────────
+# ⚠️ T1-E, MEASURED ON TWO MACHINES 2026-09-09: this used to run BEFORE the MCP refusal
+# above, so every refused launch left a `workers/<role>/<ticket>-<ts>/` tree behind — with
+# .claude/settings.json, MISSION.md and PROMISE.md already written — even though nothing
+# was ever going to launch. The scratch dir and its files are now created only once the
+# launch is known to be possible. WORKER_DRY_RUN=1 still creates it once launch is possible
+# (the dry run's own output names it) — that property is unchanged by this reordering.
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 SCRATCH="$NOTEPAD/workers/$ROLE/$TICKET-$TS"
 mkdir -p "$SCRATCH/.claude" || die "cannot create scratch dir $SCRATCH"
@@ -338,65 +522,6 @@ if [ -n "$MISSION" ]; then
     fi
   done
 fi
-
-# ── MCP allow-list, or refuse ───────────────────────────────────────────────────────────
-PROFILE="${WORKER_MCP_PROFILE:-}"
-if [ -z "$PROFILE" ] && [ -n "$MISSION" ] && [ -f "$NOTEPAD/.df/missions/$MISSION/profile" ]; then
-  PROFILE="$(tr -d '[:space:]' < "$NOTEPAD/.df/missions/$MISSION/profile")"
-fi
-[ -n "$PROFILE" ] || PROFILE="default"
-
-[ -f "$MCP_TOOL" ] || die "mcp-profile-config.py not found at $MCP_TOOL — refusing to launch a worker with no MCP allow-list (a worker with no tracker cannot report that it has none)"
-
-MCPDIR="$(mktemp -d "${TMPDIR:-/tmp}/df-worker.XXXXXX")" || die "mktemp failed"
-chmod 700 "$MCPDIR" 2>/dev/null || true
-trap 'rm -rf "$MCPDIR"' EXIT
-MCP_CFG="$MCPDIR/mcp-$PROFILE.json"
-
-# ── B24: mcp-profile-config.py may answer in one of TWO shapes now ──────────────────────
-# `hubs`      — the original shape: it writes $MCP_CFG, and this launcher allow-lists it via
-#               --mcp-config/--strict-mcp-config, exactly as before.
-# `connector` — a claude.ai CONNECTOR is not a file-based server at all (measured: it
-#               appears in NO file, not even ~/.claude.json), so there is nothing to write
-#               into a strict config. mcp-profile-config.py instead prints a machine-readable
-#               `PLAN {...}` line on STDOUT and writes no file; this launcher reads that line
-#               and scopes the connector by DENYING every other server's tools via the
-#               existing --disallowedTools mechanism, rather than allow-listing one.
-# Stdout is captured (never merged into stderr, unlike before) so the PLAN line can be told
-# apart from the WARN/INFO lines mcp-profile-config.py prints on stderr; stderr still flows
-# through live, exactly as it did when both fds were merged.
-MCP_STDOUT="$(python3 "$MCP_TOOL" --profile "$PROFILE" --out "$MCP_CFG" \
-        --config "${WORKER_MCP_SOURCE:-$HOME/.claude.json}" \
-        ${INSTANCE_ROOT:+--kit-root "$INSTANCE_ROOT"})"
-MCP_RC=$?
-MCP_REFUSAL="no MCP config for profile '$PROFILE' — REFUSING to launch. A worker with no tracker cannot report that it has none, so this failure would be silent by construction. Declare mcp.profiles.$PROFILE in the instance lockfile, or run df-preflight --profile $PROFILE which proposes it."
-[ "$MCP_RC" -eq 0 ] || die "$MCP_REFUSAL"
-
-MCP_PLAN_LINE="$(printf '%s\n' "$MCP_STDOUT" | grep -m1 '^PLAN ')"
-if [ -n "$MCP_PLAN_LINE" ]; then
-  MCP_MODE="connector"
-  MCP_PLAN_JSON="${MCP_PLAN_LINE#PLAN }"
-  MCP_CONNECTOR_NAME="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$MCP_PLAN_JSON")" \
-    || die "$MCP_REFUSAL (PLAN line could not be parsed)"
-  # The plan's own disallow entries join the caller's --disallow-tool values in ONE list —
-  # same mechanism, same argv shape, so a connector-mode worker's tool denial is asserted
-  # exactly like every other --disallow-tool case.
-  while IFS= read -r pd; do
-    [ -n "$pd" ] && DISALLOW_LIST="$DISALLOW_LIST$pd
-"
-  done < <(python3 -c '
-import json, sys
-for d in json.loads(sys.argv[1]).get("disallow", []):
-    print(d)
-' "$MCP_PLAN_JSON")
-elif [ -f "$MCP_CFG" ]; then
-  MCP_MODE="hubs"
-else
-  # mcp-profile-config.py exited 0 but produced NEITHER a config file NOR a PLAN line — the
-  # same silent-by-construction shape the original refusal exists to catch, one layer up.
-  die "$MCP_REFUSAL (exited 0 but wrote no config and printed no PLAN line)"
-fi
-export DF_MCP_MODE="$MCP_MODE"
 
 # ── the brief ───────────────────────────────────────────────────────────────────────────
 # Compact on purpose. The frame is on disk beside the worker; repeating it here would pay
