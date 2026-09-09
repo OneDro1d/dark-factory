@@ -29,7 +29,7 @@ silently leaves the queue while still undone. Same rule as everywhere else here 
 evidence, never the self-report, and never your own optimism.
 
 USAGE
-  df-operator-todo add  --id <slug> --task "<what>" --why "<why it is theirs>" \
+  df-operator-todo add  --id <slug> --category <cat> --task "<what>" --why "<why it is theirs>" \
                         --do "<the exact command/URL/PR>" [--blocking] [--ref <path|url>]
   df-operator-todo done --id <slug> (--verified "<evidence>" | --by-operator)
   df-operator-todo list [--blocking-only]
@@ -38,6 +38,25 @@ USAGE
   --blocking  the loop cannot proceed until this is done. Default is ASYNC: the loop keeps
               going and the human picks it up when convenient, which is the normal case and
               the reason this file exists at all.
+
+--category IS THE ADMISSION TEST, and it is why this file stays short. Operator ruling
+2026-09-09: this page holds ONLY "active open actions waiting for the human operator (decisions,
+approval, credential grants etc)". The set below is closed ON PURPOSE and is the same list the
+work-autonomously stance already uses: NAME THE OPERATOR-ONLY THING THIS ITEM NEEDS, and if none
+of these is it, the item was never theirs — it is yours, so go and do it.
+
+  decision      a judgement only they can make (a new risk accepted, a policy, a trade-off)
+  approval      permission for an act you are otherwise able to perform
+  credential    a secret, a login, a token, an account only they hold
+  access        someone else's machine or account you genuinely cannot reach
+  irreversible  an outward-facing or unrecoverable act (prod, publishing, spend, a merge you
+                are not authorised for)
+  attention     a real dead end after memory, the codebase, the internet and the docs
+
+⛔ WHAT IS NOT AN ITEM, however true it is: an FYI · a status report · "nothing to do unless you
+want it sooner" · a thing you have already done · a defect you are able to fix · a wait for a
+timer or a rate limit. Those go in the notes, the journal, or the report. An item nobody has to
+ACT on trains the reader to skim the ones they do.
 
 IDS ARE THE DEDUPE KEY. Re-adding an existing id UPDATES that entry in place rather than
 appending a second copy. A loop that runs for six hours and re-derives the same blocker every
@@ -51,6 +70,17 @@ from datetime import datetime, timezone
 
 FILENAME = "operator-todo.md"
 
+# The closed set. Deliberately the same list work-autonomously uses for "what stays the
+# operator's", so an item that fits none of these is one the agent should have done itself.
+CATEGORIES = {
+    "decision": "a judgement only they can make",
+    "approval": "permission for an act you can otherwise perform",
+    "credential": "a secret, login or account only they hold",
+    "access": "someone else's machine or account you cannot reach",
+    "irreversible": "an outward-facing or unrecoverable act",
+    "attention": "a real dead end, after the toolchain",
+}
+
 HEADER = """# Operator TODO
 
 <!-- MAINTAINED BY THE AGENT (df-governed / df-operator-todo). This is your queue, not a log.
@@ -61,7 +91,13 @@ HEADER = """# Operator TODO
 
      You can work these in any order, asynchronously; the loop keeps running without you unless
      an item is marked BLOCKING. Delete a line yourself the moment it is done, or tell the agent
-     and it will — but it will not remove one on a guess. -->
+     and it will — but it will not remove one on a guess.
+
+     EVERY LINE HERE IS AN ACTION WAITING ON YOU — a decision, an approval, a credential, access
+     to a machine that is not ours, an irreversible act, or your judgement on a real dead end.
+     Nothing else is admitted: no status, no FYI, no "nothing to do unless you want it sooner".
+     If a line does not need you to DO something, it is a defect on this page — say so and it
+     goes. (Operator ruling 2026-09-09.) -->
 """
 
 BLOCKING_H = "## ⛔ Blocking — the loop is stopped until you do these"
@@ -137,7 +173,7 @@ def cmd_add(a):
     path = todo_path(a.file)
     blocking, async_ = parse(path)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    rest = f"**{a.task}** · _why it is yours:_ {a.why} · _do:_ {a.do}"
+    rest = f"**{a.task}** · _yours because:_ **{a.category}** — {a.why} · _do:_ {a.do}"
     if a.ref:
         rest += f" · _ref:_ {a.ref}"
     rest += f" · _raised {stamp}_"
@@ -193,7 +229,9 @@ def main():
     a = sub.add_parser("add", help="record or update one task the operator owes")
     a.add_argument("--id", required=True)
     a.add_argument("--task", required=True)
-    a.add_argument("--why", required=True, help="which operator-only category makes this theirs")
+    a.add_argument("--category", required=True, choices=sorted(CATEGORIES),
+                   help="the operator-only thing this needs; if none fits, the item is YOURS")
+    a.add_argument("--why", required=True, help="why that category applies, in this case")
     a.add_argument("--do", required=True, dest="do", help="the exact command, PR number or URL")
     a.add_argument("--ref")
     a.add_argument("--blocking", action="store_true")
