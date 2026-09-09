@@ -359,6 +359,70 @@ PLAN_JSON="${OUTS1#*PLAN }"; PLAN_JSON="${PLAN_JSON%%$'\n'*}"
 if DISALLOW_HAS "mcp__a_b_c-d__*"; then ok "S1 'a.b c-d' sanitises to 'a_b_c-d' (dot and space fold, hyphen survives)"
 else bad "S1 'a.b c-d' sanitises to 'a_b_c-d'" "absent: $PLAN_JSON"; fi
 
+echo ""
+# ══ --session-deny: every estate ANY record in the kit names, this record does not ══════
+# ⛔ MEASURED 2026-09-09. A Coder workspace of one estate signed into a claude.ai account that
+# also carried another estate's connector; the connector appears in NO file on the box, so a
+# hand-rolled `claude -p` (not the worker path above) reached it with zero denials. This mode
+# writes the SAME kind of list `other_estates()` computes for a worker, but across every
+# profile the resolved record has — not scoped to one — for a session that is not either.
+SD_ROOT="$WORK/sdkit"
+mkdir -p "$SD_ROOT/instances/x"
+cat > "$SD_ROOT/root.lock.json" <<'JSON'
+{"mcp": {"profiles": {
+  "a": {"kind": "hubs", "servers": ["hub-a", "hub-a-dev"]},
+  "b": {"kind": "connector", "servers": ["claude.ai Estate B"]}
+}}}
+JSON
+cat > "$SD_ROOT/instances/x/loom.lock.json" <<'JSON'
+{"mcp": {"profiles": {"a": {"kind": "hubs", "servers": ["hub-a", "hub-a-dev"]}}}}
+JSON
+
+echo "=== SD1: instance x resolved -- root names an estate x does not, denied ==="
+SD1OUT="$(python3 "$GATE" --session-deny "$WORK/sd1.json" --lock "$SD_ROOT/instances/x/loom.lock.json" --kit-root "$SD_ROOT" 2>&1)"; SD1RC=$?
+if [ "$SD1RC" -eq 0 ]; then ok "SD1 exits 0"; else bad "SD1 exits 0" "rc=$SD1RC: $SD1OUT"; fi
+SD1BODY="$(cat "$WORK/sd1.json" 2>/dev/null)"
+EXPECT1='{
+  "deniedMcpServers": [
+    {
+      "serverName": "claude.ai Estate B"
+    }
+  ]
+}'
+if [ "$SD1BODY" = "$(printf '%s\n' "$EXPECT1")" ]; then ok "SD1 writes exactly one denied server, sorted, indent=2, trailing newline"
+else bad "SD1 exact file content" "got: $SD1BODY"; fi
+contains "SD1 stderr names the root record as the source" "$SD_ROOT/root.lock.json" "$SD1OUT"
+contains "SD1 stderr names the denied server" "claude.ai Estate B" "$SD1OUT"
+
+echo "=== SD2: the root record itself resolved -- empty list, exit 0 ==="
+SD2OUT="$(python3 "$GATE" --session-deny "$WORK/sd2.json" --lock "$SD_ROOT/root.lock.json" --kit-root "$SD_ROOT" 2>&1)"; SD2RC=$?
+if [ "$SD2RC" -eq 0 ]; then ok "SD2 exits 0"; else bad "SD2 exits 0" "rc=$SD2RC: $SD2OUT"; fi
+SD2BODY="$(cat "$WORK/sd2.json" 2>/dev/null)"
+if python3 -c "import json,sys; d=json.load(open('$WORK/sd2.json')); sys.exit(0 if d.get('deniedMcpServers')==[] else 1)"
+then ok "SD2 the list is empty"; else bad "SD2 the list is empty" "got: $SD2BODY"; fi
+
+echo "=== SD3: no --lock, LOOM_LOCK set -- same as SD1 ==="
+SD3OUT="$(env -u LOOM_LOCK LOOM_LOCK="$SD_ROOT/instances/x/loom.lock.json" python3 "$GATE" \
+          --session-deny "$WORK/sd3.json" --kit-root "$SD_ROOT" 2>&1)"; SD3RC=$?
+if [ "$SD3RC" -eq 0 ]; then ok "SD3 LOOM_LOCK alone: exits 0"; else bad "SD3 exits 0" "rc=$SD3RC: $SD3OUT"; fi
+contains "SD3 LOOM_LOCK alone: the denied server matches SD1" '"claude.ai Estate B"' "$(cat "$WORK/sd3.json" 2>/dev/null)"
+
+echo "=== SD4: a kit with one record only -- empty list + the WARN line ==="
+SD4_ROOT="$WORK/sdsolo"
+mkdir -p "$SD4_ROOT"
+cp "$SD_ROOT/root.lock.json" "$SD4_ROOT/loom.lock.json"
+SD4OUT="$(python3 "$GATE" --session-deny "$WORK/sd4.json" --lock "$SD4_ROOT/loom.lock.json" --kit-root "$SD4_ROOT" 2>&1)"; SD4RC=$?
+if [ "$SD4RC" -eq 0 ]; then ok "SD4 exits 0"; else bad "SD4 exits 0" "rc=$SD4RC: $SD4OUT"; fi
+if python3 -c "import json,sys; d=json.load(open('$WORK/sd4.json')); sys.exit(0 if d.get('deniedMcpServers')==[] else 1)"
+then ok "SD4 the list is empty"; else bad "SD4 the list is empty" "got: $(cat "$WORK/sd4.json")"; fi
+contains "SD4 the WARN line: no other record to compare against" "WARN no other record under" "$SD4OUT"
+
+echo "=== SD5: neither --profile nor --session-deny -- non-zero, names both flags ==="
+SD5OUT="$(python3 "$GATE" 2>&1)"; SD5RC=$?
+if [ "$SD5RC" -ne 0 ]; then ok "SD5 exits non-zero"; else bad "SD5 exits non-zero" "rc=0"; fi
+contains "SD5 the message names --profile" "--profile" "$SD5OUT"
+contains "SD5 the message names --session-deny" "--session-deny" "$SD5OUT"
+
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]

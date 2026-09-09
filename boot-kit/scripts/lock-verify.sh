@@ -21,6 +21,9 @@
 #   L13 every estate's declared MCP source (a hub set, or a claude.ai connector) is present
 #   L14 every declared marketplace plugin is installed, enabled, and still the version
 #       install.sh recorded — the only drift signal available for something unpinnable
+#   L15 every estate ANY record in the kit names, that THIS record does not, is denied for a
+#       SESSION here too — the same rule other_estates() applies to a worker, applied to the
+#       live settings a hand-rolled `claude` session actually reads
 #
 # L8/L9 added 2026-08-29. L1..L7 could all pass on a machine that boots with no identity and
 # no memory, because the hooks supplying those were in no lockfile (L8) or in one and wired
@@ -981,6 +984,33 @@ echo ""
 echo "[L13] estate MCP declared and present"
 CLAUDE_JSON="${LOOM_CLAUDE_JSON:-$HOME/.claude.json}"
 CLAUDE_BIN="${LOCK_VERIFY_CLAUDE_BIN:-claude}"
+
+# ⛔ MEASUREMENT PROVENANCE, added because a project-scope `.mcp.json` server's approval is
+# per DIRECTORY, stored in the workspace-LOCAL `~/.claude.json` -- so an operator who approved
+# a server in one directory and a DRIFT printed by a check run from another are two different
+# facts about two different places, and until now a DRIFT here named neither. `cwd` says where
+# THIS run measured from; the approval map says every directory THIS machine's ~/.claude.json
+# actually has an approval recorded in, so the two can be told apart at a glance instead of
+# re-derived by hand after the fact.
+l13_provenance() {  # $1 = what was read/run to produce this drift (a file list or a command)
+  note "measured from cwd: $PWD; listing/config read: $1"
+  L13_APPROVED=""
+  if [ -f "$CLAUDE_JSON" ]; then
+    L13_APPROVED="$(jq -r '
+      (.projects // {}) | to_entries[]
+      | select((.value.enabledMcpjsonServers // []) | length > 0)
+      | [.key, (.value.enabledMcpjsonServers | join(", "))] | @tsv
+    ' "$CLAUDE_JSON" 2>/dev/null)"
+  fi
+  if [ -n "$L13_APPROVED" ]; then
+    while IFS=$'\t' read -r l13dir l13names; do
+      [ -n "$l13dir" ] || continue
+      note "approved in $l13dir: $l13names"
+    done <<<"$L13_APPROVED"
+  else
+    note "no directory in $CLAUDE_JSON has enabledMcpjsonServers — nothing is approved anywhere on this box"
+  fi
+}
 L13_PROFILES="$(jq -r '(.mcp.profiles // {}) | keys[] | select(startswith("$") | not)' "$LOCK")"
 if [ -z "$L13_PROFILES" ]; then
   note "L13 mcp.profiles undeclared — prefix rule in force; declare it to make each estate's MCP source verifiable"
@@ -1025,6 +1055,7 @@ else
         if [ -n "$L13BAD" ]; then
           drift "L13 profile $prof (hubs): server(s) not found in any of: $L13_SEARCHED"
           printf '%s' "$L13BAD" | while read -r n; do [ -n "$n" ] && note "$n"; done
+          l13_provenance "$L13_SEARCHED"
           note "⚠️ On a PROVISIONED box (Coder), hub config is materialised from shared storage"
           note "   into ~/.mcp.json and is NOT hand-merged into ~/.claude.json. If that is this"
           note "   machine, the right record is kind: \"connector\" -- which verifies the LIVE"
@@ -1056,6 +1087,7 @@ else
             pass "L13 profile $prof (connector): $srv is Connected"
           else
             drift "L13 profile $prof (connector): no line starting with '$srv' and containing Connected in '$CLAUDE_BIN mcp list'"
+            l13_provenance "'$CLAUDE_BIN mcp list'"
             # ⚠️ THE APPROVAL CAVEAT, and it is the most likely cause of this line on a freshly
             # provisioned box. Servers declared in a project-scope .mcp.json arrive as
             # "Pending approval", not Connected. Approval happens ONCE, INTERACTIVELY, in a real
@@ -1150,6 +1182,72 @@ else
         pass "L14 $l14id: enabled, version $l14now — unchanged since install"
       fi
     done < <(jq -c '(.install.marketplacePlugins // [])[]' "$LOCK")
+  fi
+fi
+
+echo ""
+
+# ---- L15: session deny list — estates other records name, this one does not -----------
+# ADDED alongside the session-deny delivery path (mcp-profile-config.py --session-deny,
+# wire-settings.py --deny-file, rehydrate.sh step 4b). L13 above verifies THIS machine's own
+# declared MCP source; it says nothing about every OTHER estate the kit's records name. This
+# layer is the check that rehydrate.sh step 4b's write actually took: derive the SAME list a
+# session should deny, then read the LIVE settings back and confirm each entry is really
+# there — a derivation with nothing to compare it against would just be a second copy of the
+# same claim, so both the tmp file this layer writes and the settings files are always read
+# fresh, not from what an earlier layer already loaded.
+echo "[L15] session deny list"
+if ! command -v python3 >/dev/null 2>&1; then
+  unknown "L15 session deny: python3 required — could not derive the list"
+else
+  L15_MPC="$SELFDIR/mcp-profile-config.py"
+  if [ ! -f "$L15_MPC" ]; then
+    unknown "L15 session deny: mcp-profile-config.py not beside this script — could not derive the list"
+  else
+    L15_TMP="$(mktemp "${TMPDIR:-/tmp}/l15-session-deny.XXXXXX.json")"
+    # ⚠️ $REPO, NOT $ROOT. $ROOT is the directory holding whichever lockfile --lock named --
+    # for an INSTANCE lockfile that is $ROOT/instances/x, one level too deep to see the root
+    # lockfile or any sibling instance beside it. $REPO is the engine root this whole file
+    # already climbs to once, at the top (the same directory L10 resolves `local:` sources
+    # against) -- and it is exactly the directory kit_records() expects: root *.lock.json
+    # files directly under it, instances/*/loom.lock.json beneath that.
+    L15_ERR="$(python3 "$L15_MPC" --session-deny "$L15_TMP" --lock "$LOCK" --kit-root "$REPO" 2>&1 >/dev/null)"
+    L15_RC=$?
+    if [ "$L15_RC" -ne 0 ]; then
+      L15_FIRST="$(printf '%s\n' "$L15_ERR" | head -1)"
+      unknown "L15 session deny: could not derive the list — $L15_FIRST"
+    else
+      L15_WANT="$(jq -r '(.deniedMcpServers // [])[].serverName // empty' "$L15_TMP" 2>/dev/null)"
+      if [ -z "$L15_WANT" ]; then
+        pass "L15 session deny: nothing to deny (no other record names an estate this one does not)"
+      else
+        # UNION of settings.json and settings.local.json — deniedMcpServers merges from every
+        # settings scope, so a name present in either is denied for the session, not just one.
+        L15_HAVE="$(
+          { [ -f "$LIVE/settings.json" ] && jq -r '(.deniedMcpServers // [])[].serverName // empty' "$LIVE/settings.json" 2>/dev/null
+            [ -f "$LIVE/settings.local.json" ] && jq -r '(.deniedMcpServers // [])[].serverName // empty' "$LIVE/settings.local.json" 2>/dev/null
+          } | sort -u
+        )"
+        L15_N=0
+        L15_MISSING=""
+        while IFS= read -r l15name; do
+          [ -n "$l15name" ] || continue
+          L15_N=$((L15_N + 1))
+          if ! grep -qxF "$l15name" <<<"$L15_HAVE"; then
+            L15_MISSING="$L15_MISSING$l15name"$'\n'
+          fi
+        done <<<"$L15_WANT"
+        if [ -z "$L15_MISSING" ]; then
+          pass "L15 session deny: $L15_N server(s) other records name are denied for sessions here"
+        else
+          L15_M="$(printf '%s' "$L15_MISSING" | grep -c .)"
+          drift "L15 session deny: $L15_M server(s) other records name are NOT denied for sessions here"
+          printf '%s' "$L15_MISSING" | while IFS= read -r l15m; do [ -n "$l15m" ] && note "$l15m"; done
+          note "rehydrate.sh step 4b / install.sh writes them; until then a hand-rolled session here can reach them"
+        fi
+      fi
+    fi
+    rm -f "$L15_TMP"
   fi
 fi
 

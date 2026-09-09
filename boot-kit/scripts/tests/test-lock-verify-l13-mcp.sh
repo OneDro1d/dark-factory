@@ -120,6 +120,51 @@ absent   "F: never reported as drift"      "DRIFT L13 profile eso"              
 absent   "F: never reported as a pass"     "PASS  L13 profile eso"              "$lf"
 
 echo ""
+# ══ AP: measurement provenance — WHERE this was measured, and what IS approved anywhere ═══
+# ⛔ WHY. A project-scope `.mcp.json` server's approval is per DIRECTORY, stored in the
+# workspace-LOCAL ~/.claude.json. A DRIFT here and an approval an operator remembers granting
+# are two different facts about two different places until the DRIFT itself says which
+# directory it looked at and which directories, if any, actually have an approval recorded.
+mkinst_cd() { # $1 = dir -> mkinst, then a nested subdir to run FROM (so cwd != $1)
+  mkinst "$1"; mkdir -p "$1/somewhere/deep"
+}
+
+echo "=== G: connector DRIFT names cwd and the approval map (one dir approved) ==="
+G="$TMP/g"; mkinst_cd "$G"
+jq -n '{vendorDir:"vendor", upstreams:{}, mcp:{profiles:{eso:{kind:"connector", servers:["claude.ai Example"], toolPrefix:"mcp__claude_ai_Example__"}}}}' \
+  > "$G/loom.lock.json"
+CLAUDEJSON_G="$G/claude.json"
+jq -n '{projects: {"/some/dir": {enabledMcpjsonServers: ["onedroid"]}}}' > "$CLAUDEJSON_G"
+outG="$(cd "$G/somewhere/deep" && LOOM_CLAUDE_JSON="$CLAUDEJSON_G" LOCK_VERIFY_CLAUDE_BIN="$STUB_ABSENT" bash "$LV" --lock="../../loom.lock.json" 2>&1)"
+lg="$(l13_block "$outG")"
+contains "G: names the measuring cwd"              "measured from cwd: $G/somewhere/deep" "$lg"
+contains "G: names the approved directory"         "/some/dir"                            "$lg"
+contains "G: names the approved server"            "onedroid"                             "$lg"
+contains "G: the approval line has the right shape" "approved in /some/dir: onedroid"      "$lg"
+
+echo "=== H: no approvals anywhere -> the 'nothing is approved' note ==="
+H="$TMP/h"; mkinst "$H"
+jq -n '{vendorDir:"vendor", upstreams:{}, mcp:{profiles:{eso:{kind:"connector", servers:["claude.ai Example"], toolPrefix:"mcp__claude_ai_Example__"}}}}' \
+  > "$H/loom.lock.json"
+CLAUDEJSON_H="$H/claude.json"
+jq -n '{projects: {}}' > "$CLAUDEJSON_H"
+outH="$(cd "$H" && LOOM_CLAUDE_JSON="$CLAUDEJSON_H" LOCK_VERIFY_CLAUDE_BIN="$STUB_ABSENT" bash "$LV" --lock=loom.lock.json 2>&1)"
+lh="$(l13_block "$outH")"
+contains "H: the nothing-approved note appears"    "nothing is approved anywhere on this box" "$lh"
+absent   "H: no fabricated approval line"          "approved in"                              "$lh"
+
+echo "=== I: kind hubs DRIFT also carries provenance ==="
+I="$TMP/i"; mkinst "$I"
+jq -n '{vendorDir:"vendor", upstreams:{}, mcp:{profiles:{onedroid:{kind:"hubs", servers:["ghost-hub"]}}}}' \
+  > "$I/loom.lock.json"
+CLAUDEJSON_I="$I/claude.json"
+jq -n '{mcpServers:{}, projects: {}}' > "$CLAUDEJSON_I"
+outI="$(cd "$I" && LOOM_CLAUDE_JSON="$CLAUDEJSON_I" bash "$LV" --lock=loom.lock.json 2>&1)"
+li="$(l13_block "$outI")"
+contains "I: hubs drift also names the measuring cwd" "measured from cwd: $I" "$li"
+contains "I: hubs drift also carries the nothing-approved note" "nothing is approved anywhere" "$li"
+
+echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1

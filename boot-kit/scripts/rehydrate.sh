@@ -440,6 +440,58 @@ else
     || say "  WARN  wire-settings refused — see above"
 fi
 
+# ---- 4b. session deny list ---------------------------------------------------
+# ⛔ MEASURED 2026-09-09. A Coder workspace of one estate signs into a claude.ai account that
+# also carries ANOTHER estate's connector. The connector appears in NO file on the box, so
+# nothing the kit installs today reaches a SESSION (interactive or hand-rolled) with that
+# other estate denied -- df-worker's own scoping is per-worker, not per-session. This step
+# derives the same rule other_estates() already applies to a worker -- every estate ANY
+# record in the kit names, that THIS record does not, must be denied -- and wires it into the
+# SESSION settings the same way section 4 wires hooks: merge, backup, never clobber.
+say ""
+say "== 4b. session deny list — estates other records name, this one does not =="
+MPC="$SELFDIR/mcp-profile-config.py"
+if [ ! -f "$MPC" ]; then
+  say "  WARN  mcp-profile-config.py not beside this script — session deny list not derived"
+else
+  # ⚠️ SAME PRECEDENCE mcp-profile-config.py's own resolver gives --lock/LOOM_LOCK/auto. On a
+  # VENDORED kit shared by several machines (this repo's own root loom.lock.json belongs to
+  # one of them, e.g. the laptop), a Coder instance's rehydrate run needs to derive the deny
+  # list from ITS OWN record -- instances/<name>/loom.lock.json -- not the root's. --kit-root
+  # stays $ROOT so the comparison still sees every record the kit holds, root and instances/*
+  # alike (the shape kit_records() and other_estates() already assume).
+  SD_LOCK="${LOOM_LOCK:-$LOCK}"
+  case "$SD_LOCK" in
+    /*) : ;;
+    *)  SD_LOCK="$ROOT/$SD_LOCK" ;;
+  esac
+  SD_TMP="$(mktemp "${TMPDIR:-/tmp}/session-deny.XXXXXX.json")"
+  SD_ERR="$(python3 "$MPC" --session-deny "$SD_TMP" --lock "$SD_LOCK" --kit-root "$ROOT" 2>&1 >/dev/null)"
+  SD_RC=$?
+  [ -n "$SD_ERR" ] && printf '%s\n' "$SD_ERR" | while IFS= read -r sdline; do say "  $sdline"; done
+  if [ "$SD_RC" -ne 0 ]; then
+    say "  WARN  session deny list not derived — see above; sessions on this box are scoped by NOTHING the kit installs"
+  else
+    SD_COUNT="$(jq -r '(.deniedMcpServers // []) | length' "$SD_TMP" 2>/dev/null)"
+    if [ -z "$SD_COUNT" ] || [ "$SD_COUNT" -eq 0 ]; then
+      say "  nothing to deny: no other record names an estate this one does not"
+    elif [ ! -f "$WS" ]; then
+      say "  WARN  wire-settings.py not beside this script — session deny list derived but NOT wired"
+    elif [ -z "$TPL" ]; then
+      say "  WARN  no settings template in this kit — session deny list derived but NOT wired"
+    elif [ "$DRY" -eq 1 ]; then
+      python3 "$WS" --template "$TPL" --live "$LIVE/settings.json" --home "$HOME" \
+              --lock "$LOCK" --deny-file "$SD_TMP" --dry-run 2>&1 \
+        | while IFS= read -r sdline; do say "  $sdline"; done
+    else
+      python3 "$WS" --template "$TPL" --live "$LIVE/settings.json" --home "$HOME" \
+              --lock "$LOCK" --deny-file "$SD_TMP" 2>&1 \
+        | while IFS= read -r sdline; do say "  $sdline"; done
+    fi
+  fi
+  rm -f "$SD_TMP"
+fi
+
 # ⚠️ Same shape as section 4, and for the same reason. `.gitattributes` in a notepad only NAMES
 # a merge driver; git will not run one it has no config for. The registration first shipped
 # inside the agent-notepad PLUGIN's installer — which nothing on this fleet executes — so it

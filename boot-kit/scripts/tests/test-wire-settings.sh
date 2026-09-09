@@ -207,6 +207,96 @@ contains "J: --prune-broken says what it removed"   "PRUNED"               "$O"
 absent   "J: the broken entry is gone"              "ghost-that-is-absent" "$(cat "$L3")"
 contains "J: the entry whose file EXISTS survives"  "gate.py"              "$(cat "$L3")"
 
+echo "=== K: --deny-file — add-only merge into top-level deniedMcpServers ==="
+# ⛔ MEASURED 2026-09-09, the same day session-deny shipped: mcp-profile-config.py can DERIVE
+# the list of estates a session must not reach, but nothing WROTE it into settings.json —
+# exactly the two-acts problem hooks already had (declared/installed is not wired). This
+# closes the same gap for `deniedMcpServers`.
+DENYFILE="$T/deny.json"
+cat > "$DENYFILE" <<'JSON'
+{"deniedMcpServers": [{"serverName": "claude.ai Estate B"}, {"serverUrl": "https://hub-c/mcp"}]}
+JSON
+# A template with no hooks at all, so every assertion below is about the deny key alone.
+NOHOOK_TMPL="$T/tmpl-nohook.json"
+cat > "$NOHOOK_TMPL" <<'JSON'
+{ "hooks": {} }
+JSON
+run_deny() { python3 "$W8" --template "$NOHOOK_TMPL" --live "$1" --home "$H" --deny-file "$DENYFILE" ${2:-} 2>&1; }
+
+echo "--- DN1: live file without the key + a deny file of two entries ---"
+K1="$T/k1.json"
+cat > "$K1" <<'JSON'
+{ "hooks": {} }
+JSON
+O="$(run_deny "$K1")"
+contains "DN1: the backup is written"                "backup:"                         "$O"
+contains "DN1: the first entry is reported added"    "+ deniedMcpServers serverName=claude.ai Estate B" "$O"
+contains "DN1: the second entry is reported added"   "+ deniedMcpServers serverUrl=https://hub-c/mcp"   "$O"
+contains "DN1: the summary names both"               "denied 2 server(s)"              "$O"
+contains "DN1: the first entry lands in the file"    "claude.ai Estate B"              "$(cat "$K1")"
+contains "DN1: the second entry lands in the file"   "https://hub-c/mcp"               "$(cat "$K1")"
+BK1="$(ls "$T"/k1.json.bak.* 2>/dev/null | head -1)"
+[ -n "$BK1" ] && ok "DN1: a backup file exists" || bad "DN1: a backup file exists" "none written"
+
+echo "--- DN2: run again — no change, file byte-identical ---"
+BEFORE_K1="$(cat "$K1")"
+O="$(run_deny "$K1")"
+contains "DN2: says no change"           "already denied — no change" "$O"
+absent   "DN2: nothing reported added"   "+ deniedMcpServers"          "$O"
+AFTER_K1="$(cat "$K1")"
+[ "$BEFORE_K1" = "$AFTER_K1" ] && ok "DN2: the file is byte-identical" || bad "DN2: the file is byte-identical" "it changed"
+
+echo "--- DN3: one of the two already present, different order — only the missing one is added ---"
+K3="$T/k3.json"
+cat > "$K3" <<'JSON'
+{ "hooks": {}, "deniedMcpServers": [{"serverUrl": "https://hub-c/mcp"}] }
+JSON
+O="$(run_deny "$K3")"
+contains "DN3: only the missing entry is reported"     "+ deniedMcpServers serverName=claude.ai Estate B" "$O"
+absent   "DN3: the already-present entry is not re-added" "+ deniedMcpServers serverUrl=https://hub-c/mcp" "$O"
+BODY_K3="$(cat "$K3")"
+contains "DN3: the pre-existing entry keeps its position first" \
+         '"serverUrl": "https://hub-c/mcp"' "$BODY_K3"
+contains "DN3: the new entry is appended" "claude.ai Estate B" "$BODY_K3"
+
+echo "--- DN4: --dry-run reports the additions and changes nothing ---"
+K4="$T/k4.json"
+cat > "$K4" <<'JSON'
+{ "hooks": {} }
+JSON
+BEFORE_K4="$(cat "$K4")"
+O="$(run_deny "$K4" --dry-run)"
+contains "DN4: reports the additions"        "+ deniedMcpServers serverName=claude.ai Estate B" "$O"
+contains "DN4: the summary carries the dry-run suffix" "denied 2 server(s) (dry run — nothing written)" "$O"
+AFTER_K4="$(cat "$K4")"
+[ "$BEFORE_K4" = "$AFTER_K4" ] && ok "DN4: the file is unchanged" || bad "DN4: the file is unchanged" "--dry-run wrote to disk"
+
+echo "--- DN5: a malformed entry — FATAL, nothing written ---"
+BADDENY="$T/bad-deny.json"
+cat > "$BADDENY" <<'JSON'
+{"deniedMcpServers": [{"name": "x"}]}
+JSON
+K5="$T/k5.json"
+cat > "$K5" <<'JSON'
+{ "hooks": {} }
+JSON
+BEFORE_K5="$(cat "$K5")"
+O="$(python3 "$W8" --template "$NOHOOK_TMPL" --live "$K5" --home "$H" --deny-file "$BADDENY" 2>&1)"; RC=$?
+if [ "$RC" -ne 0 ]; then ok "DN5: exits non-zero"; else bad "DN5: exits non-zero" "rc=0"; fi
+contains "DN5: FATAL names the malformed shape" "FATAL" "$O"
+AFTER_K5="$(cat "$K5")"
+[ "$BEFORE_K5" = "$AFTER_K5" ] && ok "DN5: nothing written to the live file" || bad "DN5: nothing written to the live file" "it changed"
+ls "$T"/k5.json.bak.* >/dev/null 2>&1 && bad "DN5: no backup either" "a backup was written" || ok "DN5: no backup either"
+
+echo "--- DN6: no live file — the seeded file carries the entries ---"
+K6="$T/k6.json"
+O="$(run_deny "$K6")"
+contains "DN6: still says it wrote the (no-hook) rendered template" "no live settings.json" "$O"
+contains "DN6: reports the additions too"    "+ deniedMcpServers serverName=claude.ai Estate B" "$O"
+BODY_K6="$(cat "$K6" 2>/dev/null)"
+contains "DN6: the seeded file carries the first entry"  "claude.ai Estate B"  "$BODY_K6"
+contains "DN6: the seeded file carries the second entry" "https://hub-c/mcp"  "$BODY_K6"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"

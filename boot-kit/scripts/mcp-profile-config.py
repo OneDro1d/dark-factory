@@ -56,8 +56,18 @@ fact worth surfacing) -- `df-preflight --profile <p>` proposes the entry once it
 
 Usage: mcp-profile-config.py --profile <name> --out <file>
            [--config ~/.claude.json] [--lock <instance-lockfile>]
+       mcp-profile-config.py --session-deny <out> [--lock <instance-lockfile>] [--kit-root <dir>]
 Exit 0 with either a written file OR a printed PLAN line, or non-zero with neither and a
 reason on stderr.
+
+⚠️ SD: --session-deny IS A DIFFERENT QUESTION FROM A WORKER PLAN. A worker plan (above) scopes
+ONE profile's launch. --session-deny answers "what must a hand-rolled, INTERACTIVE session on
+this machine deny" — every server name ANY OTHER record in the kit names, that THIS machine's
+OWN record does not. MEASURED 2026-09-09: a Coder workspace signed into a claude.ai account
+that also carried another estate's connector; the connector appears in NO file on the box, so
+nothing the kit's worker path denies reaches a plain `claude -p` or an interactive session at
+all. This mode writes `{"deniedMcpServers": [...]}` for `wire-settings.py --deny-file` to merge
+into `~/.claude/settings.json` — the same delivery path that already wires hooks.
 """
 import argparse
 import json
@@ -88,6 +98,13 @@ def sanitise_name(name):
     return NAME_SANITISE.sub("_", name or "")
 
 
+def default_kit_root():
+    """Two levels above THIS file — the same default resolve_machine_lock uses when no
+    --kit-root is given. Extracted so --session-deny can name the same directory in its
+    "no record resolves" refusal that resolve_machine_lock silently fell back to."""
+    return os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
+
+
 def resolve_machine_lock(kit_root=None):
     """Which instance lockfile describes THIS machine -- the same SMALL rule df-preflight's
     find_lock() applies, reimplemented rather than imported (this script stays standalone;
@@ -107,7 +124,7 @@ def resolve_machine_lock(kit_root=None):
     # from a kit's vendored shim. df-worker therefore passes --kit-root (the directory
     # df-mission on PATH really lives under); the default stays for direct invocations.
     if not kit_root:
-        kit_root = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
+        kit_root = default_kit_root()
     cands = kit_records(kit_root)
     if not cands:
         return None
@@ -323,10 +340,79 @@ def write_config(keep, out_path, profile, empty_detail):
     return 0
 
 
+def cmd_session_deny(a):
+    """--session-deny <out>: every server ANY other record in the kit names, that THIS
+    machine's own record does not -- the rule other_estates() already applies to a worker's
+    ONE profile, applied here across ALL of the resolved record's profiles at once, for a
+    session that is not scoped to any single profile at all.
+
+    Resolved exactly as the connector path resolves it: --lock, else LOOM_LOCK, else
+    resolve_machine_lock(--kit-root). Kit root for the comparison: --kit-root if given, else
+    kit_root_of(resolved path)."""
+    lock_path = a.lock or os.environ.get("LOOM_LOCK") or resolve_machine_lock(a.kit_root)
+    if not lock_path:
+        kroot = a.kit_root or default_kit_root()
+        print("mcp-profile-config: --session-deny: no record resolves for this machine under %s"
+              % kroot, file=sys.stderr)
+        return 4
+
+    try:
+        with open(lock_path, encoding="utf-8") as fh:
+            resolved_lock = json.load(fh) or {}
+    except Exception as e:
+        print("mcp-profile-config: cannot read --lock %s: %s" % (lock_path, e), file=sys.stderr)
+        return 2
+
+    kit_root = a.kit_root or kit_root_of(lock_path)
+
+    own = set()
+    for pentry in ((resolved_lock.get("mcp") or {}).get("profiles") or {}).values():
+        for s in (pentry or {}).get("servers") or []:
+            own.add(s)
+
+    other_paths = [p for p in kit_records(kit_root)
+                   if os.path.abspath(p) != os.path.abspath(lock_path)]
+    others = {}  # server name -> the other record path that names it (first one wins)
+    for path in other_paths:
+        try:
+            rec = _load_json_quiet(path)
+        except Exception as e:
+            print("mcp-profile-config: WARN --session-deny: cannot parse %s: %s -- skipped"
+                  % (path, e), file=sys.stderr)
+            continue
+        for pentry in ((rec.get("mcp") or {}).get("profiles") or {}).values():
+            for s in (pentry or {}).get("servers") or []:
+                if s not in own and s not in others:
+                    others[s] = path
+
+    out = {"deniedMcpServers": [{"serverName": n} for n in sorted(others)]}
+    tmp = a.session_deny + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(out, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, a.session_deny)
+
+    print("session-deny: %d server(s) named by %d other record(s) and not by %s"
+          % (len(others), len(other_paths), lock_path), file=sys.stderr)
+    for name in sorted(others):
+        print("  deny %s  (named by %s)" % (name, others[name]), file=sys.stderr)
+    if not other_paths:
+        print("session-deny: WARN no other record under %s — nothing to compare against"
+              % kit_root, file=sys.stderr)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--profile", required=True)
-    ap.add_argument("--out", required=True)
+    # ⚠️ NO LONGER required=True. --session-deny is a whole other mode that needs neither
+    # --profile nor --out; the manual check right after parsing enforces "one of the two"
+    # with a message clear enough that argparse's own auto-generated one was not.
+    ap.add_argument("--profile", default=None)
+    ap.add_argument("--out", default=None)
+    ap.add_argument("--session-deny", default=None, metavar="OUT",
+                     help="write {\"deniedMcpServers\": [...]} for wire-settings.py --deny-file "
+                          "instead of a worker's --mcp-config, and exit -- --profile/--out are "
+                          "not used in this mode")
     ap.add_argument("--config", default=os.path.expanduser("~/.claude.json"))
     ap.add_argument("--lock", default=None,
                      help="instance lockfile to read mcp.profiles from (else auto-resolved "
@@ -336,6 +422,14 @@ def main():
                           "levels above this file -- wrong when this file is the VENDORED copy; "
                           "df-worker passes the root df-mission on PATH lives under)")
     a = ap.parse_args()
+
+    if a.session_deny is not None:
+        return cmd_session_deny(a)
+
+    if not a.profile or not a.out:
+        print("mcp-profile-config: --profile and --out are required (or use --session-deny "
+              "<out> instead)", file=sys.stderr)
+        return 2
 
     # ⛔ ORDER MATTERS, and it was wrong until 2026-09-08. This used to refuse "no mcpServers"
     # HERE, before the lockfile was even read — so on a machine whose ~/.claude.json holds no
