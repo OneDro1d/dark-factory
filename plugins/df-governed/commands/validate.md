@@ -204,7 +204,7 @@ alone.
    `df-governed/bin/` expectation as `df-worker`. Then:
 
    ```sh
-   df-operator-todo add --id validate-probe --task "throwaway" --why "a decision you have not made" --do "delete this line"
+   df-operator-todo add --id validate-probe --category decision --task "throwaway" --why "a decision you have not made" --do "delete this line"
    df-operator-todo list
    df-operator-todo done --id validate-probe          # expected: REFUSED, exit 2
    df-operator-todo done --id validate-probe --by-operator

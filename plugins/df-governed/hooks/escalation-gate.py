@@ -83,7 +83,9 @@ ANSWER_FIRST = (
 # because the plugin's bin/ joins the Bash PATH.
 RECORD_THE_TODO = (
     "Then record it on the operator's page so it is not buried in a transcript: "
-    "df-operator-todo add --id <slug> --task <what> --why <category> --do <exact steps> "
+    "df-operator-todo add --id <slug> --category <decision|approval|credential|access|"
+    "irreversible|attention> --task <what> --why <why that category applies> "
+    "--do <exact steps> "
     "[--blocking]."
 )
 
