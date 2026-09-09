@@ -131,6 +131,69 @@ printf 'not json at all' | python3 "$LOAD" >/dev/null 2>&1
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
+echo ""
+echo "=== S: the sections the handoff skill DOCUMENTS satisfy the gate that reads them ==="
+# ⛔ MEASURED on FOUR separate validate runs (2026-09-08/09, laptop + Poland + homelab): the
+# skill's list said "Open threads / blockers" and handoff-completeness-gate.py requires a heading
+# matching /blocked/. "blockers" does not contain "blocked", so a handoff written exactly as
+# documented was REJECTED by the gate -- the doc and the guard disagreeing, with the doc losing.
+# Renaming the section fixes today. THIS case is what stops them drifting apart again: it builds
+# a handoff from the skill's own bullet list and drives the REAL gate over it.
+GATE="$T1/plugins/df-governed/hooks/handoff-completeness-gate.py"
+SKILL="$T1/skills/handoff/SKILL.md"
+if [ ! -f "$GATE" ] || [ ! -f "$SKILL" ]; then
+  bad "S: gate and skill both present" "missing $GATE or $SKILL"
+else
+  ok "S: gate and skill both present"
+  # Every required heading the gate enumerates, taken from the GATE itself rather than retyped:
+  # a list copied here would be the same drift one layer along.
+  REQ="$(python3 - "$GATE" <<'PY'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+block = re.search(r"CHECKS = \((.*?)\n\)", src, re.S).group(1)
+for name in re.findall(r'\(\s*"([^"]+)"\s*,\s*re\.compile', block):
+    print(name)
+PY
+)"
+  [ -n "$REQ" ] && ok "S: the gate's required-section list was read from the gate" \
+    || bad "S: the gate's required-section list was read from the gate" "empty"
+  # Build a handoff whose headings come from the SKILL's documented bullets.
+  SNP="$TMP/skillnp"; mkdir -p "$SNP/handoffs"; : > "$SNP/NOTES.md"
+  python3 - "$SKILL" "$SNP/handoffs/2026-09-09-documented.md" <<'PY'
+import re, sys
+skill, out = sys.argv[1], sys.argv[2]
+body = open(skill, encoding="utf-8").read()
+sec = re.search(r"### Suggested body sections\n(.*?)\n##", body, re.S).group(1)
+names = re.findall(r"^- \*\*(.+?)\*\*", sec, re.M)
+assert names, "no bullets parsed from the skill's section list"
+with open(out, "w", encoding="utf-8") as f:
+    f.write("# Handoff M-DOC — written exactly as skills/handoff/SKILL.md documents\n\n")
+    for n in names:
+        f.write("## %s\n\nreal content, no placeholder\n\n" % n.split(" — ")[0].strip())
+PY
+  file_ok=0; [ -s "$SNP/handoffs/2026-09-09-documented.md" ] && file_ok=1
+  [ "$file_ok" -eq 1 ] && ok "S: a handoff was built from the skill's own bullets" \
+    || bad "S: a handoff was built from the skill's own bullets" "empty file"
+  mkdir -p "$SNP/.df/missions/M-DOC"
+  printf 'RUNNING\n' > "$SNP/.df/missions/M-DOC/state"
+  printf '# M-DOC\n' > "$SNP/.df/missions/M-DOC/MISSION.md"
+  OUT_S="$(cd "$SNP" && printf '{"hook_event_name":"Stop","cwd":"%s","stop_hook_active":false}' "$SNP" \
+    | env -u CLAUDE_CODE_ENTRYPOINT python3 "$GATE" 2>&1)"
+  case "$OUT_S" in
+    *'"decision": "block"'*)
+      bad "S: the documented sections pass the gate" "$OUT_S" ;;
+    *) ok "S: the documented sections pass the gate" ;;
+  esac
+  # and the twin the plugin ships must say the same thing, or one of them is already wrong
+  TWIN="$T1/skills/agent-notepad/plugin/skills/handoff/SKILL.md"
+  if [ -f "$TWIN" ]; then
+    A="$(sed -n '/### Suggested body sections/,/^## /p' "$SKILL" | grep -c 'Blocked')"
+    B="$(sed -n '/### Suggested body sections/,/^## /p' "$TWIN"  | grep -c 'Blocked')"
+    if [ "$A" -ge 1 ] && [ "$B" = "$A" ]; then ok "S: the plugin twin documents the same section"
+    else bad "S: the plugin twin documents the same section" "skill=$A twin=$B"; fi
+  fi
+fi
+
 echo "ASSERTIONS: $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0
