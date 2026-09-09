@@ -67,16 +67,23 @@ import re
 import sys
 
 VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
-NAME_SANITISE = re.compile(r"[^A-Za-z0-9]")
+NAME_SANITISE = re.compile(r"[^A-Za-z0-9_-]")
 
 
 def sanitise_name(name):
-    """Every non-alphanumeric char in an MCP server name becomes `_`.
+    """Every character outside `[A-Za-z0-9_-]` in an MCP server name becomes `_`. Hyphens
+    survive.
 
-    Measured: a claude.ai CONNECTOR named "claude.ai ESO" exposes tools named
-    `mcp__claude_ai_ESO__<upstream>__<tool>` -- this is that exact rule, applied wherever a
-    server name has to become part of a tool-name prefix (a connector's own allow-prefix, or
-    the deny-prefix for a hub-config server it must NOT reach).
+    ⛔ MEASURED 2026-09-09, on two machines. A claude.ai CONNECTOR named "claude.ai ESO" is
+    exposed as `mcp__claude_ai_ESO__*` -- dots and spaces become `_`, exactly as this rule
+    always intended. But a file-based HUB named `onedroid-dev` KEEPS its hyphen: the scoped
+    worker on one Coder workspace listed `mcp__onedroid-dev__*`, and a session on a laptop
+    called `mcp__hub-b__list_records`. The old regex (`[^A-Za-z0-9]`) folded the
+    hyphen into `_` too, so the connector PLAN's `disallow` list denied `mcp__onedroid_dev__*`
+    -- a name nothing exposes -- and the real `mcp__onedroid-dev__*` stayed reachable. This
+    function is applied wherever a server name has to become part of a tool-name prefix (a
+    connector's own allow-prefix, or the deny-prefix for a hub-config server it must NOT
+    reach), so a deny list built from it must match what a hyphenated server ACTUALLY exposes.
     """
     return NAME_SANITISE.sub("_", name or "")
 

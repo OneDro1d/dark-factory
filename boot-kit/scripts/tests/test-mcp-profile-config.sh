@@ -174,8 +174,8 @@ d = json.load(sys.stdin).get('disallow', [])
 sys.exit(0 if '$1' in d else 1)
 "; }
 if DISALLOW_HAS "mcp__onedroid__*"; then ok "C8 disallow denies the onedroid hub"; else bad "C8 disallow denies the onedroid hub" "absent"; fi
-if DISALLOW_HAS "mcp__onedroid_dev__*"; then ok "C9 disallow denies onedroid-dev (sanitised)"; else bad "C9 disallow denies onedroid-dev (sanitised)" "absent"; fi
-if DISALLOW_HAS "mcp__hub_b__*"; then ok "C10 disallow denies hub-b (sanitised)"; else bad "C10 disallow denies hub-b (sanitised)" "absent"; fi
+if DISALLOW_HAS "mcp__onedroid-dev__*"; then ok "C9 disallow denies onedroid-dev (sanitised, hyphen kept)"; else bad "C9 disallow denies onedroid-dev (sanitised, hyphen kept)" "absent"; fi
+if DISALLOW_HAS "mcp__hub-b__*"; then ok "C10 disallow denies hub-b (sanitised, hyphen kept)"; else bad "C10 disallow denies hub-b (sanitised, hyphen kept)" "absent"; fi
 if DISALLOW_HAS "mcp__plugin_*"; then ok "C11 disallow always includes mcp__plugin_*"; else bad "C11 disallow always includes mcp__plugin_*" "absent"; fi
 absent "C12 a literal token never reaches stdout for a connector plan" "LITERALTOKEN1" "$OUT11"
 
@@ -281,8 +281,8 @@ if [ "$RC22" -eq 0 ]; then ok "H1 connector plan with an empty config exits 0"; 
 #  the union is that file alone and no "other record" WARN may appear -- see I6.)
 PLAN_JSON="${OUT22#*PLAN }"; PLAN_JSON="${PLAN_JSON%%$'\n'*}"
 if DISALLOW_HAS "mcp__claude_ai_Estate_B__*"; then ok "H2 the other CONNECTOR estate is denied (from the lockfile)"; else bad "H2 the other connector estate is denied" "absent: $PLAN_JSON"; fi
-if DISALLOW_HAS "mcp__hub_c__*"; then ok "H3 the other HUBS estate is denied (from the lockfile)"; else bad "H3 the other hubs estate is denied" "absent: $PLAN_JSON"; fi
-if DISALLOW_HAS "mcp__hub_c_dev__*"; then ok "H4 every server of the other hubs profile is denied"; else bad "H4 every server of the other hubs profile is denied" "absent: $PLAN_JSON"; fi
+if DISALLOW_HAS "mcp__hub-c__*"; then ok "H3 the other HUBS estate is denied (from the lockfile, hyphen kept)"; else bad "H3 the other hubs estate is denied" "absent: $PLAN_JSON"; fi
+if DISALLOW_HAS "mcp__hub-c-dev__*"; then ok "H4 every server of the other hubs profile is denied (hyphens kept)"; else bad "H4 every server of the other hubs profile is denied" "absent: $PLAN_JSON"; fi
 if DISALLOW_HAS "mcp__onedroid__*"; then bad "H5 the worker's OWN connector is never denied" "mcp__onedroid__* in disallow"; else ok "H5 the worker's OWN connector is never denied"; fi
 if DISALLOW_HAS "mcp__plugin_*"; then ok "H6 mcp__plugin_* still denied"; else bad "H6 mcp__plugin_* still denied" "absent"; fi
 absent "I6 a lone --lock has no other record to learn from: no 'other record' WARN" "does not declare" "$OUT22"
@@ -314,10 +314,10 @@ OUT23="$(env -u LOOM_LOCK CODER_WORKSPACE_NAME=ws-c python3 "$GATE" --profile on
          --kit-root "$KIT3" --out "$WORK/o23.json" 2>&1)"; RC23=$?
 if [ "$RC23" -eq 0 ]; then ok "I1 the instance record resolves and plans (exit 0)"; else bad "I1 the instance record resolves and plans" "rc=$RC23: $OUT23"; fi
 PLAN_JSON="${OUT23#*PLAN }"; PLAN_JSON="${PLAN_JSON%%$'\n'*}"
-if DISALLOW_HAS "mcp__hub_c__*"; then ok "I2 the resolved record's own other estate is denied"; else bad "I2 the resolved record's own other estate is denied" "absent: $PLAN_JSON"; fi
+if DISALLOW_HAS "mcp__hub-c__*"; then ok "I2 the resolved record's own other estate is denied (hyphen kept)"; else bad "I2 the resolved record's own other estate is denied" "absent: $PLAN_JSON"; fi
 if DISALLOW_HAS "mcp__claude_ai_Estate_B__*"; then ok "I3 an estate only the ROOT record names is denied too"; else bad "I3 an estate only the ROOT record names is denied too" "absent: $PLAN_JSON"; fi
 if DISALLOW_HAS "mcp__onedroid__*"; then bad "I4 the worker's own connector is never denied" "mcp__onedroid__* in disallow"; else ok "I4 the worker's own connector is never denied"; fi
-if DISALLOW_HAS "mcp__onedroid_dev__*"; then bad "I5 the same PROFILE's servers in another record are not denied (same estate)" "mcp__onedroid_dev__* in disallow"; else ok "I5 the same PROFILE's servers in another record are not denied (same estate)"; fi
+if DISALLOW_HAS "mcp__onedroid-dev__*"; then bad "I5 the same PROFILE's servers in another record are not denied (same estate)" "mcp__onedroid-dev__* in disallow"; else ok "I5 the same PROFILE's servers in another record are not denied (same estate)"; fi
 contains "I7 a WARN names the PROFILE the resolved record did not declare, with its servers" "does not declare estate-b (claude.ai Estate B)" "$OUT23"
 contains "I8 and points at df-preflight for that profile" "df-preflight --profile estate-b" "$OUT23"
 # The same kit, resolved from --lock instead of --kit-root: the union root is derived from the
@@ -336,6 +336,29 @@ if [ "$RC25" -eq 0 ]; then ok "I10 a single-estate kit still plans (exit 0)"; el
 contains "I11 and WARNs that no other estate is denied" "covers no other estate" "$OUT25"
 
 echo ""
+# ---- S1: sanitise_name -- dots and spaces fold to `_`, a hyphen survives, together ---------
+# ⛔ MEASURED 2026-09-09 on two machines: the old regex ([^A-Za-z0-9]) folded EVERY
+# non-alphanumeric char, hyphen included, so a hub named `onedroid-dev` was denied under a
+# prefix (`mcp__onedroid_dev__*`) nothing exposes while the real `mcp__onedroid-dev__*`
+# stayed reachable. One name mixing all three char classes proves the fix covers them
+# together, not just the hyphen in isolation.
+LOCK_S1="$WORK/s1.lock.json"
+cat > "$LOCK_S1" <<'JSON'
+{"mcp": {"profiles": {
+  "onedroid": {"kind": "connector", "servers": ["onedroid"]},
+  "estate-s": {"kind": "hubs", "servers": ["a.b c-d"]}
+}}}
+JSON
+EMPTYCFG_S1="$WORK/empty-s1.json"
+printf '{}\n' > "$EMPTYCFG_S1"
+OUTS1="$(python3 "$GATE" --profile onedroid --config "$EMPTYCFG_S1" --lock "$LOCK_S1" \
+         --out "$WORK/os1.json" 2>&1)"; RCS1=$?
+if [ "$RCS1" -eq 0 ]; then ok "S1 sanitise_name: a mixed-char server name still plans (exit 0)"
+else bad "S1 sanitise_name: a mixed-char server name still plans" "rc=$RCS1: $OUTS1"; fi
+PLAN_JSON="${OUTS1#*PLAN }"; PLAN_JSON="${PLAN_JSON%%$'\n'*}"
+if DISALLOW_HAS "mcp__a_b_c-d__*"; then ok "S1 'a.b c-d' sanitises to 'a_b_c-d' (dot and space fold, hyphen survives)"
+else bad "S1 'a.b c-d' sanitises to 'a_b_c-d'" "absent: $PLAN_JSON"; fi
+
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]

@@ -82,6 +82,12 @@ API_MERGE_NOREPO_RE = re.compile(r"(?:^|[\s/])pulls/(\d+)/merge(?:$|[\s/?])")
 # naming no cause. Failing closed was right; failing closed on unrelated prose was the defect.
 RAW_MERGE_RE = re.compile(r"\bgh\b[\s\S]*?\bpr\b[\s\S]*?\bmerge\b")
 
+# A heredoc redirect operator and its delimiter: `<<` or `<<-`, then the delimiter word,
+# bare or quoted with matching single/double quotes. Quoting only changes whether the shell
+# would expand the body -- it makes no difference to where the body starts and ends, which
+# is the only thing strip_heredoc_bodies cares about.
+HEREDOC_OP_RE = re.compile(r"<<(-)?\s*(?:'([^']*)'|\"([^\"]*)\"|([A-Za-z0-9_]+))")
+
 
 def allow():
     print("{}")
@@ -110,6 +116,64 @@ def deny(reason):
         )
     )
     sys.exit(0)
+
+
+def strip_heredoc_bodies(command):
+    """Drop heredoc BODIES before anything tries to tokenise this command.
+
+    MEASURED 2026-09-09: a heredoc body is prose to bash and tokens to shlex. Writing a
+    report file whose text happens to mention `gh pr merge 999999` --
+
+        cat > /tmp/probe.txt <<'EOF'
+        - merge-gate denied gh pr merge 999999 with the gh head-sha error.
+        EOF
+
+    -- got the write itself denied: shlex has no concept of a heredoc, so it read straight
+    through the redirect operator into the body and found `gh`, `pr`, `merge` sitting there
+    as ordinary tokens. An agent could not write a validation report about this gate using a
+    heredoc.
+
+    For every `<<` / `<<-` operator on a line, whose delimiter is `WORD`, `'WORD'` or
+    `"WORD"`: keep the line carrying the operator (its own command still matters -- a real
+    `gh pr merge 1 --body-file - <<EOF` is still a merge), then drop every following line up
+    to and including the line that terminates it (the delimiter word alone on a line, or
+    with `<<-` a tab-indented delimiter word). Multiple heredoc operators on one line are
+    terminated in the order they appear, each consuming the lines immediately after the
+    previous one's terminator. An unterminated heredoc (no matching terminator line before
+    the string ends) drops everything from the operator line to the end of the string --
+    nothing after an unterminated heredoc is a command, it is more of the same undelimited
+    prose.
+
+    This is a plain line-oriented pass over the RAW string, before shlex ever sees it -- it
+    does not need to understand quoting or escaping inside the body, only where the body
+    starts and ends.
+    """
+    lines = command.split("\n")
+    out = []
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        out.append(line)
+        i += 1
+        ops = [
+            (m.group(1) == "-", m.group(2) if m.group(2) is not None else
+             (m.group(3) if m.group(3) is not None else m.group(4)))
+            for m in HEREDOC_OP_RE.finditer(line)
+        ]
+        for is_dash, word in ops:
+            terminated = False
+            while i < n:
+                cur = lines[i]
+                i += 1
+                cand = cur.lstrip("\t") if is_dash else cur
+                if cand == word:
+                    terminated = True
+                    break
+            if not terminated:
+                # Unterminated -- everything remaining is body/prose, not a command.
+                i = n
+                break
+    return "\n".join(out)
 
 
 def split_commands(command):
@@ -339,11 +403,17 @@ def evaluate(event):
     if not isinstance(command, str) or not command.strip():
         allow()
 
+    # Heredoc BODIES are prose to bash and tokens to shlex -- strip them before anything
+    # tries to tokenise this command. See strip_heredoc_bodies's own docstring for the
+    # measured defect. `command` (the original, unstripped text) stays around below for the
+    # untokenisable-fallback scan, so a genuine parse failure still sees the whole string.
+    stripped = strip_heredoc_bodies(command)
+
     try:
-        commands = split_commands(command)
+        commands = split_commands(stripped)
     except ValueError as e:
-        if RAW_MERGE_RE.search(command) or API_MERGE_RE.search(command) \
-                or API_MERGE_NOREPO_RE.search(command):
+        if RAW_MERGE_RE.search(stripped) or API_MERGE_RE.search(stripped) \
+                or API_MERGE_NOREPO_RE.search(stripped):
             deny("merge-gate: the command could not be tokenised (%s -- an unbalanced quote, "
                  "often an apostrophe inside a heredoc body) and its text mentions a PR merge. "
                  "Run the merge on its own as a plain `gh pr merge <n> --repo <owner/repo>` so "
@@ -383,21 +453,39 @@ def evaluate(event):
     # by itself, only a reason those two things are unavailable.
     cwd_checkout = None
     cwd_origin_repo = None
+    cwd_origin_url = None
+    cwd_has_origin = False
     toplevel_proc = git(["rev-parse", "--show-toplevel"], cwd)
     if toplevel_proc.returncode == 0 and toplevel_proc.stdout.strip():
         cwd_checkout = toplevel_proc.stdout.strip()
         origin_proc = git(["remote", "get-url", "origin"], cwd_checkout)
         if origin_proc.returncode == 0 and origin_proc.stdout.strip():
-            cwd_origin_repo = parse_owner_repo(origin_proc.stdout.strip())
+            cwd_has_origin = True
+            cwd_origin_url = origin_proc.stdout.strip()
+            cwd_origin_repo = parse_owner_repo(cwd_origin_url)
 
     if repo_flag:
         target_repo = repo_flag.strip("/")
     elif cwd_origin_repo:
         target_repo = cwd_origin_repo
-    else:
+    elif cwd_checkout is None:
+        # Cause 1 of 3: cwd is not inside a git checkout at all.
         deny(
             "merge-gate: could not determine the target repo (no --repo/-R on the "
             "command and cwd is not a git checkout)"
+        )
+    elif not cwd_has_origin:
+        # Cause 2 of 3: cwd IS a checkout, but it has no `origin` remote to read.
+        deny(
+            "merge-gate: could not determine the target repo (no --repo/-R on the "
+            "command and the checkout at %s has no origin remote)" % cwd_checkout
+        )
+    else:
+        # Cause 3 of 3: origin exists, but its URL is not owner/repo-shaped.
+        deny(
+            "merge-gate: could not determine the target repo (no --repo/-R on the "
+            "command and the checkout's origin remote (%s) is not owner/repo-shaped)"
+            % cwd_origin_url
         )
 
     # "Matching checkout": cwd is a git repo AND its own origin IS the target repo. Only

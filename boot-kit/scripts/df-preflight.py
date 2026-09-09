@@ -945,14 +945,19 @@ def expand_env(value):
 
 
 def sanitise_mcp_name(name):
-    """Every non-alphanumeric char in an MCP server name becomes `_` -- the SAME rule
-    mcp-profile-config.py applies (measured: a connector named "claude.ai ESO" exposes tools
-    named `mcp__claude_ai_ESO__<upstream>__<tool>`). Kept as a second, independent copy on
-    purpose: this file and that one are never imported into each other (each stays runnable
-    standalone), so the rule is duplicated rather than shared, and a proposal this function
-    writes must produce the identical prefix mcp-profile-config.py will later act on.
+    """Every character outside `[A-Za-z0-9_-]` in an MCP server name becomes `_` (hyphens
+    survive) -- the SAME rule mcp-profile-config.py applies. ⛔ MEASURED 2026-09-09 on two
+    machines: a claude.ai CONNECTOR named "claude.ai ESO" exposes tools named
+    `mcp__claude_ai_ESO__<upstream>__<tool>` (dots and spaces fold to `_`, as designed), but
+    a file-based HUB named `onedroid-dev` KEEPS its hyphen -- `mcp__onedroid-dev__*` on the
+    one Coder workspace, `mcp__hub-b__list_records` on a laptop. The old regex folded
+    the hyphen too, so a proposal naming `mcp__onedroid_dev__*` denied a prefix nothing
+    exposes while the real, hyphenated one stayed reachable. Kept as a second, independent
+    copy on purpose: this file and that one are never imported into each other (each stays
+    runnable standalone), so the rule is duplicated rather than shared, and a proposal this
+    function writes must produce the identical prefix mcp-profile-config.py will later act on.
     """
-    return re.sub(r"[^A-Za-z0-9]", "_", name or "")
+    return re.sub(r"[^A-Za-z0-9_-]", "_", name or "")
 
 
 def probe_one_mcp_server(name, s):

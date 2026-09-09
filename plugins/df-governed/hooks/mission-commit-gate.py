@@ -65,6 +65,12 @@ MISSION_RE = re.compile(r"\bM-[A-Z0-9][A-Z0-9-]{3,}\b")
 # Raw-text fallback when shlex cannot tokenise the command (see evaluate()).
 RAW_COMMIT_RE = re.compile(r"\bgit\b[\s\S]*?\bcommit\b")
 
+# A heredoc redirect operator and its delimiter: `<<` or `<<-`, then the delimiter word,
+# bare or quoted with matching single/double quotes. Quoting only changes whether the shell
+# would expand the body -- it makes no difference to where the body starts and ends, which
+# is the only thing strip_heredoc_bodies cares about.
+HEREDOC_OP_RE = re.compile(r"<<(-)?\s*(?:'([^']*)'|\"([^\"]*)\"|([A-Za-z0-9_]+))")
+
 # git global options that consume the following token as their value (between `git` and the
 # subcommand). `-C` is handled separately below, both spaced and glued (`-C/path`).
 VAL_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
@@ -89,6 +95,57 @@ def deny(reason):
         )
     )
     sys.exit(0)
+
+
+def strip_heredoc_bodies(command):
+    """Drop heredoc BODIES before anything tries to tokenise this command.
+
+    Copied verbatim from merge-gate.py -- see its docstring there for the measured defect
+    (a heredoc body is prose to bash and tokens to shlex, so a heredoc mentioning `git
+    commit -m wip` as prose was read as an actual commit). These two files are standalone by
+    design and never import each other, so the function is duplicated rather than shared.
+
+    For every `<<` / `<<-` operator on a line, whose delimiter is `WORD`, `'WORD'` or
+    `"WORD"`: keep the line carrying the operator (its own command still matters -- a real
+    `git commit -F - <<EOF` is still a commit), then drop every following line up to and
+    including the line that terminates it (the delimiter word alone on a line, or with
+    `<<-` a tab-indented delimiter word). Multiple heredoc operators on one line are
+    terminated in the order they appear, each consuming the lines immediately after the
+    previous one's terminator. An unterminated heredoc (no matching terminator line before
+    the string ends) drops everything from the operator line to the end of the string --
+    nothing after an unterminated heredoc is a command, it is more of the same undelimited
+    prose.
+
+    This is a plain line-oriented pass over the RAW string, before shlex ever sees it -- it
+    does not need to understand quoting or escaping inside the body, only where the body
+    starts and ends.
+    """
+    lines = command.split("\n")
+    out = []
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        out.append(line)
+        i += 1
+        ops = [
+            (m.group(1) == "-", m.group(2) if m.group(2) is not None else
+             (m.group(3) if m.group(3) is not None else m.group(4)))
+            for m in HEREDOC_OP_RE.finditer(line)
+        ]
+        for is_dash, word in ops:
+            terminated = False
+            while i < n:
+                cur = lines[i]
+                i += 1
+                cand = cur.lstrip("\t") if is_dash else cur
+                if cand == word:
+                    terminated = True
+                    break
+            if not terminated:
+                # Unterminated -- everything remaining is body/prose, not a command.
+                i = n
+                break
+    return "\n".join(out)
 
 
 def split_commands(command):
@@ -179,10 +236,16 @@ def read_msg_file(path, cwd):
 
 def extract_message(tokens, cwd):
     """Scan tokens AFTER the 'commit' subcommand for a message source. Returns
-    (status, value): status in OK/FILE_ERR/REUSE/NONE/MISSING_VAL. Copied from
+    (status, value): status in OK/FILE_ERR/REUSE/NONE/MISSING_VAL/STDIN. Copied from
     commit-gate.sh's embedded `extract_message` exactly, including reading `-F`/`--file`
     relative to the SESSION cwd (`cwd` here is always `event["cwd"]`, never any `-C`/`cd`
-    target the command itself carries)."""
+    target the command itself carries) -- with one addition: `-F -` / `--file -` reads the
+    message from STDIN, which is never a real path named "-" to open. A heredoc feeding that
+    exact command (`git commit -F - <<EOF ... EOF`) is the normal shape for this once
+    strip_heredoc_bodies has already removed the body the hook could otherwise have read --
+    so STDIN is reported as its own status rather than a FILE_ERR for a file that was never
+    supposed to exist, and evaluate() falls back to scanning the whole ORIGINAL command text
+    (heredoc body included) for an id, the same way the untokenisable-fallback already does."""
     parts = []
     got = False
     i, n = 0, len(tokens)
@@ -207,9 +270,15 @@ def extract_message(tokens, cwd):
         if t in ("-F", "--file"):
             if i + 1 >= n:
                 return "MISSING_VAL", "%s requires a value" % t
-            return read_msg_file(tokens[i + 1], cwd)
+            val = tokens[i + 1]
+            if val == "-":
+                return "STDIN", None
+            return read_msg_file(val, cwd)
         if t.startswith("--file="):
-            return read_msg_file(t[len("--file="):], cwd)
+            val = t[len("--file="):]
+            if val == "-":
+                return "STDIN", None
+            return read_msg_file(val, cwd)
         if t in ("-C", "-c"):
             if i + 1 >= n:
                 return "MISSING_VAL", "%s requires a value" % t
@@ -277,8 +346,15 @@ def evaluate(event):
     if not missions:
         allow()
 
+    # Heredoc BODIES are prose to bash and tokens to shlex -- strip them before anything
+    # tries to tokenise this command (see strip_heredoc_bodies's docstring). `command` (the
+    # original, unstripped text) stays around below for the untokenisable fallback AND for
+    # the STDIN case in the per-commit loop, so an id inside a heredoc body is still found
+    # even after the body itself has been stripped for parsing purposes.
+    stripped = strip_heredoc_bodies(command)
+
     try:
-        commands = split_commands(command)
+        commands = split_commands(stripped)
     except ValueError as e:
         # The same lexer as merge-gate.py, and the same failure (third homelab run, 2026-09-08):
         # an apostrophe inside a heredoc body is prose to bash and an unclosed quote to shlex.
@@ -318,6 +394,23 @@ def evaluate(event):
                     continue
                 deny(
                     mission_block_reason(missions, "The commit message names neither.")
+                    + bypass_note
+                )
+            elif status == "STDIN":
+                # `-F -` / `--file -` reads the message from stdin, most often a heredoc
+                # feeding this exact command -- its body was already removed by
+                # strip_heredoc_bodies before tokenising, so it cannot be re-read from
+                # `after_commit`. Fall back to the ORIGINAL, unstripped command text (which
+                # still has the heredoc body in it) for an id, the same fallback the
+                # untokenisable-command case above already uses.
+                if TRACKER_RE.search(command) or MISSION_RE.search(command):
+                    continue
+                deny(
+                    mission_block_reason(
+                        missions,
+                        "The message is read from stdin (-F -/--file -), so it cannot be "
+                        "inspected directly, and the command text as a whole names neither.",
+                    )
                     + bypass_note
                 )
             elif status == "FILE_ERR":

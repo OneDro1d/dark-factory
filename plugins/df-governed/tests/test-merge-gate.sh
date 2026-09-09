@@ -424,6 +424,58 @@ API_UNBAL=$'gh api -X PUT repos/'"$ORIGIN_REPO"$'/pulls/1/merge -f commit_title=
 O="$(run_hook "$REPO_X" "$API_UNBAL")"
 contains "X6: the gh api merge form is caught by the raw scan too" "could not be tokenised" "$O"
 
+echo "=== Y: strip_heredoc_bodies -- Deliverable A (heredoc bodies are prose, not commands), and Deliverable B (the real cause of a missing target repo) ==="
+# MEASURED 2026-09-09: writing a report FILE whose text mentions the merge command is denied
+# as if it were the command -- shlex has no concept of a heredoc, so it reads straight
+# through the redirect operator and finds `gh`, `pr`, `merge` sitting in the body as ordinary
+# tokens. strip_heredoc_bodies removes the body before anything tokenises the command, so the
+# cases below no longer need the untokenisable-fallback X relies on above (these fixtures
+# carry no unbalanced quote at all -- the heredocs are properly terminated).
+REPO_Y="$(mk_repo 1)"
+write_record "$REPO_Y" "$STUB_SHA" false real
+
+echo "--- Y1: a heredoc body mentioning a merge is prose, not a command -> {} ---"
+Y1_CMD=$'cat > /tmp/mg-y1.txt <<\'EOF\'\n- merge-gate denied gh pr merge 999999 with the gh head-sha error.\nEOF'
+O="$(run_hook "$OUTSIDE" "$Y1_CMD")"
+equals "Y1: heredoc body mentioning a merge, no real merge on the operator line -> {}" "{}" "$O"
+
+echo "--- Y2: a REAL merge on the operator line, heredoc feeding --body-file - -> still gated, exactly like case G ---"
+OTHER_SHA_Y="3333333deadbeef3333333deadbeef33333333"
+REPO_Y2="$(mk_repo 1)"
+write_record "$REPO_Y2" "$OTHER_SHA_Y" false real
+Y2_CMD=$'gh pr merge 1 --repo '"$ORIGIN_REPO"$' --body-file - <<EOF\nclosing this out\nEOF'
+O="$(run_hook "$REPO_Y2" "$Y2_CMD")"
+contains "Y2: the operator line's own merge is still seen and gated" "permissionDecision" "$O"
+contains "Y2: denied on mismatch, exactly like case G" "commit mismatch" "$O"
+
+echo "--- Y3: <<- with a tab-indented terminator ---"
+Y3_CMD=$'cat > /tmp/mg-y3.txt <<-EOF\ngh pr merge 1 --repo '"$ORIGIN_REPO"$'\n\tEOF'
+O="$(run_hook "$OUTSIDE" "$Y3_CMD")"
+equals "Y3: <<- with a tab-indented terminator strips the body -> {}" "{}" "$O"
+
+echo "--- Y4: two heredocs on one line, terminated in order ---"
+Y4_CMD=$'cat <<A <<B\ngh pr merge 1 --repo '"$ORIGIN_REPO"$'\nA\nmore prose, gh pr merge 2 --repo '"$ORIGIN_REPO"$'\nB'
+O="$(run_hook "$OUTSIDE" "$Y4_CMD")"
+equals "Y4: two heredocs on one line both strip -> {}" "{}" "$O"
+
+echo "--- Y5: an unterminated heredoc drops to end of string -> {} (nothing after it is a command) ---"
+Y5_CMD=$'cat > /tmp/mg-y5.txt <<EOF\ngh pr merge 1 --repo '"$ORIGIN_REPO"
+O="$(run_hook "$OUTSIDE" "$Y5_CMD")"
+equals "Y5: an unterminated heredoc -> {}" "{}" "$O"
+
+echo "--- Y6: Deliverable B -- a checkout with no origin remote names that cause, not 'not a git checkout' ---"
+REPO_NOORIGIN="$(mktemp -d "${TMPDIR:-/tmp}/mgnoorigin.XXXXXX")"
+git init -q -b main "$REPO_NOORIGIN" >/dev/null
+git -C "$REPO_NOORIGIN" config user.email t@example.invalid
+git -C "$REPO_NOORIGIN" config user.name test
+echo x > "$REPO_NOORIGIN/f.txt"
+git -C "$REPO_NOORIGIN" add -A >/dev/null
+git -C "$REPO_NOORIGIN" commit -qm base >/dev/null
+O="$(run_hook "$REPO_NOORIGIN" "gh pr merge 1")"
+contains "Y6: denies" "permissionDecision" "$O"
+contains "Y6: names the real cause (no origin remote)" "no origin remote" "$O"
+not_contains "Y6: does not say 'not a git checkout' -- it is one" "not a git checkout" "$O"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
