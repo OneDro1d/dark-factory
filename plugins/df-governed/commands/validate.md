@@ -6,9 +6,14 @@ You are validating a freshly installed Dark Factory kit. **This session's cwd is
 notepad that `validate-arm.sh` armed for exactly this run** — do not go looking for "the
 working notepad" the way `VALIDATE-INSTALL.md` Part 1's Task 0 does; you are already in it,
 and `M-VALIDATE` is already `RUNNING` in `.df/missions/M-VALIDATE/state`. The **kit root** is
-the parent of your cwd (`..`), and its record is `<kit-root>/*.lock.json` **at the kit root
-only** — an `instances/*.lock.json` record is chosen with `--lock` and is the operator's
-business, not this run's.
+the parent of your cwd (`..`). **The record is the one that RESOLVES for THIS machine, not
+"the file at the kit root":** if `LOOM_LOCK` is set in your environment, that is it; otherwise
+run `bash <kit-root>/boot-kit/scripts/identify.sh --match <kit-root>/instances` (fall back to
+`<kit-root>/vendor/dark-factory/boot-kit/scripts/identify.sh`) and use the record it names,
+else the single `<kit-root>/*.lock.json`. On every Coder in a shared instance repo the kit-root
+file describes a DIFFERENT machine (the laptop) and `identify.sh` exits 3 against it — a run
+that validated that file would be the exact failure Task 1 exists to catch. Quote which record
+you used and how it was chosen.
 
 Work the tasks below in order. Record each as **PASS**, **FAIL**, or **UNKNOWN** — UNKNOWN
 means you could not probe it, not that it passed. Quote commands and output **verbatim**;
@@ -173,13 +178,17 @@ alone.
    the direct release, the direct stale-map block.
 
 7. **The worker chain (objective 2), dry.** From this notepad run the estate's launcher in
-   dry-run mode: `WORKER_DRY_RUN=1 <vendored Tier-2>/workers/dispatch.sh dev 1 "probe"` where
-   the vendored Tier-2 is your estate's org-layer directory under the kit's `vendor/` (the
-   lockfile's `upstreams` names it). Expected: an argv containing `--plugin-dir`,
-   `--setting-sources project`, `--strict-mcp-config`, at least one `deny:` line, and
-   `claim-columns:`; the notepad root appears in no `--add-dir`. It creates a scratch
-   directory under `workers/dev/` at the **kit root** — leave it for now, it is removed in
-   teardown.
+   dry-run mode: `WORKER_DRY_RUN=1 <vendored Tier-2>/workers/dispatch.sh dev <ticket> "probe"`
+   where the vendored Tier-2 is your estate's org-layer directory under the kit's `vendor/`
+   (the lockfile's `upstreams` names it) and `<ticket>` is an id **your estate's shim
+   accepts** — read the shim's own check (one estate wants `^CAT-[0-9]+$`, another a numeric
+   board id); a shim refusing `1` is the shim working, not a finding. Expected: an argv
+   containing `--plugin-dir`, `--setting-sources project`, at least one `deny:` line, and
+   `claim-columns:`; the notepad root appears in no `--add-dir`. `--strict-mcp-config` appears
+   in **hubs** mode only; in **connector** mode the scoping is the PLAN's `disallow` list
+   instead (see §6). It creates a scratch directory under `workers/dev/` **under this notepad**
+   (the launcher resolves the nearest `NOTES.md`, which is this cwd) — leave it for now, it is
+   removed in teardown; a `workers/` at the kit root would mean the resolution went wrong.
 
 7b. **The operator's page (objective 8).** Run `command -v df-operator-todo` — same
    `df-governed/bin/` expectation as `df-worker`. Then:
@@ -191,9 +200,12 @@ alone.
    df-operator-todo done --id validate-probe --by-operator
    ```
 
-   Expected, in order: the item appears in `operator-todo.md` at the kit root under *Async*;
+   Expected, in order: the item appears in `operator-todo.md` **under this notepad** (the tool
+   resolves the nearest `NOTES.md`, which is this cwd — not the kit root) under *Async*;
    `list` prints it; the bare `done` is **REFUSED**; `--by-operator` removes it. Confirm
-   afterwards `operator-todo.md` has no `## Done` section and no `~~strikethrough~~`.
+   afterwards `operator-todo.md` has no `## Done` section and no `~~strikethrough~~`. An item
+   you leave here for real is not lost when this notepad is torn down: `validate.sh` copies
+   it out to `<kit-root>/VALIDATE-OPERATOR-TODO-<date>.md` first.
 
 8. **TEARDOWN — leave the tree exactly as you found it, then PROVE it.**
 

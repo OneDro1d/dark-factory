@@ -150,8 +150,21 @@ V6_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOG6" bash "$VALIDATE" --kit-ro
 contains "6: output says teardown was skipped" "--keep" "$V6_OUT"
 
 echo "=== 7: no claude on PATH and no override refuses with exit 2, names the binary ==="
+# ⚠️ The negative must be ESTABLISHED, not assumed. This used to narrow PATH to /usr/bin:/bin
+# and call that "no claude" — but a system-wide npm install puts `claude` in exactly those
+# directories (measured on a Coder 2026-09-09), so validate.sh correctly proceeded, launched a
+# REAL session, and the suite hung with no verdict to read. A negative control that fails
+# toward a hang is worse than none. PATH is now a scratch dir holding only the tools the
+# script itself needs (bash, coreutils, git, python3 resolved from the current PATH) and no
+# `claude`; the assertion below first proves `claude` is absent from that PATH.
 KIT7="$(_fresh_kit kit7)"
-V7_OUT="$(PATH="/usr/bin:/bin" bash "$VALIDATE" --kit-root "$KIT7" 2>&1)"; V7_RC=$?
+P7="$T/path7"; mkdir -p "$P7"
+for tool in bash sh env cat cp mkdir rm rmdir ls dirname basename readlink realpath date mktemp grep sed awk tr sort head tail wc find diff cmp git python3 jq; do
+  src="$(command -v "$tool" 2>/dev/null || true)"; [ -n "$src" ] && ln -sf "$src" "$P7/$tool"
+done
+if PATH="$P7" command -v claude >/dev/null 2>&1; then bad "7: the control PATH has no claude" "claude resolved under $P7"
+else ok "7: the control PATH has no claude"; fi
+V7_OUT="$(PATH="$P7" bash "$VALIDATE" --kit-root "$KIT7" 2>&1)"; V7_RC=$?
 [ "$V7_RC" -eq 2 ] && ok "7: exits 2" || bad "7: exits 2" "rc=$V7_RC: $V7_OUT"
 contains "7: names the binary" "claude" "$V7_OUT"
 
