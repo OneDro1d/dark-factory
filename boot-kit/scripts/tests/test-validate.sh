@@ -311,6 +311,18 @@ else
     "vendor@line=$VEND_LINE kit-root@line=$KITROOT_LINE"
 fi
 contains "W2: --max-budget-usd 3 appears in §6" "--max-budget-usd 3" "$(cat "$VMD" 2>/dev/null)"
+# W3, MEASURED 2026-09-09 on the first `validate.sh --headless` run: the Bash tool's environment
+# carries CLAUDE_CODE_ENTRYPOINT=sdk-cli into every child, so the "direct" Stop-gate probe the
+# command text prescribed released with {} and no handoff on disk — three false PASSes. The probe
+# snippet must strip the entrypoint, or a headless run cannot tell the handoff from the guard.
+contains "W3: the direct Stop-gate probe strips the entrypoint (env -u CLAUDE_CODE_ENTRYPOINT before the gate)" \
+  "| env -u CLAUDE_CODE_ENTRYPOINT python3 ~/.claude/skills/df-governed/hooks/handoff-completeness-gate.py" \
+  "$(cat "$VMD" 2>/dev/null)"
+if grep -q 'which do not depend on the entrypoint' "$VMD" 2>/dev/null; then
+  bad "W3: the false claim 'do not depend on the entrypoint' is gone" "still present"
+else
+  ok "W3: the false claim 'do not depend on the entrypoint' is gone"
+fi
 
 echo "=== H1: --headless assembles the print-mode argv and says so ==="
 KITH1="$(_fresh_kit kith1)"
