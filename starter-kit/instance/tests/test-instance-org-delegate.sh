@@ -117,12 +117,17 @@ mk_lock() { # mk_lock <dir> <org-json>
 # run <dir> [flags...] — CLAUDE_HOME ONLY. LOOM_LIVE is deliberately never exported by
 # the caller: if install.sh stops bridging the two spellings, the org layer and the
 # engine start writing to $HOME/.claude and these cases fail on content, not on error.
+# ⚠️ UNSET explicitly, not merely "not exported": since 2026-09-09 run-tests.sh pins
+# LOOM_LIVE for every suite (a suite that changed the real ~/.local/bin is why), and an
+# inherited LOOM_LIVE would win over CLAUDE_HOME in the installer's own precedence —
+# which is exactly the bridge these cases exist to test. Narrower than the runner's
+# default is allowed; this suite wants LOOM_LIVE absent and CLAUDE_HOME present.
 run() {
   local d="$1"; shift
   # --no-prove: this fixture's T1 ships no prove.sh (that step has its own suite,
   # test-install-prove.sh), and an absent prove.sh costs the exit code the same way an
   # absent lock-verify.sh does -- a fact about a step this suite is not testing.
-  ( cd "$d" && CLAUDE_HOME="$d/live" LOOM_BIN="$d/bin" bash install.sh --offline --no-prove "$@" 2>&1 )
+  ( cd "$d" && env -u LOOM_LIVE CLAUDE_HOME="$d/live" LOOM_BIN="$d/bin" bash install.sh --offline --no-prove "$@" 2>&1 )
 }
 
 echo "=== A. no org block: step 2a runs nothing ==="

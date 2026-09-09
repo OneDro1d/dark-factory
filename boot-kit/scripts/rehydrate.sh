@@ -335,10 +335,27 @@ else
       say "  REFUSED plugin $PNAME: no .claude-plugin/plugin.json at $PSRC_ABS"; PLUGIN_FAIL=$((PLUGIN_FAIL+1)); continue
     fi
     mkdir -p "$(dirname "$PDEST_ABS")"
+    # ⚠️ --exclude='.nfs*' is LOAD-BEARING, and for --delete, not for the copy. Where ~/.claude
+    # is a symlink into NFS (every provisioned Coder in the reference estate), replacing a file
+    # another process still holds open makes NFS rename it aside as .nfsXXXXXXXX and keep the
+    # ghost until the last fd closes. --delete then tries to unlink that ghost and NFS answers
+    # EBUSY(16), so rsync exits 23 and the WHOLE plugin is refused, unmaterialised.
+    # Measured on the homelab Coder 2026-09-09, twice, identical; the holder was mission-tick.sh
+    # (fd 255, bash's own script fd) belonging to the very session running the install — and that
+    # monitor is armed by default, so the condition is present in every session that can install.
+    # T1 #149 taught lock-verify L11 the same exclusion, but only for REPORTING; this is the write
+    # path, and it stayed broken. A silly-rename is a deleted inode with a witness, never plugin
+    # content, so protecting it from --delete costs this step no honesty.
     if command -v rsync >/dev/null 2>&1; then
-      rsync -a --delete "$PSRC_ABS/" "$PDEST_ABS/" || { say "  REFUSED plugin $PNAME: rsync failed"; PLUGIN_FAIL=$((PLUGIN_FAIL+1)); continue; }
+      rsync -a --delete --exclude='.nfs*' "$PSRC_ABS/" "$PDEST_ABS/" || { say "  REFUSED plugin $PNAME: rsync failed"; PLUGIN_FAIL=$((PLUGIN_FAIL+1)); continue; }
     else
-      rm -rf "$PDEST_ABS"; mkdir -p "$PDEST_ABS"
+      # Same hazard, worse: `rm -rf "$PDEST_ABS"` on a directory holding a ghost fails outright.
+      # Delete FILES rather than trees — an `rm -rf` of a parent directory would take the ghost
+      # inside it down too, which is the bug this branch is fixing. Then prune only directories
+      # that ended up empty, so a directory still holding a ghost survives; cp repopulates.
+      find "$PDEST_ABS" -mindepth 1 \( -type f -o -type l \) ! -name '.nfs*' -delete 2>/dev/null || true
+      find "$PDEST_ABS" -mindepth 1 -depth -type d -empty -delete 2>/dev/null || true
+      mkdir -p "$PDEST_ABS"
       cp -R "$PSRC_ABS/." "$PDEST_ABS/" || { say "  REFUSED plugin $PNAME: copy failed"; PLUGIN_FAIL=$((PLUGIN_FAIL+1)); continue; }
     fi
     PPIN="$(jq -r '.upstreams["dark-factory"].commit // "unpinned"' "$LOCK")"

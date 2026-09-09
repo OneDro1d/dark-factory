@@ -420,6 +420,128 @@ noline  "V4 no --strict-mcp-config for the connector"                    "--stri
 OUT15b="$(run_dry env PATH="/usr/bin:/bin" WORKER_MCP_PROFILE=tp "$VW" dev 12345 "p" --dry-run)"
 contains "V5 without df-mission on PATH the fallback is the prefix rule, stated" "mcp.profiles is undeclared" "$OUT15b"
 
+echo ""
+# ── case 16 (SPEC R1): a FULLY vendored engine (df-mission itself under
+# <kit>/vendor/dark-factory/boot-kit/scripts/) still resolves the KIT root, not the
+# vendor/dark-factory shim two levels above df-mission. Distinct from case 15 above: there
+# df-mission lived in the instance's OWN boot-kit/scripts (already correct without a walk),
+# so it never exercised the walk-up this ticket adds. Here it is genuinely vendored, and the
+# lockfile is only findable four levels up. Labelled IR (instance-root/refuse), not R, to
+# avoid colliding with the pre-existing "--rules travels to the brief" cases R1-R12 above,
+# which test an unrelated feature under the same short label. ──────────────────────────
+IR1KIT="$WORK/ir1kit"
+mkdir -p "$IR1KIT/vendor/dark-factory/boot-kit/scripts" "$IR1KIT/bin"
+cp "$T1SRC/boot-kit/scripts/mcp-profile-config.py" "$IR1KIT/vendor/dark-factory/boot-kit/scripts/mcp-profile-config.py"
+printf '#!/usr/bin/env bash\necho df-mission-stub\n' > "$IR1KIT/vendor/dark-factory/boot-kit/scripts/df-mission"
+chmod +x "$IR1KIT/vendor/dark-factory/boot-kit/scripts/df-mission"
+ln -s "$IR1KIT/vendor/dark-factory/boot-kit/scripts/df-mission" "$IR1KIT/bin/df-mission"
+cat > "$IR1KIT/loom.lock.json" <<'JSON'
+{"machine": {"platform": "PLATFORM_PLACEHOLDER", "home": "HOME_PLACEHOLDER"},
+ "mcp": {"profiles": {"tp": {"kind": "connector", "servers": ["claude.ai Example"], "toolPrefix": "mcp__claude_ai_Example__"}}}}
+JSON
+python3 - "$IR1KIT/loom.lock.json" <<'PY'
+import json, os, platform, sys
+p = sys.argv[1]; d = json.load(open(p))
+d["machine"] = {"platform": platform.system(), "home": os.path.expanduser("~")}
+json.dump(d, open(p, "w"), indent=1)
+PY
+OUTIR1="$(run_dry env PATH="$IR1KIT/bin:$PATH" WORKER_MCP_PROFILE=tp "$WORKER" dev 55501 "p" --dry-run)"; RCIR1=$?
+if [ "$RCIR1" -eq 0 ]; then ok "IR1a (SPEC R1) --dry-run exits 0"; else bad "IR1a (SPEC R1) --dry-run exits 0" "rc=$RCIR1: $OUTIR1"; fi
+hasline "IR1b (SPEC R1) instance-root resolves to the kit root, not vendor/dark-factory" \
+        "instance-root: $IR1KIT (via df-mission)" "$OUTIR1"
+noline  "IR1c (SPEC R1) instance-root did NOT land two levels up on vendor/dark-factory" \
+        "instance-root: $IR1KIT/vendor/dark-factory (via df-mission)" "$OUTIR1"
+noline  "IR1d (SPEC R1) mcp-profile-config sees the record (no 'undeclared' fallback)" \
+        "mcp.profiles is undeclared" "$OUTIR1"
+contains "IR1e (SPEC R1) a connector PLAN was produced from the resolved record" \
+         "mcp-mode: connector (claude.ai Example)" "$OUTIR1"
+
+echo ""
+# ── case 17 (SPEC R2): LOOM_LOCK names the instance root outright — no df-mission needed
+# — and is passed through to mcp-profile-config.py as --lock. A stub tool (via
+# MCP_PROFILE_CONFIG) logs its own argv so --lock can be asserted on directly, the same
+# technique case 14's connector stub already uses for the PLAN line. ───────────────────
+IR2KIT="$WORK/ir2kit"
+mkdir -p "$IR2KIT/instances/x"
+cat > "$IR2KIT/instances/x/loom.lock.json" <<'JSON'
+{"mcp": {"profiles": {"tp": {"kind": "hubs", "servers": ["tp-hub"]}}}}
+JSON
+STUB_LOCKARGS="$WORK/stub-lockargs.py"
+cat > "$STUB_LOCKARGS" <<'PY'
+#!/usr/bin/env python3
+import argparse, json, sys
+ap = argparse.ArgumentParser()
+ap.add_argument("--profile", required=True)
+ap.add_argument("--out", required=True)
+ap.add_argument("--config", default=None)
+ap.add_argument("--kit-root", default=None)
+ap.add_argument("--lock", default=None)
+a = ap.parse_args()
+print("LOCKARGS " + json.dumps(sys.argv[1:]), file=sys.stderr)
+with open(a.out, "w") as fh:
+    json.dump({"mcpServers": {}}, fh)
+sys.exit(0)
+PY
+OUTIR2="$(run_dry env LOOM_LOCK="$IR2KIT/instances/x/loom.lock.json" MCP_PROFILE_CONFIG="$STUB_LOCKARGS" \
+        WORKER_MCP_PROFILE=tp "$WORKER" dev 55502 "p" --dry-run)"; RCIR2=$?
+if [ "$RCIR2" -eq 0 ]; then ok "IR2a (SPEC R2) --dry-run exits 0"; else bad "IR2a (SPEC R2) --dry-run exits 0" "rc=$RCIR2: $OUTIR2"; fi
+hasline "IR2b (SPEC R2) instance-root is the kit root, three levels up from instances/x/loom.lock.json" \
+        "instance-root: $IR2KIT (via LOOM_LOCK)" "$OUTIR2"
+contains "IR2c (SPEC R2) --lock names the LOOM_LOCK flag"  '"--lock"'                               "$OUTIR2"
+contains "IR2d (SPEC R2) --lock's value is the LOOM_LOCK path" "$IR2KIT/instances/x/loom.lock.json"  "$OUTIR2"
+
+echo ""
+# ── case 18 (SPEC R3): the profile fallback chain — WORKER_MCP_PROFILE, then the
+# mission's own profile file, then the resolved record's defaultProfile, in that order —
+# each one asserted with the OTHERS available so the win is real, not just "the only
+# option present". ────────────────────────────────────────────────────────────────────
+IR3KIT="$WORK/ir3kit"
+mkdir -p "$IR3KIT"
+cat > "$IR3KIT/x.lock.json" <<'JSON'
+{"defaultProfile": "estate-b", "mcp": {"profiles": {"estate-b": {"kind": "hubs", "servers": ["tp-hub"]}}}}
+JSON
+IR3NP="$WORK/ir3np"
+mkdir -p "$IR3NP"
+printf 'notes\n' > "$IR3NP/NOTES.md"
+
+# (a) no WORKER_MCP_PROFILE, no mission (no .df/missions/* at all under IR3NP) -> defaultProfile
+OUTIR3A="$( (cd "$IR3NP" && env LOOM_LOCK="$IR3KIT/x.lock.json" WORKER_MCP_SOURCE="$CFG" "$WORKER" dev 55503 "p" --dry-run) 2>&1)"; RCIR3A=$?
+if [ "$RCIR3A" -eq 0 ]; then ok "IR3aa (SPEC R3) defaultProfile case --dry-run exits 0"; else bad "IR3aa (SPEC R3) defaultProfile case --dry-run exits 0" "rc=$RCIR3A: $OUTIR3A"; fi
+hasline "IR3a (SPEC R3) no override, no mission profile -> the record's defaultProfile wins" \
+        "profile: estate-b (via defaultProfile)" "$OUTIR3A"
+
+# (b) the mission's own profile file ("tp") wins over defaultProfile. A DEDICATED fresh
+# notepad, not $NP -- by this point in the file $NP carries TWO RUNNING missions (added by
+# the "two RUNNING missions is ambiguous" case above), so MISSION there resolves empty and
+# would silently skip past the very branch this case exists to prove.
+IR3NP2="$WORK/ir3np2"
+mkdir -p "$IR3NP2/.df/missions/M-IR3"
+printf 'notes\n' > "$IR3NP2/NOTES.md"
+printf 'RUNNING\n' > "$IR3NP2/.df/missions/M-IR3/state"
+printf 'tp\n'      > "$IR3NP2/.df/missions/M-IR3/profile"
+OUTIR3B="$( (cd "$IR3NP2" && env LOOM_LOCK="$IR3KIT/x.lock.json" WORKER_MCP_SOURCE="$CFG" "$WORKER" dev 55504 "p" --dry-run) 2>&1)"; RCIR3B=$?
+if [ "$RCIR3B" -eq 0 ]; then ok "IR3ba (SPEC R3) mission-profile case --dry-run exits 0"; else bad "IR3ba (SPEC R3) mission-profile case --dry-run exits 0" "rc=$RCIR3B: $OUTIR3B"; fi
+hasline "IR3b (SPEC R3) a mission profile file wins over the record's defaultProfile" \
+        "profile: tp (via mission profile file)" "$OUTIR3B"
+
+# (c) WORKER_MCP_PROFILE wins over both
+OUTIR3C="$(run_dry env LOOM_LOCK="$IR3KIT/x.lock.json" WORKER_MCP_PROFILE=tp "$WORKER" dev 55505 "p" --dry-run)"; RCIR3C=$?
+if [ "$RCIR3C" -eq 0 ]; then ok "IR3ca (SPEC R3) WORKER_MCP_PROFILE case --dry-run exits 0"; else bad "IR3ca (SPEC R3) WORKER_MCP_PROFILE case --dry-run exits 0" "rc=$RCIR3C: $OUTIR3C"; fi
+hasline "IR3c (SPEC R3) WORKER_MCP_PROFILE wins over the mission file and the record" \
+        "profile: tp (via WORKER_MCP_PROFILE)" "$OUTIR3C"
+
+echo ""
+# ── case 19 (SPEC R4): T1-E — a refused launch (no profile declared anywhere, and the MCP
+# source has no mcpServers at all) leaves NO workers/<role>/<ticket>-* directory behind. ──
+EMPTYCFG="$WORK/empty-claude.json"
+printf '{"mcpServers": {}}\n' > "$EMPTYCFG"
+OUTIR4="$(run_dry env WORKER_MCP_SOURCE="$EMPTYCFG" WORKER_MCP_PROFILE=nosuchprofile "$WORKER" dev 55506 "p" --dry-run)"; RCIR4=$?
+if [ "$RCIR4" -ne 0 ]; then ok "IR4a (SPEC R4) a refused launch exits non-zero"; else bad "IR4a (SPEC R4) a refused launch exits non-zero" "rc=0"; fi
+contains "IR4b (SPEC R4) the refusal says why" "REFUSING" "$OUTIR4"
+NLEFT="$(ls "$NP/workers/dev" 2>/dev/null | grep -c '^55506-' || true)"
+if [ "${NLEFT:-0}" -eq 0 ]; then ok "IR4c (SPEC R4) no workers/dev/55506-* directory was created"
+else bad "IR4c (SPEC R4) no workers/dev/55506-* directory was created" "found $NLEFT"; fi
+
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]
