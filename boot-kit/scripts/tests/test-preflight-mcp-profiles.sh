@@ -182,6 +182,121 @@ pt="$(jq -r '.findings[]|select(.check=="mcp" and .target=="hub-c")|.proposal.va
 [ "$pt" = "mcp__claude_ai_Hub-C__" ] && ok "S1 proposal toolPrefix keeps the hyphen ('claude.ai Hub-C' -> 'claude_ai_Hub-C')" \
                                      || bad "S1 proposal toolPrefix keeps the hyphen" "got '$pt'"
 
+# ---------------------------------------------------------------------------
+# MJ1-MJ5 -- ~/.mcp.json (or $LOOM_MCP_JSON) is a SECOND hub source, unioned with
+# ~/.claude.json. MEASURED 2026-09-09: a provisioned Coder workspace declares its estate
+# hubs in ~/.mcp.json with bearer tokens and has NO mcpServers in ~/.claude.json at all --
+# probe_mcp used to read ~/.claude.json alone and reported that box as fully drifted.
+#
+# report() above always resets $TMP/fake-home/.claude.json to the shared $CLAUDE_JSON
+# fixture after it runs, so these cases need their own harness: one that writes BOTH
+# ~/.claude.json and (optionally) ~/.mcp.json / a $LOOM_MCP_JSON target before the probe,
+# and puts the shared fixture back afterward so nothing below this section is affected.
+# ---------------------------------------------------------------------------
+report_mcp2() { # $1=lock jq $2=profile $3=claude.json jq $4=mcp.json jq (or "" = no file)
+                # $5=optional LOOM_MCP_JSON path override (else default ~/.mcp.json)
+  local LOCK="$TMP/loom.lock.json"
+  jq -n "$1" > "$LOCK"
+  rm -f "$STUBDIR/claude" "$TMP/fake-home/.mcp.json"
+  jq -n "$3" > "$TMP/fake-home/.claude.json"
+  local mcpjson_env="" mcpjson_target="${5:-}"
+  if [ -n "$4" ]; then
+    if [ -n "$mcpjson_target" ]; then
+      jq -n "$4" > "$mcpjson_target"
+      mcpjson_env="$mcpjson_target"
+    else
+      jq -n "$4" > "$TMP/fake-home/.mcp.json"
+    fi
+  fi
+  ( cd "$NOTEPAD" && PATH="$STUBDIR" HOME="$TMP/fake-home" \
+      LOOM_LOCK="$LOCK" LOOM_MCP_JSON="$mcpjson_env" \
+      python3 "$PF" --report --profile "$2" --json "$TMP/pf.json" \
+      >"$TMP/pf.txt" 2>&1 )
+  cp "$CLAUDE_JSON" "$TMP/fake-home/.claude.json"
+  rm -f "$TMP/fake-home/.mcp.json"
+}
+
+echo "=== MJ1: kind hubs, hubs only in ~/.mcp.json, ~/.claude.json has none -> no drift ==="
+report_mcp2 '{mcp:{profiles:{a:{kind:"hubs", servers:["hub-a","hub-b"]}}}}' \
+            "a" \
+            '{mcpServers:{}}' \
+            '{mcpServers:{"hub-a":{url:"https://example.invalid/hub-a", headers:{Authorization:"Bearer LITERALTOKEN"}},"hub-b":{url:"https://example.invalid/hub-b", headers:{Authorization:"Bearer LITERALTOKEN"}}}}'
+d_all="$(jq -r '[.findings[].detail, .notes[]] | join("\n")' "$TMP/pf.json")"
+case "$d_all" in
+  *"not present in"*) bad "MJ1: no 'not present in' finding" "$d_all" ;;
+  *) ok "MJ1: no 'not present in' finding" ;;
+esac
+case "$d_all" in
+  *"no MCP servers configured"*) bad "MJ1: no 'no MCP servers configured' finding" "$d_all" ;;
+  *) ok "MJ1: no 'no MCP servers configured' finding" ;;
+esac
+va="$(jq -r '.findings[]|select(.check=="mcp" and .target=="hub-a")|.verdict' "$TMP/pf.json")"
+vb="$(jq -r '.findings[]|select(.check=="mcp" and .target=="hub-b")|.verdict' "$TMP/pf.json")"
+[ -n "$va" ] && ok "MJ1: hub-a was probed (finding exists)" || bad "MJ1: hub-a was probed" "no finding"
+[ -n "$vb" ] && ok "MJ1: hub-b was probed (finding exists)" || bad "MJ1: hub-b was probed" "no finding"
+
+echo "=== MJ2: same, via LOOM_MCP_JSON pointing elsewhere (no ~/.mcp.json) -> same ==="
+ELSEWHERE="$TMP/elsewhere-mcp.json"
+report_mcp2 '{mcp:{profiles:{a:{kind:"hubs", servers:["hub-a","hub-b"]}}}}' \
+            "a" \
+            '{mcpServers:{}}' \
+            '{mcpServers:{"hub-a":{url:"https://example.invalid/hub-a", headers:{Authorization:"Bearer LITERALTOKEN"}},"hub-b":{url:"https://example.invalid/hub-b", headers:{Authorization:"Bearer LITERALTOKEN"}}}}' \
+            "$ELSEWHERE"
+[ ! -f "$TMP/fake-home/.mcp.json" ] && ok "MJ2: no ~/.mcp.json was written (proves the elsewhere path was used)" \
+                                     || bad "MJ2: no ~/.mcp.json was written" "it exists"
+d_all="$(jq -r '[.findings[].detail, .notes[]] | join("\n")' "$TMP/pf.json")"
+case "$d_all" in
+  *"not present in"*) bad "MJ2: no 'not present in' finding" "$d_all" ;;
+  *) ok "MJ2: no 'not present in' finding" ;;
+esac
+case "$d_all" in
+  *"no MCP servers configured"*) bad "MJ2: no 'no MCP servers configured' finding" "$d_all" ;;
+  *) ok "MJ2: no 'no MCP servers configured' finding" ;;
+esac
+va="$(jq -r '.findings[]|select(.check=="mcp" and .target=="hub-a")|.verdict' "$TMP/pf.json")"
+vb="$(jq -r '.findings[]|select(.check=="mcp" and .target=="hub-b")|.verdict' "$TMP/pf.json")"
+[ -n "$va" ] && ok "MJ2: hub-a was probed via LOOM_MCP_JSON (finding exists)" || bad "MJ2: hub-a was probed via LOOM_MCP_JSON" "no finding"
+[ -n "$vb" ] && ok "MJ2: hub-b was probed via LOOM_MCP_JSON (finding exists)" || bad "MJ2: hub-b was probed via LOOM_MCP_JSON" "no finding"
+
+echo "=== MJ3: a name in both files -> note names the collision, ~/.claude.json's entry wins ==="
+report_mcp2 '{mcp:{profiles:{a:{kind:"hubs", servers:["dup-hub"]}}}}' \
+            "a" \
+            '{mcpServers:{"dup-hub":{url:"https://example.invalid/from-claude", headers:{Authorization:"Bearer LITERALTOKEN"}}}}' \
+            '{mcpServers:{"dup-hub":{url:"https://example.invalid/from-mcpjson", headers:{Authorization:"Bearer LITERALTOKEN"}}}}'
+notes_all="$(jq -r '.notes[]' "$TMP/pf.json")"
+case "$notes_all" in
+  *"dup-hub"*) ok "MJ3: a note names the collision" ;;
+  *) bad "MJ3: a note names the collision" "$notes_all" ;;
+esac
+got_url="$(jq -r '.findings[]|select(.check=="mcp" and .target=="dup-hub")|.actual' "$TMP/pf.json")"
+[ "$got_url" = "https://example.invalid/from-claude" ] \
+  && ok "MJ3: ~/.claude.json's entry (not ~/.mcp.json's) is the one probed" \
+  || bad "MJ3: ~/.claude.json's entry is the one probed" "got '$got_url'"
+
+echo "=== MJ4: neither file has servers -> drift text names both paths ==="
+report_mcp2 '{mcp:{profiles:{a:{kind:"hubs", servers:["hub-a"]}}}}' \
+            "a" \
+            '{mcpServers:{}}' \
+            '{mcpServers:{}}'
+d="$(jq -r '.findings[]|select(.check=="mcp" and .target=="mcpServers")|.detail' "$TMP/pf.json")"
+case "$d" in
+  *".claude.json"*".mcp.json"*) ok "MJ4: drift text names both ~/.claude.json and ~/.mcp.json" ;;
+  *) bad "MJ4: drift text names both paths" "$d" ;;
+esac
+
+echo "=== MJ5: undeclared profile, hubs only in ~/.mcp.json -> name-prefix rule finds them ==="
+report_mcp2 '{}' \
+            "hub" \
+            '{mcpServers:{}}' \
+            '{mcpServers:{"hub-a":{url:"https://example.invalid/hub-a", headers:{Authorization:"Bearer LITERALTOKEN"}}}}'
+v="$(jq -r '.findings[]|select(.check=="mcp" and .target=="hub-a")|.verdict' "$TMP/pf.json")"
+[ -n "$v" ] && ok "MJ5: name-prefix rule found hub-a via ~/.mcp.json" || bad "MJ5: name-prefix rule found hub-a" "no finding"
+d_all="$(jq -r '[.findings[].detail, .notes[]] | join("\n")' "$TMP/pf.json")"
+case "$d_all" in
+  *"no MCP servers configured"*) bad "MJ5: no 'no MCP servers configured' finding" "$d_all" ;;
+  *) ok "MJ5: no 'no MCP servers configured' finding" ;;
+esac
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"
