@@ -164,7 +164,15 @@ alone.
    ⚠️ **The live block is INTERACTIVE-ONLY.** If `CLAUDE_CODE_ENTRYPOINT` is `sdk-cli` (a
    `claude -p` run — measured 2026-09-08 when `validate.sh` was driven headless), the gate's
    loop guard releases before any check, so the turn WILL end. Record that as UNKNOWN (live),
-   not FAIL, and rely on the three direct probes below, which do not depend on the entrypoint.
+   not FAIL, and rely on the three direct probes below.
+
+   ⚠️ **The direct probes inherit that same entrypoint.** MEASURED 2026-09-09, the first
+   `validate.sh --headless` run: the Bash tool's environment carries
+   `CLAUDE_CODE_ENTRYPOINT=sdk-cli` into every child, so the gate fed a Stop event on stdin
+   released with `{}` and NO handoff on disk — three false PASSes, recorded by a run that
+   followed the previous version of this text. The `env -u CLAUDE_CODE_ENTRYPOINT` prefix
+   below is load-bearing: it is what makes the probe measure the handoff instead of the
+   entrypoint. Without it a headless run cannot tell the two apart.
 
    ⚠️ **Do NOT test the pass by "stopping again"** — the Stop that follows a block arrives
    with `stop_hook_active: true` and the gate releases on that unconditionally (its loop
@@ -172,7 +180,7 @@ alone.
 
    ```sh
    printf '{"hook_event_name":"Stop","cwd":"%s","stop_hook_active":false}' "$PWD" \
-     | python3 ~/.claude/skills/df-governed/hooks/handoff-completeness-gate.py
+     | env -u CLAUDE_CODE_ENTRYPOINT python3 ~/.claude/skills/df-governed/hooks/handoff-completeness-gate.py
    ```
 
    Expected: `{}` (released). Then `touch MAP.md` again and repeat — expected a block whose
