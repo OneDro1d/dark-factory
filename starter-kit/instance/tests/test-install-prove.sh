@@ -157,6 +157,11 @@ printf '# fixture doc\n' > "$WORK/c/inst/vendor/dark-factory/starter-kit/instanc
 OUT_C2="$(run c)"
 contains "C6 an old pin that still ships the document gets the by-hand NEXT STEP" "this pin predates validate.sh" "$OUT_C2"
 contains "C7 naming the document inside the pin" "starter-kit/instance/VALIDATE-INSTALL.md" "$OUT_C2"
+# A dry run materialises no engine, so the file is absent by design; the box must speak in the
+# dry run's voice, not raise the incomplete-vendor WARN. Red against the previous tree: C8, C9.
+OUT_A_DRY="$(run a --dry-run)"
+contains "C8 --dry-run says what WOULD print, naming validate.sh" "would  print the NEXT STEP: " "$OUT_A_DRY"
+absent   "C9 --dry-run raises no incomplete-vendor WARN" "no validate.sh in the materialised engine" "$OUT_A_DRY"
 
 echo "=== D: a kit marked kind=template is told so; an instance (or no marker) is not ==="
 # UPSTREAMED from the four shared team kits, whose installer carried the block while this file
