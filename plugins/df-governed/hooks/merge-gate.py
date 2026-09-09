@@ -68,7 +68,7 @@ VALUE_FLAGS = {"--repo", "-R", "--subject", "--body", "--body-file", "--match-he
 # Shell control operators that separate independent commands within one Bash tool call. A
 # merge smuggled after `&&`/`;`/`|` must still be caught, so the command is split on these
 # BEFORE each piece is parsed with shlex, rather than shlex-ing the whole string as one command.
-SEP_TOKENS = {"&&", "||", ";", ";;", "|", "|&"}
+SEP_TOKENS = {"&&", "||", ";", ";;", "|", "|&", "\n"}
 
 API_MERGE_RE = re.compile(r"repos/([^/\s]+/[^/\s]+)/pulls/(\d+)/merge")
 API_MERGE_NOREPO_RE = re.compile(r"(?:^|[\s/])pulls/(\d+)/merge(?:$|[\s/?])")
@@ -178,9 +178,32 @@ def strip_heredoc_bodies(command):
 
 def split_commands(command):
     """Split a Bash command string into a list of argv-token lists, one per subcommand,
-    breaking on shell control operators. Best-effort: this is a hook-side heuristic, not a
-    real shell parser."""
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    breaking on shell control operators AND on newlines. Best-effort: this is a hook-side
+    heuristic, not a real shell parser.
+
+    ⛔ MEASURED 2026-09-09 on the Poland Coder, live, during a validate run:
+
+        cd /path/to/a/repo
+        gh pr merge 999999
+
+    reached GitHub UNGATED and came back with gh's own error, not a merge-gate denial. The
+    same two commands joined by `&&` are denied. Cause: shlex with whitespace_split=True
+    treats a newline as ordinary whitespace, so both LINES arrived as ONE token list --
+    ['cd', '/path/to/a/repo', 'gh', 'pr', 'merge', '999999'] -- whose first token is `cd`, and
+    the caller's cd branch then `continue`d past the merge sitting in the same list.
+
+    🔴 WHY THIS SPELLING AND NOT ANOTHER: this estate's own PreToolUse hook REFUSES `&&`, `||`
+    and `;` in a Bash tool call, so the newline form is the multi-step idiom every agent here
+    is pushed toward. The gate split on every separator an agent is forbidden to type and on
+    nothing it is told to use. A guard whose blind spot is the mandated idiom is not a partial
+    guard; for the traffic that actually exists it is no guard at all.
+
+    Newlines are turned into an explicit separator token BEFORE lexing rather than added to
+    SEP_TOKENS, because by the time shlex has run the newline is already gone."""
+    # A line continuation is NOT a separator -- `foo \<newline> bar` is one command.
+    command = command.replace("\\\n", " ")
+    lexer = shlex.shlex(command.replace("\n", " \n "), posix=True, punctuation_chars=True)
+    lexer.whitespace = " \t\r"          # keep our marker; posix shlex would otherwise drop it
     lexer.whitespace_split = True
     tokens = list(lexer)
     commands = []
@@ -426,6 +449,16 @@ def evaluate(event):
         # `cd DIR && gh pr merge N` relocates the merge the same way env --chdir does.
         if len(tokens) >= 2 and tokens[0] == "cd":
             top_cd = tokens[1]
+            # ⚠️ DO NOT `continue` HERE. The Poland bypass needed TWO things to go wrong: a
+            # separator the splitter did not know, AND this branch skipping detection on the
+            # very list it had just claimed. The split above is fixed, so a `cd` list should
+            # now hold nothing but the cd -- but if some future separator is missed the same
+            # way, the merge is still in this list, and looking costs nothing. Same sink,
+            # second path: guard both.
+            hit = detect_merge(tokens[2:])
+            if hit:
+                merge_hit = hit
+                break
             continue
         hit = detect_merge(tokens)
         if hit:
