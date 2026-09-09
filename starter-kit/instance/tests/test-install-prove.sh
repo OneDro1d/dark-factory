@@ -76,6 +76,10 @@ echo "fixture noop suite ran"
 echo "ASSERTIONS: 1"
 exit 0
 EOF
+  # A stand-in validate.sh: the installer's closing box keys on this FILE existing in the
+  # materialised engine (never executed here), so the "one command" branch can be observed.
+  printf '#!/usr/bin/env bash\necho "fixture validate.sh — never run by the suite"\n' \
+    > "$d/t1/boot-kit/scripts/validate.sh"
   chmod +x "$d/t1/boot-kit/scripts"/*.sh "$d/t1/boot-kit/scripts"/*.py \
            "$d/t1/boot-kit/scripts/tests"/*.sh
   git -C "$d/t1" init -q
@@ -135,6 +139,42 @@ absent   "B prove.sh's own header never printed -- it did not run" "=== prove ==
 absent   "B no [P1] check ran" "[P1] identity" "$OUT_B"
 RC_B="$(rc_of b --no-prove)"
 eqnum "B --no-prove still exits 0 (nothing else in this fixture drifts)" "0" "$RC_B"
+
+echo "=== C: the closing box names the ONE COMMAND whenever the engine carries validate.sh ==="
+# ⛔ MEASURED 2026-09-09 across the four shared team kits: none has VALIDATE-INSTALL.md at its
+# root (the document ships inside the Tier-1 pin), so the box was keyed on a file no minted kit
+# has and printed the WARN instead of the command. Red against the previous tree: C1, C2.
+contains "C1 the box prints the one command" "NEXT STEP, and it is one command:" "$OUT_A"
+contains "C2 and it names the materialised validate.sh with --kit-root" "boot-kit/scripts/validate.sh --kit-root " "$OUT_A"
+absent   "C3 no 'no VALIDATE-INSTALL.md' WARN when the command exists" "no VALIDATE-INSTALL.md" "$OUT_A"
+mk_instance c "$DECL"
+rm -f "$WORK/c/inst/vendor/dark-factory/boot-kit/scripts/validate.sh"
+OUT_C="$(run c)"
+absent   "C4 a pin without validate.sh does not claim one command" "NEXT STEP, and it is one command:" "$OUT_C"
+contains "C5 it says the engine lacks validate.sh and that vendor/ is incomplete, not that the step is optional" "no validate.sh in the materialised engine" "$OUT_C"
+mkdir -p "$WORK/c/inst/vendor/dark-factory/starter-kit/instance"
+printf '# fixture doc\n' > "$WORK/c/inst/vendor/dark-factory/starter-kit/instance/VALIDATE-INSTALL.md"
+OUT_C2="$(run c)"
+contains "C6 an old pin that still ships the document gets the by-hand NEXT STEP" "this pin predates validate.sh" "$OUT_C2"
+contains "C7 naming the document inside the pin" "starter-kit/instance/VALIDATE-INSTALL.md" "$OUT_C2"
+
+echo "=== D: a kit marked kind=template is told so; an instance (or no marker) is not ==="
+# UPSTREAMED from the four shared team kits, whose installer carried the block while this file
+# did not. Red against the previous tree: D1, D2.
+mk_instance d "$DECL"
+jq '.instance = {name: "shared-kit", kind: "template"}' "$WORK/d/inst/loom.lock.json" > "$WORK/d/inst/lock.tmp"
+mv "$WORK/d/inst/lock.tmp" "$WORK/d/inst/loom.lock.json"
+OUT_D="$(run d)"
+contains "D1 a template kit is told it is not yet the reader's" "THIS IS A TEMPLATE KIT, NOT YET YOURS." "$OUT_D"
+contains "D2 and how to make it theirs (flip the marker)" 'flip the marker' "$OUT_D"
+RC_D="$(rc_of d)"
+eqnum    "D3 a template kit still INSTALLS (warn, never block)" "0" "$RC_D"
+absent   "D4 no marker at all (bootstrap's instance) prints no template warning" "THIS IS A TEMPLATE KIT" "$OUT_A"
+mk_instance e "$DECL"
+jq '.instance = {name: "mine", kind: "instance"}' "$WORK/e/inst/loom.lock.json" > "$WORK/e/inst/lock.tmp"
+mv "$WORK/e/inst/lock.tmp" "$WORK/e/inst/loom.lock.json"
+OUT_E="$(run e)"
+absent   "D5 kind=instance prints no template warning" "THIS IS A TEMPLATE KIT" "$OUT_E"
 
 echo ""
 printf 'install.sh prove step: %d ok, %d failed\n' "$PASS" "$FAIL"

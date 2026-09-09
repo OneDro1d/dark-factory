@@ -116,6 +116,48 @@ lock_shape_guard() {
 }
 lock_shape_guard
 
+# ---- 0c. TEMPLATE or INSTANCE? -----------------------------------------------
+# UPSTREAMED 2026-09-09 from the four shared team kits, which carried this block since
+# 2026-09-03 while the installer they were minted from did not — so every kit re-ported from
+# here would have silently lost it. START-HERE.md already documents `instance.kind`; this is
+# the installer half of that page.
+#
+# ⛔ A KIT IS A TEMPLATE UNTIL SOMEBODY CUSTOMISES IT, and nothing used to say so. A first
+# install on an untouched template produces an environment that LOOKS finished and is generic:
+# no declared identity, no code layout, and every future re-install pulls the shared upstream
+# instead of the user's own setup.
+#
+# ⚠️ WARN, NEVER BLOCK. Installing an uncustomised template is INCOMPLETE, not dangerous — it
+# installs the defaults. Refusing would strand someone trying the kit out, and a guard that
+# strands is a failure this estate has already paid for. Report the state; do not refuse over it.
+#
+# ⚠️ ABSENT MEANS INSTANCE. bootstrap.sh mints an instance (you named it, so it is about your
+# machine) and stamps no marker; only a kit somebody hands you carries `"kind": "template"`,
+# and that is the one case this block is for.
+KIND="$(jq -r '.instance.kind // "instance"' "$LOCK" 2>/dev/null)"
+if [ "$KIND" = "template" ]; then
+  say ""
+  say "  ⚠️  THIS IS A TEMPLATE KIT, NOT YET YOURS."
+  say ""
+  say "     Installing now works and gives you the DEFAULTS. What it does not give you is a"
+  say "     setup you can re-install: this repo is shared, so your customisation would live"
+  say "     where the maintainer also pushes, and the next re-install would overwrite it."
+  say ""
+  say "     To make it yours — once, before or after this install:"
+  say "       1. put it somewhere YOU own:   a fork, or your own branch of this repo"
+  say "       2. customise loom.lock.json:   codeLayout (where YOUR repos live), lanes,"
+  say "                                      instance.name, and instance.agentName if you"
+  say "                                      have named your agent"
+  say "       3. declare the machine:        identify.sh --declare loom.lock.json"
+  say "       4. flip the marker:            \"instance\": { \"kind\": \"instance\", ... }"
+  say "       5. commit and push to YOUR copy — that is what you re-install from"
+  say ""
+  say "     ⚠️ Step 4 is not bookkeeping. It is you saying this repo now describes a real"
+  say "        machine, which is what stops this warning and what makes the identity guard"
+  say "        meaningful here."
+  say ""
+fi
+
 VENDOR_REL="$(jq -r '.vendorDir // "vendor"' "$LOCK")"
 VENDOR="$ROOT/$VENDOR_REL"
 T1_NAME="dark-factory"
@@ -689,15 +731,23 @@ say "  Read AUTHENTICATION.md before pointing this at a hub."
 # ⚠️ NOT GATED ON $RC, on purpose. An install that ends in drift is precisely when someone most
 # needs telling that files-in-place is not the same as working.
 step "validate — THE INSTALL IS NOT DONE UNTIL YOU RUN THIS"
-if [ -f "$ROOT/VALIDATE-INSTALL.md" ]; then
+# ⛔ KEYED ON THE COMMAND, NOT ON THE DOCUMENT. Until 2026-09-09 this printed the one command
+# only if VALIDATE-INSTALL.md sat at the KIT ROOT — and no minted kit has it there (the document
+# ships inside the Tier-1 pin, under starter-kit/instance/). So every team kit re-ported from
+# this file would have ended its install with the WARN below instead of the command, which is
+# the exact "the kit knew where the file was and never said so" defect the two live installers
+# were fixed for on 2026-09-07. validate.sh is materialised into THIS kit's engine by step 2
+# whenever the pin carries it; that is the thing to look for.
+if [ -f "$ENGINE_DST/validate.sh" ]; then
   # ⚠️ WORDED THIS LOUDLY ON PURPOSE, 2026-09-08. A new operator installed a fresh Coder and
   # reported that "the install session hasn't mentioned anything about the final test prompt,
   # so a new user wouldn't even be aware of it". The step DID print — as four quiet lines among
   # eighty. A validation step nobody notices is a validation step nobody runs.
   say ""
   say "  NEXT STEP, and it is one command:"
-  say "      bash $ROOT/boot-kit/scripts/validate.sh"
-  say "  (it opens the fresh session for you, in the right directory, with the right prompt)"
+  say "      bash $ENGINE_DST/validate.sh --kit-root $ROOT"
+  say "  (it opens the fresh session for you, in the right directory, with the right prompt,"
+  say "   and removes everything it made when the session ends)"
   say ""
   say "  WHY A NEW SESSION, AND WHY /clear WILL NOT DO: the skills, hooks and plugin this run"
   say "  just placed are read by the harness when a session STARTS. The session you are in now"
@@ -713,9 +763,23 @@ if [ -f "$ROOT/VALIDATE-INSTALL.md" ]; then
   say "  nothing blocks and nothing errors. That document exercises the machinery instead of"
   say "  looking for it: it makes the identity check disagree on purpose, feeds a gate two"
   say "  different inputs, and asks what a headless worker can actually see."
+elif [ -f "$T1/starter-kit/instance/VALIDATE-INSTALL.md" ] || [ -f "$ROOT/VALIDATE-INSTALL.md" ]; then
+  # A pin that predates validate.sh (Tier 1 before 5dee824, 2026-09-08) still ships the
+  # document. Same NEXT STEP, by hand — and Part 2 needs a notepad, which this kit root is
+  # not; the document's Part A says how.
+  VDOC="$T1/starter-kit/instance/VALIDATE-INSTALL.md"
+  [ -f "$VDOC" ] || VDOC="$ROOT/VALIDATE-INSTALL.md"
+  say ""
+  say "  NEXT STEP, and it is not optional (this pin predates validate.sh — by hand):"
+  say "    1. cd $ROOT"
+  say "    2. start a NEW agent session there  (a fresh 'claude', NOT /clear)"
+  say "    3. paste this as the first prompt:  $VDOC"
+  say "  Part 2 needs the session's cwd to be a NOTEPAD — the document's Part A says how."
 else
-  say "  WARN  no VALIDATE-INSTALL.md in this kit. Nothing here proves the install WORKS,"
-  say "        only that files were copied. Fetch it from the starter kit before trusting this."
+  say "  WARN  no validate.sh in the materialised engine and no VALIDATE-INSTALL.md anywhere."
+  say "        Nothing here proves the install WORKS, only that files were copied. Both ship"
+  say "        with the pinned Tier 1; missing means vendor/ is incomplete, not that the step is"
+  say "        optional. Repin and re-run."
 fi
 
 [ "$DRY" -eq 1 ] && exit 0
