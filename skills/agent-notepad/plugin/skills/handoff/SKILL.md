@@ -127,7 +127,10 @@ if the target is not a notepad — a Handoff only belongs in a notepad.
 - **Decisions** — key choices + rationale (mirror durable ones into the code repo's
   `DECISIONS.md` via context-management).
 - **Next action** — the single most important next step.
-- **Open threads / blockers.**
+- **Blocked** — what is blocked and on whom. ⚠️ The heading must contain the word
+  **Blocked**: `handoff-completeness-gate.py` looks for a heading matching `/blocked/`,
+  and "blockers" does not match it. Measured on four separate validate runs — a handoff
+  written exactly as this list used to describe was rejected by the gate that reads it.
 - **Artifacts** — reference by `repo:file:line`, PR/commit SHA, or URL. Do **not** paste
   their contents.
 - **Suggested next skills** — e.g. `df-tdd-developer`, `df-qa`, `context-management`,
