@@ -738,7 +738,16 @@ step "validate — THE INSTALL IS NOT DONE UNTIL YOU RUN THIS"
 # the exact "the kit knew where the file was and never said so" defect the two live installers
 # were fixed for on 2026-09-07. validate.sh is materialised into THIS kit's engine by step 2
 # whenever the pin carries it; that is the thing to look for.
-if [ -f "$ENGINE_DST/validate.sh" ]; then
+#
+# ⚠️ A DRY RUN MATERIALISES NO ENGINE, so on `--dry-run` the file is legitimately absent and
+# the WARN below would claim vendor/ is incomplete on every correct dry run — a warning that is
+# wrong every time is the fastest way to teach a reader to skip warnings (measured 2026-09-09,
+# dry-running the five team kits). Say what WOULD print instead, in the dry run's own voice.
+if [ "$DRY" -eq 1 ]; then
+  say "would  print the NEXT STEP: bash $ENGINE_DST/validate.sh --kit-root $ROOT"
+  say "       (validate.sh is materialised into the engine by step 2; a pin that predates it"
+  say "        gets the by-hand step naming VALIDATE-INSTALL.md inside the pin instead)"
+elif [ -f "$ENGINE_DST/validate.sh" ]; then
   # ⚠️ WORDED THIS LOUDLY ON PURPOSE, 2026-09-08. A new operator installed a fresh Coder and
   # reported that "the install session hasn't mentioned anything about the final test prompt,
   # so a new user wouldn't even be aware of it". The step DID print — as four quiet lines among
