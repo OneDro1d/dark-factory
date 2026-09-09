@@ -37,7 +37,7 @@ T="$(mktemp -d "${TMPDIR:-/tmp}/dfvalidate.XXXXXX")"
 T="$(cd "$T" && pwd)"
 trap 'rm -rf "$T"' EXIT
 
-# A stub `claude`: logs argv + cwd, optionally drops a REPORT.md, always exits 0.
+# A stub `claude`: logs argv + cwd, optionally drops a REPORT.md, exits ${STUB_EXIT:-0}.
 # Never a real session -- this is the ONLY thing VALIDATE_CLAUDE_BIN ever points at below.
 STUB="$T/claude-stub.sh"
 cat > "$STUB" <<'STUBEOF'
@@ -48,7 +48,7 @@ cat > "$STUB" <<'STUBEOF'
   for a in "$@"; do i=$((i+1)); echo "argv[$i]=$a"; done
 } >> "$STUB_LOG"
 [ -n "${STUB_WRITE_REPORT:-}" ] && printf '%s' "$STUB_WRITE_REPORT" > REPORT.md
-exit 0
+exit "${STUB_EXIT:-0}"
 STUBEOF
 chmod +x "$STUB"
 
@@ -219,6 +219,29 @@ contains "10: it says it removed the leftover" "leftover" "$V10_OUT"
   || bad "10: .df-validate/ is gone after the second run" "still present"
 V10_STATUS="$(git -C "$KIT10" status --porcelain 2>&1)"
 [ -z "$V10_STATUS" ] && ok "10: kit status is empty" || bad "10: kit status is empty" "$V10_STATUS"
+
+echo "=== 10b: a FAILED session is not reported as a clean validate (exit 4), teardown still proven ==="
+# MEASURED 2026-09-09 on the homelab Coder: `claude -p` died on an account limit, wrote no
+# REPORT.md, and validate.sh exited 0 -- so the ssh loop that reads $? printed "validate exit 0"
+# and the box read as validated. SESSION_RC was captured and PRINTED but never reached an exit
+# path: a human could see it, no machine could. The teardown proof must STILL run and print --
+# the failure code is applied after it, exactly as a failed push (3) already was.
+KIT10B="$(_fresh_kit kit10b)"
+LOG10B="$T/log10b"; : > "$LOG10B"
+V10B_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOG10B" STUB_EXIT=1 bash "$VALIDATE" --kit-root "$KIT10B" 2>&1)"; V10B_RC=$?
+[ "$V10B_RC" -eq 4 ] && ok "10b: exits 4, not 0" || bad "10b: exits 4, not 0" "rc=$V10B_RC: $V10B_OUT"
+contains "10b: it says the session failed"    "the session FAILED" "$V10B_OUT"
+contains "10b: the teardown proof still ran"  "teardown clean"     "$V10B_OUT"
+[ ! -d "$KIT10B/.df-validate" ] && ok "10b: .df-validate/ is gone even on failure" \
+  || bad "10b: .df-validate/ is gone even on failure" "still present"
+# and the other half of the same hole, stated but NOT an exit code (only the shape above was
+# measured; this suite's own teardown cases drive a deliberately report-less stub):
+KIT10C="$(_fresh_kit kit10c)"
+LOG10C="$T/log10c"; : > "$LOG10C"
+V10C_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$LOG10C" bash "$VALIDATE" --kit-root "$KIT10C" 2>&1)"; V10C_RC=$?
+[ "$V10C_RC" -eq 0 ] && ok "10c: a report-less session that exits 0 still exits 0" \
+  || bad "10c: a report-less session that exits 0 still exits 0" "rc=$V10C_RC: $V10C_OUT"
+contains "10c: but it WARNS that nothing was validated" "produced NO report" "$V10C_OUT"
 
 echo "=== 11: the kit's PROJECT-level settings (commit/push gates) reach the armed notepad ==="
 # MEASURED 2026-09-08 on the first real run: the commit gate is wired in the kit root's

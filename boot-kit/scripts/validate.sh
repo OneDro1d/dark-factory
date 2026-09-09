@@ -62,6 +62,13 @@
 #        1 the session ran but teardown left drift.
 #        2 bad arguments, no lockfile found, or no claude binary on PATH.
 #        3 the report was committed but the push failed -- push it by hand.
+#        4 the SESSION ITSELF failed (non-zero) -- there is no validation to read. ⚠️ MEASURED
+#          2026-09-09 on a Coder workspace: `claude -p` died on an account limit ("You've hit
+#          your session limit"), wrote no REPORT.md, and this script exited 0 -- so the caller
+#          that reads $? (a remote loop over ssh, a CI step) recorded the box as validated
+#          while nothing had been validated at all. SESSION_RC was captured and PRINTED, which
+#          is why it read as reported: a human sees the line, no machine ever did. Like 3, this
+#          is set aside and applied only AFTER the teardown proof below has run and printed.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -178,6 +185,11 @@ else
   ( cd "$NP" && "$CLAUDE_BIN" "/df-governed:validate" ) || SESSION_RC=$?
 fi
 printf 'validate.sh: session exited %d\n' "$SESSION_RC"
+RUN_FAILED=0
+if [ "$SESSION_RC" -ne 0 ]; then
+  RUN_FAILED=1
+  printf 'validate.sh: the session FAILED -- whatever follows is teardown, not validation\n' >&2
+fi
 
 STAMP="$(date -u +%Y-%m-%dT%H%MZ)"
 INSTANCE="$(_resolve_instance "$KIT_ROOT" "$NP")"
@@ -189,6 +201,7 @@ if [ -f "$NP/REPORT.md" ]; then
   printf 'validate.sh: report copied to %s\n' "$KIT_ROOT/$REPORT_BASENAME"
 else
   printf 'validate.sh: no REPORT.md in the armed notepad -- nothing copied\n'
+  [ "$RUN_FAILED" -eq 0 ] && printf 'validate.sh: WARNING: the session exited 0 and produced NO report -- nothing was validated\n' >&2
 fi
 
 # MEASURED 2026-09-08 on the homelab Coder: df-operator-todo resolves the NEAREST notepad —
@@ -249,6 +262,7 @@ fi
 
 if [ "$KEEP" -eq 1 ]; then
   printf 'validate.sh: --keep set, leaving %s in place -- teardown skipped\n' "$NP"
+  [ "$RUN_FAILED" -eq 1 ] && exit 4
   [ "$PUSH_FAILED" -eq 1 ] && exit 3
   exit 0
 fi
@@ -298,6 +312,7 @@ CLEAN=1
 
 if [ "$CLEAN" -eq 1 ]; then
   printf 'validate.sh: teardown clean\n'
+  [ "$RUN_FAILED" -eq 1 ] && exit 4
   [ "$PUSH_FAILED" -eq 1 ] && exit 3
   exit 0
 else
