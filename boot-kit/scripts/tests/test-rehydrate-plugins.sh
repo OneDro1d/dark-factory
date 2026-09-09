@@ -85,6 +85,21 @@ O="$(run g)"
 O="$(run g)"
 [ -d "$TMP/g/live/skills/probe-plug" ] && ok "G: still present after a second full run" || bad "G: pruned" "directory gone"
 
+echo "=== H: an NFS silly-rename in the dest survives --delete; a stale file beside it does not ==="
+# MEASURED on a Coder whose ~/.claude is an NFS symlink, 2026-09-09: rsync --delete tried to
+# unlink a .nfsXXXX ghost, NFS answered EBUSY, and the whole plugin was refused. EBUSY cannot be
+# reproduced on a local disk; the two halves that can be are asserted: the ghost is left alone
+# (H1 — red against the previous tree, which deleted it) and the exclusion is narrow (H2).
+kit h "$DECL"
+O="$(run h)"
+printf 'ghost\n' > "$TMP/h/live/skills/probe-plug/hooks/.nfs000000000008007d00000005"
+printf 'stale\n' > "$TMP/h/live/skills/probe-plug/hooks/ZZZ-stale.sh"
+O="$(run h)"
+contains "H: still materialises" "plugin probe-plug: materialised from 01234567" "$O"
+[ -f "$TMP/h/live/skills/probe-plug/hooks/.nfs000000000008007d00000005" ] && ok "H1: the .nfs* ghost survives --delete" || bad "H1: ghost survives" "unlinked"
+[ -e "$TMP/h/live/skills/probe-plug/hooks/ZZZ-stale.sh" ] && bad "H2: a stale file is still deleted" "ZZZ-stale.sh survived" || ok "H2: a stale file is still deleted"
+diff -r --exclude='.nfs*' "$TMP/h/vendor/dark-factory/plugins/probe-plug" "$TMP/h/live/skills/probe-plug" >/dev/null 2>&1 && ok "H3: apart from the ghost, byte-equal to the pin" || bad "H3: byte-equal apart from the ghost" "diff -r differs"
+
 echo
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS+FAIL))"
