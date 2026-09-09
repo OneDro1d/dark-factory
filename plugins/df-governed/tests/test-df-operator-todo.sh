@@ -29,7 +29,7 @@ echo "=== A: executable and self-describing ==="
 OUT="$("$SCRIPT" --help 2>&1)"; contains "A: --help mentions the file" "operator-todo" "$OUT"
 
 echo "=== B: add records an async item by default ==="
-OUT="$("$SCRIPT" --file "$F" add --id b1 --task "Rotate the key" --why "a credential only you hold" --do "gh auth refresh" 2>&1)"
+OUT="$("$SCRIPT" --file "$F" add --id b1 --category credential --task "Rotate the key" --why "a credential only you hold" --do "gh auth refresh" 2>&1)"
 contains "B: says async" "async" "$OUT"
 OUT="$(cat "$F")"
 contains "B: task text present" "Rotate the key" "$OUT"
@@ -38,13 +38,13 @@ contains "B: do present" "gh auth refresh" "$OUT"
 contains "B: lands under the async heading" "Async — the loop continues" "$OUT"
 
 echo "=== C: --blocking lands in the blocking section ==="
-"$SCRIPT" --file "$F" add --id c1 --task "Decide the tier" --why "a decision you have not made" --do "reply T1 or T2" --blocking >/dev/null 2>&1
+"$SCRIPT" --file "$F" add --id c1 --category decision --task "Decide the tier" --why "a decision you have not made" --do "reply T1 or T2" --blocking >/dev/null 2>&1
 OUT="$(sed -n '/Blocking/,/## Async/p' "$F")"
 contains "C: blocking item under the blocking heading" "Decide the tier" "$OUT"
 absent   "C: async item NOT under blocking" "Rotate the key" "$OUT"
 
 echo "=== D: re-adding an id UPDATES in place and MOVES section — never duplicates ==="
-"$SCRIPT" --file "$F" add --id b1 --task "Rotate the key" --why "still yours" --do "gh auth refresh" --blocking >/dev/null 2>&1
+"$SCRIPT" --file "$F" add --id b1 --category credential --task "Rotate the key" --why "still yours" --do "gh auth refresh" --blocking >/dev/null 2>&1
 N="$(grep -c '`b1`' "$F")"
 eq "D: exactly one entry for the id" "$N" "1"
 OUT="$(sed -n '/Blocking/,/## Async/p' "$F")"
@@ -71,7 +71,7 @@ absent "F: nothing struck through" "~~" "$(cat "$F")"
 contains "F: tells the reader where history IS" "History is in git" "$OUT"
 
 echo "=== G: done --verified <evidence> also removes ==="
-"$SCRIPT" --file "$F" add --id g1 --task "Merge PR 7" --why "a merge you are blocked from" --do "gh pr merge 7" >/dev/null 2>&1
+"$SCRIPT" --file "$F" add --id g1 --category irreversible --task "Merge PR 7" --why "a merge you are blocked from" --do "gh pr merge 7" >/dev/null 2>&1
 OUT="$("$SCRIPT" --file "$F" done --id g1 --verified "gh pr view 7 --json state -> MERGED" 2>&1)"; rc=$?
 eq "G: rc is 0" "$rc" "0"
 contains "G: echoes the evidence" "MERGED" "$OUT"
@@ -91,8 +91,8 @@ contains "I: empty queue is stated" "empty" "$OUT"
 contains "I: file still says nothing blocking" "Nothing blocking" "$(cat "$F")"
 
 echo "=== J: --blocking-only filters ==="
-"$SCRIPT" --file "$F" add --id j1 --task "async thing" --why "a decision" --do "x" >/dev/null 2>&1
-"$SCRIPT" --file "$F" add --id j2 --task "blocking thing" --why "a decision" --do "y" --blocking >/dev/null 2>&1
+"$SCRIPT" --file "$F" add --id j1 --category decision --task "async thing" --why "a decision" --do "x" >/dev/null 2>&1
+"$SCRIPT" --file "$F" add --id j2 --category decision --task "blocking thing" --why "a decision" --do "y" --blocking >/dev/null 2>&1
 OUT="$("$SCRIPT" --file "$F" list --blocking-only 2>&1)"
 contains "J: blocking shown" "blocking thing" "$OUT"
 absent   "J: async hidden" "async thing" "$OUT"
@@ -114,6 +114,35 @@ OUT="$(cd "$NP/deep/deeper" && "$SCRIPT" path 2>&1)"
 eq "L: path is <notepad>/operator-todo.md" "$OUT" "$NP_REAL/operator-todo.md"
 
 echo
+echo "== N: --category is the admission test (operator ruling 2026-09-09)"
+# The file already DELETED finished items; nothing stopped a NON-ACTION being admitted at all.
+# The set is closed on purpose: it is the same list work-autonomously uses for what stays the
+# operator's, so an item fitting none of them is one the agent should have done itself.
+FN="$T/cat.md"
+OUT="$("$SCRIPT" --file "$FN" add --id n1 --task "FYI the box was slow" --why "thought you'd like to know" --do "nothing" 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "N1 add without --category is refused" \
+  || bad "N1 add without --category is refused" "rc=$RC: $OUT"
+[ ! -f "$FN" ] && ok "N1 and nothing was written" || bad "N1 and nothing was written" "file exists"
+OUT="$("$SCRIPT" --file "$FN" add --id n2 --category fyi --task "x" --why "y" --do "z" 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "N2 an invented category is refused" \
+  || bad "N2 an invented category is refused" "rc=$RC: $OUT"
+case "$OUT" in
+  *credential*decision*|*decision*credential*) ok "N2 the refusal lists the closed set" ;;
+  *) bad "N2 the refusal lists the closed set" "$OUT" ;;
+esac
+"$SCRIPT" --file "$FN" add --id n3 --category credential --task "Sign in on the box" \
+  --why "an interactive login only you can complete" --do "run claude and sign in" >/dev/null 2>&1
+BODY="$(cat "$FN")"
+case "$BODY" in
+  *"_yours because:_ **credential**"*) ok "N3 the category is rendered on the line, auditable at a glance" ;;
+  *) bad "N3 the category is rendered on the line" "$BODY" ;;
+esac
+case "$BODY" in
+  *"EVERY LINE HERE IS AN ACTION WAITING ON YOU"*) ok "N4 the header states the admission rule" ;;
+  *) bad "N4 the header states the admission rule" "no rule line in header" ;;
+esac
+
+
 printf 'passed %s  failed %s\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %s\n' "$((PASS+FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1
