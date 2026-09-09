@@ -462,6 +462,18 @@ else
 fi
 export DF_MCP_MODE="$MCP_MODE"
 
+# ── deduplicate DISALLOW_LIST, once, after the plan merge and before anything prints or
+# builds argv ────────────────────────────────────────────────────────────────────────────
+# An estate shim on PATH adds --disallow-tool entries from ~/.claude.json, and a connector
+# PLAN's own disallow list adds the same names again; without this the argv (and the
+# dry-run's disallow: lines) carry every name twice. Exact string equality, first
+# occurrence kept, order otherwise preserved.
+if [ -n "$DISALLOW_LIST" ]; then
+  DISALLOW_LIST="$(printf '%s' "$DISALLOW_LIST" | awk 'NF && !seen[$0]++')"
+  [ -n "$DISALLOW_LIST" ] && DISALLOW_LIST="$DISALLOW_LIST
+"
+fi
+
 # ── the worker scratch: the child's cwd, and its own project settings scope ─────────────
 # ⚠️ T1-E, MEASURED ON TWO MACHINES 2026-09-09: this used to run BEFORE the MCP refusal
 # above, so every refused launch left a `workers/<role>/<ticket>-<ts>/` tree behind — with
@@ -535,7 +547,12 @@ fi
 # deadlock it against that gate. So the brief states the mechanism as it actually is.
 HARDSTOP_LINE="Hard stops: none supplied with this mission frame — if an action looks irreversible or outward-facing, stop and return blocked-with-evidence."
 case "$FRAME" in
-  *HARD-STOPS.md*) HARDSTOP_LINE="Hard stops: read ./HARD-STOPS.md in this directory FIRST. They are absolute." ;;
+  *HARD-STOPS.md*)
+    HARDSTOP_LINE="Hard stops: read ./HARD-STOPS.md in this directory FIRST. They are absolute." ;;
+  *MISSION.md*)
+    if grep -qi 'hard stop' "$SCRATCH/MISSION.md" 2>/dev/null; then
+      HARDSTOP_LINE="Hard stops: read ./MISSION.md in this directory FIRST — it carries them. They are absolute."
+    fi ;;
 esac
 
 # The rules block sits AFTER the promise and BEFORE the evidence contract: a worker reads

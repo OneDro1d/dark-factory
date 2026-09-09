@@ -8,12 +8,13 @@ working notepad" the way `VALIDATE-INSTALL.md` Part 1's Task 0 does; you are alr
 and `M-VALIDATE` is already `RUNNING` in `.df/missions/M-VALIDATE/state`. The **kit root** is
 the parent of your cwd (`..`). **The record is the one that RESOLVES for THIS machine, not
 "the file at the kit root":** if `LOOM_LOCK` is set in your environment, that is it; otherwise
-run `bash <kit-root>/boot-kit/scripts/identify.sh --match <kit-root>/instances` (fall back to
-`<kit-root>/vendor/dark-factory/boot-kit/scripts/identify.sh`) and use the record it names,
-else the single `<kit-root>/*.lock.json`. On every Coder in a shared instance repo the kit-root
-file describes a DIFFERENT machine (the laptop) and `identify.sh` exits 3 against it — a run
-that validated that file would be the exact failure Task 1 exists to catch. Quote which record
-you used and how it was chosen.
+run `bash <kit-root>/vendor/dark-factory/boot-kit/scripts/identify.sh --match <kit-root>/instances`
+(fall back to `<kit-root>/boot-kit/scripts/identify.sh`, if this kit ships one) and use the
+record it names, else the single `<kit-root>/*.lock.json`. A non-zero exit from `--match` now
+means no record matches this machine, not an error. On every Coder in a shared instance repo
+the kit-root file describes a DIFFERENT machine (the laptop) and `identify.sh` exits 3 against
+it — a run that validated that file would be the exact failure Task 1 exists to catch. Quote
+which record you used and how it was chosen.
 
 Work the tasks below in order. Record each as **PASS**, **FAIL**, or **UNKNOWN** — UNKNOWN
 means you could not probe it, not that it passed. Quote commands and output **verbatim**;
@@ -77,7 +78,7 @@ a `ToolSearch` to load, so a bare enumeration never saw it. Ask it to run `ToolS
 
 ```sh
 claude -p 'Call <one read-only tool> once and paste its raw result verbatim. Make no other tool calls. Then stop.' \
-  --setting-sources project --permission-mode bypassPermissions --output-format json 2>&1 | tail -5
+  --setting-sources project --permission-mode bypassPermissions --max-budget-usd 3 --output-format json 2>&1 | tail -5
 ```
 
 ⚠️ **`--permission-mode bypassPermissions` IS LOAD-BEARING AND IS THE FLAG PEOPLE OMIT.** The
@@ -108,7 +109,8 @@ the other says NO record names any other estate, so nothing is denied — report
 Then one **bounded** dispatch, rendered first — ask for the kit's own prompt-render or
 dry-run path, whatever it is called (do not assume a variable name), report whether a prompt
 renders and whether the hard stops appear in it, and do not dispatch for real unless the
-render looks right. Bound this by **budget**, not by count — allow about $5.
+render looks right. Bound this by **budget**, not by count — allow about $5 per probe that
+must complete a call; an enumeration-only probe needs less.
 
 ### §7 · Subagents
 

@@ -65,6 +65,12 @@ PROF_A1="$KITA1/.df-validate/.df/missions/M-VALIDATE/profile"
 file_exists "A1: .df/missions/M-VALIDATE/profile exists" "$PROF_A1"
 contains "A1: it carries the record's defaultProfile" "estate-b" "$(cat "$PROF_A1" 2>/dev/null)"
 
+echo "=== A5: arming writes .df/missions/M-VALIDATE/HARD-STOPS.md carrying the hard stops ==="
+HS_A1="$KITA1/.df-validate/.df/missions/M-VALIDATE/HARD-STOPS.md"
+file_exists "A5: HARD-STOPS.md exists" "$HS_A1"
+contains "A5: it contains 'touch nothing outside'" "touch nothing outside" "$(cat "$HS_A1" 2>/dev/null)"
+contains "A5: it names validate.sh" "validate.sh" "$(cat "$HS_A1" 2>/dev/null)"
+
 echo "=== A1b: a record with NO defaultProfile -> no profile file ==="
 KITA1B="$T/kitA1b"
 mkdir -p "$KITA1B"
