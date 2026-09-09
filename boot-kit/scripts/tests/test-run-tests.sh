@@ -294,6 +294,45 @@ case "$(cat "$WORK/b11c.out")" in *"BIN=$WORK/mybin"*) ok "B11c a caller's LOOM_
                                    *) bad "B11c a caller's LOOM_BIN is honoured" "output: $(cat "$WORK/b11c.out")" ;; esac
 
 # This suite must obey its own contract.
+# ------------------------------------------------- instance record must not leak into a suite
+# MEASURED 2026-09-09 on the Poland Coder: a kit suite drove the real install.sh over scratch
+# fixtures, install.sh reads ${LOOM_LOCK:-loom.lock.json}, and the Coder exports LOOM_LOCK from
+# ~/.bashrc -- so every fixture was replaced by the machine's live record and the suite measured
+# the wrong subject. It passed on the laptop only because LOOM_LOCK is unset there.
+E="$WORK/envleak"
+mkdir -p "$E"
+# ⚠️ The probe WRITES what it saw; it does not print it. run-tests.sh captures a suite's
+# stdout and prints it only when the suite FAILS, so a passing probe that printed its finding
+# would leave the assertion below matching an empty string -- green for the wrong reason.
+cat > "$E/test-envleak.sh" <<'SUITE'
+#!/usr/bin/env bash
+touch "$MARKDIR/$(basename "$0")"
+{
+  printf 'SAW_LOOM_LOCK=[%s]\n'  "${LOOM_LOCK-<unset>}"
+  printf 'SAW_DF_PROFILE=[%s]\n' "${DF_PROFILE-<unset>}"
+} > "$MARKDIR/saw.txt"
+echo "ASSERTIONS: 1"
+exit 0
+SUITE
+chmod +x "$E/test-envleak.sh"
+MARKDIR="$WORK/menv"; export MARKDIR
+rm -rf "$MARKDIR"; mkdir -p "$MARKDIR"
+OUT="$(LOOM_LOCK=/nowhere/the-machines-own-record.json DF_PROFILE=someprofile bash "$RUNNER" --root "$E" 2>&1)"
+SAW="$(cat "$MARKDIR/saw.txt" 2>/dev/null || echo '<probe never ran>')"
+case "$SAW" in
+  *'SAW_LOOM_LOCK=[<unset>]'*)  ok   "E1  LOOM_LOCK is unset for the suite, even when the caller exports it" ;;
+  *) bad "E1  LOOM_LOCK is unset for the suite, even when the caller exports it" "$SAW" ;;
+esac
+case "$SAW" in
+  *'SAW_DF_PROFILE=[<unset>]'*) ok   "E2  DF_PROFILE is unset too (the sibling path to the same sink)" ;;
+  *) bad "E2  DF_PROFILE is unset too (the sibling path to the same sink)" "$SAW" ;;
+esac
+# and the scratch redirection above still holds -- unsetting must not have replaced it
+case "$SAW$OUT" in
+  *'the-machines-own-record'*) bad "E3  the machine's record never reaches the suite" "leaked" ;;
+  *) ok "E3  the machine's record never reaches the suite" ;;
+esac
+
 echo "ASSERTIONS: $((PASSED + FAILED))"
 
 echo
