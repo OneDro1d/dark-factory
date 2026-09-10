@@ -305,6 +305,38 @@ esac
 [ ! -e "$KIT10F/.df-validate" ] && ok "10f: the owner file goes with the notepad at teardown" \
   || bad "10f: the owner file goes with the notepad at teardown" ".df-validate still present"
 
+echo "=== 10g: a report git refuses to STAGE is exit 3, and the step is named ==="
+# MEASURED 2026-09-10 on two ESO machines at once: each copied its report, neither committed it,
+# GitHub's push log shows no push from either, and both looked finished. Until then `git add`'s
+# status was never checked and a failed commit printed FATAL and still exited 0.
+KIT10G="$(_fresh_kit kit10g)"
+EXCL10G="$(git -C "$KIT10G" rev-parse --git-path info/exclude)"
+case "$EXCL10G" in /*) : ;; *) EXCL10G="$KIT10G/$EXCL10G" ;; esac
+mkdir -p "$(dirname "$EXCL10G")"
+printf 'VALIDATE-REPORT-*\n' >> "$EXCL10G"
+HEAD10G="$(git -C "$KIT10G" rev-parse HEAD)"
+V10G_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$T/log10g" STUB_WRITE_REPORT="probe report" bash "$VALIDATE" --kit-root "$KIT10G" 2>&1)"; V10G_RC=$?
+[ "$V10G_RC" -eq 3 ] && ok "10g: exits 3, not 0" || bad "10g: exits 3, not 0" "rc=$V10G_RC: $V10G_OUT"
+contains "10g: the message names git add" "git add refused the report" "$V10G_OUT"
+[ "$(git -C "$KIT10G" rev-parse HEAD)" = "$HEAD10G" ] && ok "10g: nothing was committed" \
+  || bad "10g: nothing was committed" "HEAD moved"
+ls "$KIT10G"/VALIDATE-REPORT-*.md >/dev/null 2>&1 && ok "10g: the report is still at the kit root" \
+  || bad "10g: the report is still at the kit root" "missing"
+
+echo "=== 10h: a report git refuses to COMMIT is exit 3 too (it used to be FATAL + exit 0) ==="
+KIT10H="$(_fresh_kit kit10h)"
+HOOKS10H="$(git -C "$KIT10H" rev-parse --git-path hooks)"
+case "$HOOKS10H" in /*) : ;; *) HOOKS10H="$KIT10H/$HOOKS10H" ;; esac
+mkdir -p "$HOOKS10H"
+printf '#!/bin/sh\necho "probe pre-commit: refused"\nexit 1\n' > "$HOOKS10H/pre-commit"
+chmod +x "$HOOKS10H/pre-commit"
+HEAD10H="$(git -C "$KIT10H" rev-parse HEAD)"
+V10H_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$T/log10h" STUB_WRITE_REPORT="probe report" bash "$VALIDATE" --kit-root "$KIT10H" 2>&1)"; V10H_RC=$?
+[ "$V10H_RC" -eq 3 ] && ok "10h: exits 3, not 0" || bad "10h: exits 3, not 0" "rc=$V10H_RC: $V10H_OUT"
+contains "10h: the message names git commit" "git commit failed" "$V10H_OUT"
+[ "$(git -C "$KIT10H" rev-parse HEAD)" = "$HEAD10H" ] && ok "10h: nothing was committed" \
+  || bad "10h: nothing was committed" "HEAD moved"
+
 echo "=== 11: the kit's PROJECT-level settings (commit/push gates) reach the armed notepad ==="
 # MEASURED 2026-09-08 on the first real run: the commit gate is wired in the kit root's
 # .claude/settings.json only, the armed notepad is its own repo under its own cwd, so

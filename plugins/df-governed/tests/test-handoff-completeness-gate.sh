@@ -184,6 +184,29 @@ O="$(event_json "$N13" false me | run)"
 contains "13: blocks on the mission this session owns" '"decision": "block"' "$O"
 contains "13: the block names MY mission, not the other one" "M-TEST-13B" "$O"
 
+echo "=== 14: a RUNNING mission gets an operator-todo.md; no mission, no page; never rewritten ==="
+# Operator ruling 2026-09-10. This is the only hook that fires for EVERY attended mission on
+# every estate — the plugin registers no SessionStart hook, and attended missions never call
+# `df-mission start` — so it is where the page is guaranteed.
+N14="$T/np14"; mk_notepad "$N14"; mk_running "$N14" "M-TEST-14"
+event_json "$N14" false x | run >/dev/null
+if [ -f "$N14/operator-todo.md" ]; then ok "14: the gate created operator-todo.md for a RUNNING mission"
+else bad "14: the gate created operator-todo.md for a RUNNING mission" "absent"; fi
+contains "14: and it is the tool's own page, rule included" "EVERY LINE HERE IS AN ACTION" "$(cat "$N14/operator-todo.md" 2>/dev/null)"
+N14B="$T/np14b"; mk_notepad "$N14B"
+event_json "$N14B" false x | run >/dev/null
+if [ ! -e "$N14B/operator-todo.md" ]; then ok "14: a notepad with NO running mission is left alone"
+else bad "14: a notepad with NO running mission is left alone" "page created"; fi
+printf 'hand-edited\n' > "$N14/operator-todo.md"
+event_json "$N14" false x | run >/dev/null
+contains "14: an existing page is never rewritten" "hand-edited" "$(cat "$N14/operator-todo.md")"
+# Headless sessions return before it, on purpose — which is exactly why df-mission start
+# creates the page too. Asserted so nobody "fixes" the early return and double-writes.
+N14C="$T/np14c"; mk_notepad "$N14C"; mk_running "$N14C" "M-TEST-14C"
+event_json "$N14C" false x | ENTRYPOINT=sdk-cli run >/dev/null
+if [ ! -e "$N14C/operator-todo.md" ]; then ok "14: headless (sdk-cli) returns first — df-mission start owns that case"
+else bad "14: headless (sdk-cli) returns first" "page created"; fi
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
