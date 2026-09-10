@@ -337,6 +337,32 @@ contains "10h: the message names git commit" "git commit failed" "$V10H_OUT"
 [ "$(git -C "$KIT10H" rev-parse HEAD)" = "$HEAD10H" ] && ok "10h: nothing was committed" \
   || bad "10h: nothing was committed" "HEAD moved"
 
+echo "=== 10i: work already STAGED in the kit is not swept into the report commit, nor pushed ==="
+# MEASURED 2026-09-10 on an ESO Coder: the tree held unrelated staged work, and `git commit -m`
+# with no pathspec commits the WHOLE index -- the report commit would have carried that work and
+# pushed it to the estate remote. The add was scoped; the commit was not. It names its paths now,
+# which commits only those and leaves everything else staged exactly as it was.
+KIT10I="$(_fresh_kit kit10i)"
+printf 'operator work in progress\n' > "$KIT10I/operator-wip.txt"
+git -C "$KIT10I" add -- operator-wip.txt
+V10I_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$T/log10i" STUB_WRITE_REPORT="probe report" bash "$VALIDATE" --kit-root "$KIT10I" 2>&1)"; V10I_RC=$?
+[ "$V10I_RC" -eq 0 ] && ok "10i: exits 0" || bad "10i: exits 0" "rc=$V10I_RC: $V10I_OUT"
+FILES10I="$(git -C "$KIT10I" show --name-only --format= HEAD)"
+case "$FILES10I" in
+  *operator-wip.txt*) bad "10i: the report commit does not carry the staged work" "HEAD has: $FILES10I" ;;
+  *VALIDATE-REPORT-*) ok "10i: the report commit does not carry the staged work" ;;
+  *) bad "10i: the report commit does not carry the staged work" "HEAD has no report: $FILES10I" ;;
+esac
+contains "10i: the staged work is still staged afterwards" "operator-wip.txt" \
+  "$(git -C "$KIT10I" diff --cached --name-only)"
+ORIGIN10I="$(git -C "$KIT10I" remote get-url origin)"
+BR10I="$(git -C "$KIT10I" symbolic-ref --short HEAD)"
+if git -C "$ORIGIN10I" ls-tree -r --name-only "$BR10I" 2>/dev/null | grep -qx operator-wip.txt; then
+  bad "10i: the staged work did not reach the remote" "it is in origin/$BR10I"
+else
+  ok "10i: the staged work did not reach the remote"
+fi
+
 echo "=== 11: the kit's PROJECT-level settings (commit/push gates) reach the armed notepad ==="
 # MEASURED 2026-09-08 on the first real run: the commit gate is wired in the kit root's
 # .claude/settings.json only, the armed notepad is its own repo under its own cwd, so

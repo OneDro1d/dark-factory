@@ -50,9 +50,10 @@
 #
 # The report (and the operator-todo, when one was raised) is committed and pushed FROM THE
 # KIT ROOT, default ON. `--no-push` opts out of BOTH the commit and the push -- the file
-# still lands at the kit root, just uncommitted. The add uses an EXPLICIT pathspec, never
-# `-A`, so a kit that was already dirty before this run (see the STATUS_BEFORE comment
-# below) is never swept into the commit. A push failure never loses the commit -- it is
+# still lands at the kit root, just uncommitted. The add AND the commit name their paths,
+# never `-A` and never a bare `git commit`, so a kit that was already dirty before this run --
+# modified, or already STAGED -- is never swept into the commit (a bare commit takes the whole
+# index; measured 2026-09-10 on an ESO Coder holding unrelated staged work). A push failure never loses the commit -- it is
 # reported and the script's own exit code becomes 3, but only after the teardown proof below
 # has still run and printed.
 #
@@ -273,6 +274,9 @@ elif [ -n "$REPORT_BASENAME" ] && git -C "$KIT_ROOT" rev-parse --is-inside-work-
   [ -n "$TODO_BASENAME" ] && ADD_PATHS+=("$TODO_BASENAME")
   # Explicit pathspec, NEVER `-A` -- a pre-existing dirty file in the kit (an operator's
   # uncommitted edit, an install's probed.* write) stays exactly as it was, staged or not.
+  # ⚠️ That holds only because the COMMIT below names the same paths. `git add -- <paths>`
+  # scopes what is staged, but a bare `git commit` commits the WHOLE index, so work the
+  # operator had already staged would have ridden this commit to the remote.
   if ! git -C "$KIT_ROOT" add -- "${ADD_PATHS[@]}"; then
     printf 'validate.sh: FATAL: git add refused the report (git said why, above) -- NOT committed, NOT pushed; it is at %s\n' "$KIT_ROOT/$REPORT_BASENAME" >&2
     PUSH_FAILED=1
@@ -283,7 +287,7 @@ elif [ -n "$REPORT_BASENAME" ] && git -C "$KIT_ROOT" rev-parse --is-inside-work-
     ID_ARGS=(-c "user.name=validate.sh" -c "user.email=validate.sh@$(hostname)")
   fi
   COMMIT_MSG="M-VALIDATE: validation report — ${INSTANCE} ${STAMP} [M-VALIDATE]"
-  if [ "$PUSH_FAILED" -eq 0 ] && git -C "$KIT_ROOT" "${ID_ARGS[@]+"${ID_ARGS[@]}"}" commit -q -m "$COMMIT_MSG"; then
+  if [ "$PUSH_FAILED" -eq 0 ] && git -C "$KIT_ROOT" "${ID_ARGS[@]+"${ID_ARGS[@]}"}" commit -q -m "$COMMIT_MSG" -- "${ADD_PATHS[@]}"; then
     COMMIT_SHA="$(git -C "$KIT_ROOT" rev-parse --short HEAD)"
     printf 'validate.sh: report committed %s\n' "$COMMIT_SHA"
 
