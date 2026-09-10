@@ -71,8 +71,14 @@ claude -p 'List your available MCP tool namespaces. If you have none, reply exac
 ⚠️ **A "NO MCP IN WORKER" from that probe is NOT a trustworthy negative.** Measured 2026-09-08
 on a Coder: the worker answered exactly that, then in the next probe called one of the estate's
 read-only search tools and got real data — the tool's schema was *deferred* and needed
-a `ToolSearch` to load, so a bare enumeration never saw it. Ask it to run `ToolSearch` for
-`mcp__` before answering, and treat the enumeration as a hint only. The CALL below decides.
+a `ToolSearch` to load, so a bare enumeration never saw it. Treat the enumeration as a hint
+only; the CALL below decides.
+
+⚠️ **Do not ask that worker to run `ToolSearch` first — it may not have one.** Measured
+2026-09-10: a hand-rolled `claude -p --setting-sources project` worker on the maintainer's laptop
+and on the ESO Azure Coder both answered *"I couldn't run ToolSearch because it isn't one of the
+tools this session gave me"*, while the ESO laptop's worker had it the same day. Whether it
+exists varies by machine, so a failed search is not a negative either. The CALL does not need it.
 
 ⛔ **THAT ANSWER IS NOT YET EVIDENCE. Enumeration is not capability.** Make it CALL something:
 
@@ -141,19 +147,36 @@ alone.
    Expected: DENIED, reason begins `escalation-gate:`, listing the operator-only categories
    and the exact escalation file path to write. Do NOT write that file; record the denial.
 
+   ⚠️ **Headless, the tool does not exist.** In an `sdk-cli` session (`claude -p`, which is what
+   `validate.sh --headless` drives) AskUserQuestion is not offered at all — measured 2026-09-10:
+   `ToolSearch select:AskUserQuestion` → `No matching deferred tools found`. That is the harness,
+   not the kit. Record the live probe UNKNOWN, not FAIL, and feed the gate directly:
+
+   ```sh
+   printf '{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{},"cwd":"%s"}' "$PWD" \
+     | env -u CLAUDE_CODE_ENTRYPOINT python3 ~/.claude/skills/df-governed/hooks/escalation-gate.py
+   ```
+
+   Expected: `"permissionDecision": "deny"` with the same `escalation-gate:` reason.
+
 4. **Commit gate (objective 6).** Run `git commit --allow-empty -m wip` in this notepad.
    Expected: DENIED, reason naming the RUNNING mission and the two accepted message forms.
-   Then run it again with `-m "M-VALIDATE: gate check"`. Expected: it runs (an empty commit;
-   removed in step 8).
+   Then run it again with `-m "M-VALIDATE: gate check"`. Expected: it runs (an empty commit
+   in this throwaway repo; it goes with the notepad — step 8 says why it is not reset).
    The same probe from the notepad against a CODE repo (`git -C <any repo> commit --allow-empty -m wip`) must also be DENIED now — that is the plugin's `mission-commit-gate.py`, distinct from this project-level staleness gate.
 
-5. **Merge gate.** From inside the Tier-1 checkout on this machine (find it: `git -C <path>
-   remote get-url origin` ends in `/dark-factory.git` or `/dark-factory`), run
-   `gh pr merge 999999`. Expected: DENIED, reason begins `merge-gate:`. For a PR that does not
+5. **Merge gate.** From this cwd, run `gh pr merge 999999 --repo <tier-1 owner/repo>` — the
+   Tier-1 upstream your lockfile pins (`OneDro1d/dark-factory` on every kit as of 2026-09-10).
+   Expected: DENIED, reason begins `merge-gate:`. For a PR that does not
    exist the reason is the gh head-sha error (the gate fails CLOSED before it reaches its
    record check); the "no `publish-gate.ok` record" and "commit mismatch" reasons need a real
    open PR and are NOT exercised here — say so in the report rather than marking them tested.
    Nothing is merged; PR 999999 does not exist.
+
+   ⚠️ **Do not `cd` into a Tier-1 checkout for this.** The harness resets the shell's cwd after
+   each command (measured 2026-09-10: `Shell cwd was reset to …/.df-validate`), so the old
+   "from inside the checkout" wording could not be followed. The gate does not need it: it
+   reads the target repo from `--repo`.
 
 6. **Handoff Stop gate (objective 3).** Run `touch MAP.md` (so the map is newer than any
    handoff), then simply finish your turn with the words "stopping now". Expected: **the turn
@@ -220,15 +243,26 @@ alone.
 8. **TEARDOWN — leave the tree exactly as you found it, then PROVE it.**
 
    ⚠️ **You do not remove this cwd yourself.** `validate.sh` removes `.df-validate/` and its
-   `.git/info/exclude` line after this session ends. Everything below is scoped to what THIS
-   session mutated, at the **kit root**:
+   `.git/info/exclude` line after this session ends.
+
+   ⚠️ **Leave this notepad's own commits alone.** It is its own git repo with no remote
+   (`validate-arm.sh` makes it), so step 4's empty `M-VALIDATE: gate check` commit and the
+   commits the handoff helper made in step 6 all live in it and go with it. Do not reset
+   anything here: after step 6 HEAD is the helper's handoff commit, so `reset --soft HEAD~1`
+   would drop a handoff, not the probe. Measured on three machines 2026-09-10, where the guard
+   this step used to carry could never fire. For the same reason `git status` lists no
+   untracked handoff: the helper committed it.
+
+   What you must check is what reached OUTSIDE this notepad:
 
    ```sh
-   # the empty commit from step 4 — ONLY if it is still HEAD and is yours
-   [ "$(git log -1 --format=%s)" = "M-VALIDATE: gate check" ] && git reset -q --soft HEAD~1
+   # the kit: nothing this session did may show here (.df-validate/ itself is excluded).
+   # Anything listed must predate you; if you cannot tell, say so under "Could not determine".
+   git -C <kit-root> status --porcelain
 
-   # the test handoff written when the Stop gate blocked you (find it by name)
-   git status --porcelain handoffs/ | sed -n 's/^?? //p'      # then rm the one you wrote
+   # step 4's CODE-repo probe: if the gate did NOT deny it, a `wip` commit landed in that repo.
+   # Undo it ONLY if it is still HEAD there and is yours, and report the step FAIL either way:
+   [ "$(git -C <that repo> log -1 --format=%s)" = wip ] && git -C <that repo> reset -q --soft HEAD~1
 
    # the worker dry-run scratch directory — it lands under THIS notepad (the launcher resolves
    # the nearest NOTES.md, which is your cwd), so it goes when validate.sh removes the cwd.
