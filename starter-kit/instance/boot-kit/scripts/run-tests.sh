@@ -98,6 +98,35 @@ if [ -n "${RUN_TESTS_ACTIVE:-}" ]; then
 fi
 export RUN_TESTS_ACTIVE=1
 
+# ⛔ NO SUITE MAY REACH THE REAL ~/.local/bin OR ~/.claude, AND NO SUITE MAY INHERIT THIS
+# MACHINE'S INSTANCE RECORD. PORTED 2026-09-09 from Tier 1's run-tests.sh, which has had the
+# first half since T1 #159 and the second since #168. ⚠️ THIS RUNNER IS NOT A COPY OF THAT ONE
+# -- it is the Tier-3 runner, a different script with its own rationale -- so neither half
+# arrived on its own, and that is the third time tonight a Tier-1 fix stopped at the four
+# template kits and left the three self-contained ones behind (see install.sh steps 2a and 4e2).
+#
+# FIRST HALF, REDIRECT. Every installer this estate ships writes PATH links into
+# ${LOOM_BIN:-$HOME/.local/bin} and the live tree into ${LOOM_LIVE:-$HOME/.claude}. A suite that
+# drives an installer and pins neither installs onto the machine it is testing. Measured on the
+# maintainer's laptop 2026-09-09: a run left ~/.local/bin/df-mission pointing into a worktree
+# that was deleted an hour later, and every dispatch on the machine then refused.
+#
+# SECOND HALF, UNSET. These two have no safe scratch value -- the point is that each fixture's
+# OWN lockfile is the one read. ⚠️ MEASURED 2026-09-09 on the Poland Coder: this repo's
+# boot-kit/tests/test-engine-pin.sh builds eight scratch instances and drives the REAL install.sh
+# over them; install.sh reads `LOCK="${LOOM_LOCK:-loom.lock.json}"`; every provisioned Coder
+# exports LOOM_LOCK from ~/.bashrc. All eight fixtures were silently replaced by the machine's
+# live record -- 10 of 44 assertions red there, 44/44 green on the laptop where LOOM_LOCK happens
+# to be unset. 🔴 The laptop pass was the dangerous result: correct by luck of environment, not
+# by construction. DF_PROFILE is unset with it as the sibling path to the same sink (precedence
+# is $DF_PROFILE > $LOOM_LOCK > the record's defaultProfile); guarding one path of two is how
+# this estate keeps arriving here. A suite that wants either sets it itself, narrowly.
+RUN_TESTS_SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/run-tests-scratch.XXXXXX")"
+export LOOM_BIN="${LOOM_BIN:-$RUN_TESTS_SCRATCH/bin}"
+export LOOM_LIVE="${LOOM_LIVE:-$RUN_TESTS_SCRATCH/live}"
+mkdir -p "$LOOM_BIN" "$LOOM_LIVE"
+unset LOOM_LOCK DF_PROFILE
+
 # Prune the generated and vendored trees. `vendor/` is a cache that can hold a COPY of
 # these very suites; running those would report on the cache, not on this repo.
 #

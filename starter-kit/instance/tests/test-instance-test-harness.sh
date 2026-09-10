@@ -155,6 +155,54 @@ mkfix secret "$(jq -n --arg c "$GOODPIN" --arg t "$FAKE_TOKEN" '{upstreams:{"dar
 contains "B13 a secret-shaped string in a committed file" "contains a secret-shaped string" "$(shape_out secret)"
 
 echo ""
+echo "=== C: the MINTED runner isolates a suite from this machine ==="
+# ⚠️ Tier 1's own runner has had this since #159 (redirect) and #168 (unset); the runner this
+# template SHIPS never got it. The three self-contained kits were ported by hand on 2026-09-09;
+# the four template kits kept copying this file without it. MEASURED on the Poland Coder that day:
+# every provisioned Coder exports LOOM_LOCK from ~/.bashrc, a suite that drove install.sh over
+# scratch fixtures read the machine's LIVE record instead, and it passed only on the laptop,
+# where LOOM_LOCK happens to be unset.
+# The probe WRITES what it saw: the runner prints a suite's stdout only when it fails.
+MARKDIR_C="$WORK/menv-c"; mkdir -p "$MARKDIR_C"
+cat > "$MINT/boot-kit/tests/test-zz-envprobe.sh" <<'SUITE'
+#!/usr/bin/env bash
+{
+  printf 'SAW_LOOM_LOCK=[%s]\n'  "${LOOM_LOCK-<unset>}"
+  printf 'SAW_DF_PROFILE=[%s]\n' "${DF_PROFILE-<unset>}"
+  printf 'SAW_LOOM_BIN=[%s]\n'   "${LOOM_BIN-<unset>}"
+  printf 'SAW_LOOM_LIVE=[%s]\n'  "${LOOM_LIVE-<unset>}"
+} > "$MARKDIR_C/saw.txt"
+echo "ASSERTIONS: 1"
+exit 0
+SUITE
+chmod +x "$MINT/boot-kit/tests/test-zz-envprobe.sh"
+( cd "$MINT" && env -u RUN_TESTS_ACTIVE -u LOOM_BIN -u LOOM_LIVE \
+    LOOM_LOCK=/nowhere/the-machines-own-record.json DF_PROFILE=someprofile MARKDIR_C="$MARKDIR_C" \
+    bash boot-kit/scripts/run-tests.sh >/dev/null 2>&1 )
+SAW_C="$(cat "$MARKDIR_C/saw.txt" 2>/dev/null || echo '<probe never ran>')"
+case "$SAW_C" in
+  *'SAW_LOOM_LOCK=[<unset>]'*) ok "C1 LOOM_LOCK is unset for a suite, even when the caller exports it" ;;
+  *) bad "C1 LOOM_LOCK is unset for a suite, even when the caller exports it" "$SAW_C" ;;
+esac
+case "$SAW_C" in
+  *'SAW_DF_PROFILE=[<unset>]'*) ok "C2 DF_PROFILE is unset too (the sibling path to the same sink)" ;;
+  *) bad "C2 DF_PROFILE is unset too" "$SAW_C" ;;
+esac
+case "$SAW_C" in
+  *"SAW_LOOM_BIN=[$HOME/.local/bin]"*|*'SAW_LOOM_BIN=[<unset>]'*|*'SAW_LOOM_BIN=[]'*)
+     bad "C3 LOOM_BIN is pinned to scratch, away from ~/.local/bin" "$SAW_C" ;;
+  *'SAW_LOOM_BIN=['*) ok "C3 LOOM_BIN is pinned to scratch, away from ~/.local/bin" ;;
+  *) bad "C3 LOOM_BIN is pinned to scratch" "$SAW_C" ;;
+esac
+case "$SAW_C" in
+  *"SAW_LOOM_LIVE=[$HOME/.claude]"*|*'SAW_LOOM_LIVE=[<unset>]'*|*'SAW_LOOM_LIVE=[]'*)
+     bad "C4 LOOM_LIVE is pinned to scratch, away from ~/.claude" "$SAW_C" ;;
+  *'SAW_LOOM_LIVE=['*) ok "C4 LOOM_LIVE is pinned to scratch, away from ~/.claude" ;;
+  *) bad "C4 LOOM_LIVE is pinned to scratch" "$SAW_C" ;;
+esac
+rm -f "$MINT/boot-kit/tests/test-zz-envprobe.sh"
+
+echo ""
 printf 'instance test harness: %d ok, %d failed\n' "$PASS" "$FAIL"
 # run-tests.sh treats a suite that exits 0 with no declared count as UNMEASURED, not a pass.
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
