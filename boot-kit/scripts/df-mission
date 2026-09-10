@@ -220,6 +220,25 @@ cmd_start() {
 
   mkdir -p "$d/inbox" "$d/iterations"
   echo "$profile" > "$d/profile"
+
+  # Every mission's notepad keeps the operator's page (operator ruling 2026-09-10). The Stop
+  # gate creates it for attended missions, but it returns early for headless sdk-cli sessions,
+  # so a SUPERVISED mission would never get one without this. Resolution order: the plugin in
+  # this same Tier-1 tree (the test harness and a maintainer checkout), then PATH (plugin
+  # enabled), then the plugin as installed into ~/.claude/skills. Missing is a WARN, never a
+  # failed start — the page is a courtesy to the operator, not a precondition of the loop.
+  _todo=""
+  for _c in "$SCRIPTS/../../plugins/df-governed/bin/df-operator-todo" \
+            "$(command -v df-operator-todo 2>/dev/null || true)" \
+            "$HOME/.claude/skills/df-governed/bin/df-operator-todo"; do
+    if [ -n "$_c" ] && [ -f "$_c" ]; then _todo="$_c"; break; fi
+  done
+  if [ -n "$_todo" ]; then
+    python3 "$_todo" --file "$NOTEPAD/operator-todo.md" init >/dev/null 2>&1 || \
+      echo "df-mission: WARN could not create $NOTEPAD/operator-todo.md" >&2
+  else
+    echo "df-mission: WARN df-operator-todo not found -- $NOTEPAD/operator-todo.md not created" >&2
+  fi
   [ -n "$channel" ] && printf '%s\n' "$channel" > "$d/notify-channel"
   [ -s "$d/state" ] || echo CONTINUE > "$d/state"
   [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && printf '%s\n' "$CLAUDE_CODE_SESSION_ID" > "$d/owner"

@@ -69,7 +69,13 @@
 #          failed -- see 3).
 #        1 the session ran but teardown left drift.
 #        2 bad arguments, no lockfile found, or no claude binary on PATH.
-#        3 the report was committed but the push failed -- push it by hand.
+#        3 the report did NOT reach the remote — it is at the kit root, and the line before
+#          the exit names which step failed: `git add` (refused, e.g. an ignore rule), `git
+#          commit`, or the push. ⚠️ Until 2026-09-10 only a failed PUSH got this code: a failed
+#          add went unchecked and a failed commit printed FATAL and then EXITED 0, so a run that
+#          persisted nothing looked finished. MEASURED that day on two ESO machines at once —
+#          both copied their report, neither committed it, GitHub's push log shows no push from
+#          either, and each looked done until someone went looking for the commit.
 #        4 the SESSION ITSELF failed (non-zero) -- there is no validation to read. ⚠️ MEASURED
 #          2026-09-09 on a Coder workspace: `claude -p` died on an account limit ("You've hit
 #          your session limit"), wrote no REPORT.md, and this script exited 0 -- so the caller
@@ -267,14 +273,17 @@ elif [ -n "$REPORT_BASENAME" ] && git -C "$KIT_ROOT" rev-parse --is-inside-work-
   [ -n "$TODO_BASENAME" ] && ADD_PATHS+=("$TODO_BASENAME")
   # Explicit pathspec, NEVER `-A` -- a pre-existing dirty file in the kit (an operator's
   # uncommitted edit, an install's probed.* write) stays exactly as it was, staged or not.
-  git -C "$KIT_ROOT" add -- "${ADD_PATHS[@]}"
+  if ! git -C "$KIT_ROOT" add -- "${ADD_PATHS[@]}"; then
+    printf 'validate.sh: FATAL: git add refused the report (git said why, above) -- NOT committed, NOT pushed; it is at %s\n' "$KIT_ROOT/$REPORT_BASENAME" >&2
+    PUSH_FAILED=1
+  fi
 
   ID_ARGS=()
   if [ -z "$(git -C "$KIT_ROOT" config user.email 2>/dev/null)" ]; then
     ID_ARGS=(-c "user.name=validate.sh" -c "user.email=validate.sh@$(hostname)")
   fi
   COMMIT_MSG="M-VALIDATE: validation report — ${INSTANCE} ${STAMP} [M-VALIDATE]"
-  if git -C "$KIT_ROOT" "${ID_ARGS[@]+"${ID_ARGS[@]}"}" commit -q -m "$COMMIT_MSG"; then
+  if [ "$PUSH_FAILED" -eq 0 ] && git -C "$KIT_ROOT" "${ID_ARGS[@]+"${ID_ARGS[@]}"}" commit -q -m "$COMMIT_MSG"; then
     COMMIT_SHA="$(git -C "$KIT_ROOT" rev-parse --short HEAD)"
     printf 'validate.sh: report committed %s\n' "$COMMIT_SHA"
 
@@ -293,7 +302,8 @@ elif [ -n "$REPORT_BASENAME" ] && git -C "$KIT_ROOT" rev-parse --is-inside-work-
       PUSH_FAILED=1
     fi
   else
-    printf 'validate.sh: FATAL: could not commit the report -- see above\n' >&2
+    [ "$PUSH_FAILED" -eq 1 ] || printf 'validate.sh: FATAL: git commit failed (see above) -- NOT pushed; the report is at %s\n' "$KIT_ROOT/$REPORT_BASENAME" >&2
+    PUSH_FAILED=1
   fi
 fi
 

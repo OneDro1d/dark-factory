@@ -33,6 +33,7 @@ USAGE
                         --do "<the exact command/URL/PR>" [--blocking] [--ref <path|url>]
   df-operator-todo done --id <slug> (--verified "<evidence>" | --by-operator)
   df-operator-todo list [--blocking-only]
+  df-operator-todo init      create the empty page at the notepad root if absent (idempotent)
   df-operator-todo path
 
   --blocking  the loop cannot proceed until this is done. Default is ASYNC: the loop keeps
@@ -207,6 +208,25 @@ def cmd_done(a):
     return 0
 
 
+def cmd_init(a):
+    """Create the empty page if it is absent. NEVER touches an existing one — not even to
+    re-render it, because a page the operator is editing by hand must not be rewritten under him.
+
+    Operator ruling 2026-09-10: "are we automatically creating operator-todo.md for each dark
+    factory notepad when we run a new mission, on each estate?" — measured then: NO. The page
+    was created lazily by the first `add`, so a mission that raised nothing had no page, and a
+    reader could not tell "nothing is waiting on you" from "this estate never set one up".
+    Called by the Stop gate for every RUNNING mission and by `df-mission start`, so the page
+    exists from the mission's first turn. The header text keeps ONE home: this file."""
+    path = todo_path(a.file)
+    if os.path.exists(path):
+        print(f"operator-todo: already present -> {path}")
+        return 0
+    write(path, [], [])
+    print(f"operator-todo: created -> {path}")
+    return 0
+
+
 def cmd_list(a):
     path = todo_path(a.file)
     blocking, async_ = parse(path)
@@ -246,6 +266,9 @@ def main():
     l = sub.add_parser("list", help="print the open queue")
     l.add_argument("--blocking-only", action="store_true")
     l.set_defaults(func=cmd_list)
+
+    i = sub.add_parser("init", help="create the empty page at the notepad root if it is absent")
+    i.set_defaults(func=cmd_init)
 
     pa = sub.add_parser("path", help="print where the file resolves for this cwd")
     pa.set_defaults(func=lambda x: (print(todo_path(x.file)), 0)[1])

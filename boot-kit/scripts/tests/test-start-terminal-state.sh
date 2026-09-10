@@ -94,6 +94,17 @@ fi
 # Clean up whatever that start forked, so the suite leaves nothing running.
 if [ -s "$D/pid" ]; then kill "$(cat "$D/pid")" 2>/dev/null || true; fi
 
+# ── start creates the operator's page (operator ruling 2026-09-10) ────────────
+# Asserted AFTER the refusal cases on purpose: the call sits before the terminal-state guard,
+# so even a REFUSED start on a BLOCKED mission leaves the page — which is exactly when the
+# operator needs somewhere to look. The Stop gate cannot cover this case: it returns early
+# for headless sdk-cli sessions, i.e. for every supervised iteration.
+if [ -f "$NOTEPAD/operator-todo.md" ] && grep -q 'EVERY LINE HERE IS AN ACTION' "$NOTEPAD/operator-todo.md"; then
+  ok "start left \$NOTEPAD/operator-todo.md (the tool's own page)"
+else
+  bad "start did not leave \$NOTEPAD/operator-todo.md" "$(ls -la "$NOTEPAD" 2>&1 | tr '\n' ' ')"
+fi
+
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 
 # The assertion-count contract read by run-tests.sh. Exit status alone cannot tell

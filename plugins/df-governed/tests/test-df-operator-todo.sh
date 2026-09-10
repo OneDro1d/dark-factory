@@ -143,6 +143,23 @@ case "$BODY" in
 esac
 
 
+echo "== O: init creates the empty page when absent, and never touches an existing one"
+# Operator ruling 2026-09-10: every Dark Factory notepad keeps this page. Measured that day:
+# nothing created it except the first `add`, so a mission that raised nothing had no page and
+# a reader could not tell "nothing is waiting on you" from "this estate never set one up".
+FO="$T/init-np"; mkdir -p "$FO"; : > "$FO/NOTES.md"
+OUT="$("$SCRIPT" --file "$FO/operator-todo.md" init 2>&1)"; RC=$?
+[ "$RC" -eq 0 ] && ok "O1 init exits 0" || bad "O1 init exits 0" "rc=$RC: $OUT"
+contains "O1 it says it created the page" "created" "$OUT"
+BODY="$(cat "$FO/operator-todo.md" 2>/dev/null)"
+contains "O2 the page carries the admission rule" "EVERY LINE HERE IS AN ACTION WAITING ON YOU" "$BODY"
+contains "O2 and states the queue is empty" "Nothing blocking" "$BODY"
+"$SCRIPT" --file "$FO/operator-todo.md" add --id o3 --category decision --task "keep me" --why "w" --do "d" >/dev/null 2>&1
+BEFORE="$(cat "$FO/operator-todo.md")"
+OUT="$("$SCRIPT" --file "$FO/operator-todo.md" init 2>&1)"
+contains "O3 a second init says already present" "already present" "$OUT"
+eq "O3 and leaves an existing page byte-identical" "$(cat "$FO/operator-todo.md")" "$BEFORE"
+
 printf 'passed %s  failed %s\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %s\n' "$((PASS+FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1

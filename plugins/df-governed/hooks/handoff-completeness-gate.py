@@ -29,6 +29,7 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 
 PLACEHOLDERS = ("TODO", "TBD", "FIXME", "<fill")
@@ -138,6 +139,26 @@ def failed_check(path, content, map_mtime):
     return None
 
 
+def ensure_operator_page(notepad):
+    """Every notepad with a RUNNING mission keeps an operator-todo.md (operator ruling
+    2026-09-10). Created by the plugin's OWN tool so the page's header has one home, not two.
+    This is the only hook that fires for EVERY attended mission on every estate — the plugin
+    registers no SessionStart hook, and attended missions never call `df-mission start`.
+    ⚠️ It must never block and never raise: a Stop gate that fails on a side duty would take
+    the handoff check down with it. Absent tool, full disk, anything — silently skipped."""
+    page = os.path.join(notepad, "operator-todo.md")
+    if os.path.exists(page):
+        return
+    tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "df-operator-todo")
+    if not os.path.isfile(tool):
+        return
+    try:
+        subprocess.run([sys.executable, tool, "--file", page, "init"],
+                       capture_output=True, timeout=10)
+    except Exception:
+        pass
+
+
 def main():
     event = json.load(sys.stdin) or {}
 
@@ -155,6 +176,8 @@ def main():
     missions = running_missions(notepad)
     if not missions:
         return emit({})
+
+    ensure_operator_page(notepad)
 
     map_path = os.path.join(notepad, "MAP.md")
     map_mtime = os.path.getmtime(map_path) if os.path.isfile(map_path) else None
