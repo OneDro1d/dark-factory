@@ -403,13 +403,17 @@ run; leave every other mission's state alone.
 
 4. **Commit gate (objective 6).** Run `git commit --allow-empty -m wip` in this notepad.
    Expected: DENIED, reason naming the RUNNING mission and the two accepted message forms. Then
-   run it again with `-m "M-VALIDATE: gate check"`. Expected: it runs (an empty commit; you will
-   remove it in step 8).
+   run it again with `-m "M-VALIDATE: gate check"`. Expected: it runs (an empty commit; step 8
+   says why you leave it).
 
-5. **Merge gate.** From inside the Tier-1 checkout on this machine (find it: `git -C <path>
-   remote get-url origin` ends in `/dark-factory.git` or `/dark-factory`), run
-   `gh pr merge 999999`. Expected: DENIED, reason beginning `merge-gate:` — either no
-   `publish-gate.ok` record or a commit mismatch. Nothing is merged; PR 999999 does not exist.
+5. **Merge gate.** From this notepad, run `gh pr merge 999999 --repo <tier-1 owner/repo>` — the
+   Tier-1 upstream your lockfile pins (`OneDro1d/dark-factory` as of 2026-09-10). Do not `cd`
+   into a checkout for it: the harness resets the shell's cwd after each command, and the gate
+   reads the target from `--repo`. Expected: DENIED, reason beginning `merge-gate:`. For a PR
+   that does not exist that reason is the gh head-sha error (the gate fails CLOSED before its
+   record check), so the "no `publish-gate.ok` record" and "commit mismatch" reasons are NOT
+   exercised here; say so rather than marking them tested. Nothing is merged; PR 999999 does
+   not exist.
 
 6. **Handoff Stop gate (objective 3).** Run `touch MAP.md` (so the map is newer than any
    handoff), then simply finish your turn with the words "stopping now". Expected: **the turn does
@@ -475,14 +479,17 @@ run; leave every other mission's state alone.
    printf 'DONE\n' > .df/missions/M-VALIDATE/state
    rm -rf .df/missions/M-VALIDATE
 
-   # 2. the empty commit from the commit-gate step — ONLY if it is still HEAD and is yours.
-   #    Guarded, because a bare `reset --soft HEAD~1` on a session that committed something
-   #    else afterwards silently un-commits the wrong thing.
-   [ "$(git log -1 --format=%s)" = "M-VALIDATE: gate check" ] && git reset -q --soft HEAD~1
+   # 2. the empty commit from the commit-gate step — LEAVE IT. Step 6's handoff helper
+   #    committed after it, so it is no longer HEAD, and the helper PUSHED if this notepad has
+   #    a remote. A reset would un-commit the handoff instead, and rewriting a pushed commit is
+   #    a hard stop. An empty commit costs nothing: record its sha in the report.
+   git log --oneline -8 | grep 'M-VALIDATE: gate check'
 
-   # 3. the test handoff written when the Stop gate blocked you
-   #    (find it by name; do not guess the filename)
-   git status --porcelain handoffs/ | sed -n 's/^?? //p'      # then rm the one you wrote
+   # 3. the test handoff from step 6 — the helper COMMITTED it (measured on three machines,
+   #    2026-09-10), so `git status` will not list it. List what the helper added, then remove
+   #    it with a NEW commit, never a reset:
+   git log --diff-filter=A --name-only --format= --grep M-VALIDATE -- handoffs/
+   #    git rm each file listed, then: git commit -m "M-VALIDATE: remove probe handoff"
 
    # 4. the worker dry-run scratch directory
    rm -rf workers/dev/*probe* 2>/dev/null || true
@@ -500,7 +507,7 @@ run; leave every other mission's state alone.
    ```sh
    git status --porcelain          # expect: empty, or ONLY files you knowingly changed
    ls .df/missions/ 2>/dev/null    # expect: no M-VALIDATE
-   git log --oneline -1            # expect: NOT "M-VALIDATE: gate check"
+   git log --oneline -3            # expect: your handoff-removal commit on top
    ```
 
    ⚠️ **A teardown you did not verify is a teardown you did not do.** If `git status` is not

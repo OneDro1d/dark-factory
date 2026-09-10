@@ -441,6 +441,31 @@ else
   ok "W3: the false claim 'do not depend on the entrypoint' is gone"
 fi
 
+# W4, MEASURED 2026-09-10 on three machines (the laptop, the ESO laptop, the ESO Azure Coder): four
+# lines of the procedure could not be followed as written. The teardown's reset guard can never
+# fire, because step 6's handoff helper commits after the gate-check commit; step 5 needed a `cd`
+# the harness undoes after every command; step 3 had no headless caveat though AskUserQuestion
+# does not exist under sdk-cli; section 6 told a hand-rolled worker to use ToolSearch, which it
+# may not be given. Every run spent a probe rediscovering each one.
+echo "=== W4: the procedure text can be followed as written (validate.md + VALIDATE-INSTALL.md) ==="
+VIN="$REPO_ROOT/starter-kit/instance/VALIDATE-INSTALL.md"
+for _doc in "$VMD" "$VIN"; do
+  if grep -Fq '= "M-VALIDATE: gate check" ] && git reset' "$_doc" 2>/dev/null; then
+    bad "W4a: no dead gate-check reset guard in $(basename "$_doc")" "still present"
+  else
+    ok "W4a: no dead gate-check reset guard in $(basename "$_doc")"
+  fi
+  contains "W4b: the merge probe names its repo with --repo in $(basename "$_doc")" \
+    "gh pr merge 999999 --repo" "$(cat "$_doc" 2>/dev/null)"
+done
+contains "W4c: step 3 gives a headless direct feed to the escalation gate" \
+  '"tool_name":"AskUserQuestion"' "$(cat "$VMD" 2>/dev/null)"
+if grep -Fq 'Ask it to run `ToolSearch`' "$VMD" 2>/dev/null; then
+  bad "W4d: section 6 no longer tells a hand-rolled worker to run ToolSearch" "still present"
+else
+  ok "W4d: section 6 no longer tells a hand-rolled worker to run ToolSearch"
+fi
+
 echo "=== H1: --headless assembles the print-mode argv and says so ==="
 KITH1="$(_fresh_kit kith1)"
 LOGH1="$T/logh1"; : > "$LOGH1"
