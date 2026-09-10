@@ -292,17 +292,45 @@ elif [ -n "$REPORT_BASENAME" ] && git -C "$KIT_ROOT" rev-parse --is-inside-work-
     printf 'validate.sh: report committed %s\n' "$COMMIT_SHA"
 
     CURRENT_BRANCH="$(git -C "$KIT_ROOT" symbolic-ref --short -q HEAD || true)"
-    if git -C "$KIT_ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
-      PUSH_OUT="$(git -C "$KIT_ROOT" push 2>&1)"; PUSH_RC=$?
-    else
-      PUSH_OUT="$(git -C "$KIT_ROOT" push -u origin "$CURRENT_BRANCH" 2>&1)"; PUSH_RC=$?
+    _push_report() {
+      if git -C "$KIT_ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+        PUSH_OUT="$(git -C "$KIT_ROOT" push 2>&1)"; PUSH_RC=$?
+      else
+        PUSH_OUT="$(git -C "$KIT_ROOT" push -u origin "$CURRENT_BRANCH" 2>&1)"; PUSH_RC=$?
+      fi
+    }
+    # git's REASON, not its first line. The first line of a rejected push is "To <url>" -- it says
+    # where, never why. MEASURED 2026-09-10 on the ESO laptop: the whole diagnostic this script
+    # printed was "push FAILED: To <remote url>".
+    _push_reason() {
+      printf '%s\n' "$PUSH_OUT" | grep -E '^ ?! |^(error|fatal|remote):' | head -3 | tr '\n' ' '
+    }
+    _push_report
+    # ⚠️ ONE record repo serves every machine in an estate (five, on ESO), and every validate run
+    # pushes to it -- so "the remote moved since this checkout last pulled" is the NORMAL case,
+    # not an edge. MEASURED 2026-09-10: the ESO laptop's push was rejected while a Coder's report
+    # and a repin had landed on the same main. Merge the remote in once and push again. A MERGE,
+    # never a rebase: it rewrites nothing. git refuses it outright when the index holds staged
+    # work or a tracked edit would be overwritten, and a conflict is aborted -- every refusal
+    # leaves the report commit exactly where it was and falls through to exit 3 below.
+    if [ "$PUSH_RC" -ne 0 ] && printf '%s' "$PUSH_OUT" | grep -qE 'fetch first|non-fast-forward|\[rejected\]'; then
+      printf 'validate.sh: push rejected, the remote moved (%s) -- merging origin/%s and retrying once\n' "$(_push_reason)" "$CURRENT_BRANCH"
+      if git -C "$KIT_ROOT" fetch -q origin "$CURRENT_BRANCH" 2>/dev/null \
+        && git -C "$KIT_ROOT" "${ID_ARGS[@]+"${ID_ARGS[@]}"}" merge -q --no-edit "origin/$CURRENT_BRANCH" >/dev/null 2>&1; then
+        _push_report
+      else
+        git -C "$KIT_ROOT" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && git -C "$KIT_ROOT" merge --abort
+        PUSH_OUT="the automatic merge of origin/$CURRENT_BRANCH was refused or conflicted, and was aborted -- nothing changed"
+        PUSH_RC=1
+      fi
     fi
     if [ "$PUSH_RC" -eq 0 ]; then
       REMOTE_URL="$(git -C "$KIT_ROOT" remote get-url origin 2>/dev/null || true)"
       printf 'validate.sh: report pushed to %s (%s)\n' "$REMOTE_URL" "$CURRENT_BRANCH"
     else
-      FIRST_ERR="$(printf '%s\n' "$PUSH_OUT" | head -1)"
-      printf 'validate.sh: report committed, push FAILED: %s -- push it by hand\n' "$FIRST_ERR"
+      PUSH_WHY="$(_push_reason)"
+      [ -n "$PUSH_WHY" ] || PUSH_WHY="$(printf '%s\n' "$PUSH_OUT" | tail -1)"
+      printf 'validate.sh: report committed, push FAILED: %s -- finish by hand: git -C %s pull --no-rebase, then git -C %s push\n' "$PUSH_WHY" "$KIT_ROOT" "$KIT_ROOT"
       PUSH_FAILED=1
     fi
   else
