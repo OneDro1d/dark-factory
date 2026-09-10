@@ -301,7 +301,7 @@ elif [ -n "$REPORT_BASENAME" ] && git -C "$KIT_ROOT" rev-parse --is-inside-work-
     }
     # git's REASON, not its first line. The first line of a rejected push is "To <url>" -- it says
     # where, never why. MEASURED 2026-09-10 on the ESO laptop: the whole diagnostic this script
-    # printed was "push FAILED: To https://github.com/…/loom_storage.git".
+    # printed was "push FAILED: To <remote url>".
     _push_reason() {
       printf '%s\n' "$PUSH_OUT" | grep -E '^ ?! |^(error|fatal|remote):' | head -3 | tr '\n' ' '
     }
