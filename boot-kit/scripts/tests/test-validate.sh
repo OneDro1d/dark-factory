@@ -363,6 +363,56 @@ else
   ok "10i: the staged work did not reach the remote"
 fi
 
+echo "=== 10j: the remote MOVED since this checkout pulled -> merged once, pushed, exit 0 ==="
+# MEASURED 2026-09-10 on the ESO laptop: one record repo, five machines, every validate pushes to
+# it -- the laptop's report push was rejected (fetch first) because a Coder's report and a repin
+# had landed on the same main. The script printed "push FAILED: To https://…" and stopped.
+KIT10J="$(_fresh_kit kit10j)"
+BR10J="$(git -C "$KIT10J" symbolic-ref --short HEAD)"
+git -C "$KIT10J" push -q -u origin "$BR10J" 2>/dev/null
+ORIGIN10J="$(git -C "$KIT10J" remote get-url origin)"
+git clone -q -b "$BR10J" "$ORIGIN10J" "$T/other10j" 2>/dev/null
+printf 'another machine\n' > "$T/other10j/other-machine.txt"
+git -C "$T/other10j" add -- other-machine.txt
+git -C "$T/other10j" -c user.name=t -c user.email=t@example.invalid commit -q -m "another machine's report"
+git -C "$T/other10j" push -q 2>/dev/null
+V10J_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$T/log10j" STUB_WRITE_REPORT="probe report" bash "$VALIDATE" --kit-root "$KIT10J" 2>&1)"; V10J_RC=$?
+[ "$V10J_RC" -eq 0 ] && ok "10j: exits 0" || bad "10j: exits 0" "rc=$V10J_RC: $V10J_OUT"
+contains "10j: it says it merged the remote and retried" "merging origin/$BR10J and retrying once" "$V10J_OUT"
+TREE10J="$(git -C "$ORIGIN10J" ls-tree -r --name-only "$BR10J" 2>/dev/null)"
+contains "10j: the other machine's commit is still on the remote" "other-machine.txt" "$TREE10J"
+contains "10j: the report reached the remote" "VALIDATE-REPORT-" "$TREE10J"
+
+echo "=== 10k: the remote CONFLICTS -> merge aborted, report commit kept, exit 3, git's reason named ==="
+KIT10K="$(_fresh_kit kit10k)"
+BR10K="$(git -C "$KIT10K" symbolic-ref --short HEAD)"
+git -C "$KIT10K" push -q -u origin "$BR10K" 2>/dev/null
+ORIGIN10K="$(git -C "$KIT10K" remote get-url origin)"
+git clone -q -b "$BR10K" "$ORIGIN10K" "$T/other10k" 2>/dev/null
+printf '{"kit":"kit10k","from":"the other machine"}\n' > "$T/other10k/loom.lock.json"
+git -C "$T/other10k" -c user.name=t -c user.email=t@example.invalid commit -q -am "remote edit"
+git -C "$T/other10k" push -q 2>/dev/null
+printf '{"kit":"kit10k","from":"this machine"}\n' > "$KIT10K/loom.lock.json"
+git -C "$KIT10K" -c user.name=t -c user.email=t@example.invalid commit -q -am "local edit, never pushed"
+V10K_OUT="$(VALIDATE_CLAUDE_BIN="$STUB" STUB_LOG="$T/log10k" STUB_WRITE_REPORT="probe report" bash "$VALIDATE" --kit-root "$KIT10K" 2>&1)"; V10K_RC=$?
+[ "$V10K_RC" -eq 3 ] && ok "10k: exits 3" || bad "10k: exits 3" "rc=$V10K_RC: $V10K_OUT"
+contains "10k: git's rejection reason is printed, not only its To <url> line" "[rejected]" "$V10K_OUT"
+if printf '%s' "$V10K_OUT" | grep -q 'push FAILED: To '; then
+  bad "10k: the FAILED line is not the bare 'To <url>' line" "$V10K_OUT"
+else
+  ok "10k: the FAILED line is not the bare 'To <url>' line"
+fi
+contains "10k: it says how to finish by hand" "pull --no-rebase" "$V10K_OUT"
+if git -C "$KIT10K" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  bad "10k: no merge is left in progress" "MERGE_HEAD present"
+else
+  ok "10k: no merge is left in progress"
+fi
+case "$(git -C "$KIT10K" log -1 --format=%s)" in
+  "M-VALIDATE: validation report"*) ok "10k: the report commit is still HEAD" ;;
+  *) bad "10k: the report commit is still HEAD" "HEAD is: $(git -C "$KIT10K" log -1 --format=%s)" ;;
+esac
+
 echo "=== 11: the kit's PROJECT-level settings (commit/push gates) reach the armed notepad ==="
 # MEASURED 2026-09-08 on the first real run: the commit gate is wired in the kit root's
 # .claude/settings.json only, the armed notepad is its own repo under its own cwd, so
