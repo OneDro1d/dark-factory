@@ -55,6 +55,10 @@ EOF
   printf '#!/bin/sh\nexit 0\n' > "$d/t1/boot-kit/scripts/tests/test-tier1-only.sh"
   printf '#!/bin/sh\n# TIER-1 RUNNER\n' > "$d/t1/boot-kit/scripts/run-tests.sh"
   printf '#!/bin/sh\n# INSTANCE RUNNER\n' > "$d/t1/starter-kit/instance/boot-kit/scripts/run-tests.sh"
+  # the operator-page CLI, where Tier 1 versions it (I9)
+  mkdir -p "$d/t1/plugins/df-governed/bin"
+  printf '#!/usr/bin/env python3\n' > "$d/t1/plugins/df-governed/bin/df-operator-todo"
+  chmod +x "$d/t1/plugins/df-governed/bin/df-operator-todo"
   git -C "$d/t1" init -q
   git "${GITC[@]}" -C "$d/t1" add -A
   git "${GITC[@]}" -C "$d/t1" commit -q -m fixture
@@ -129,6 +133,16 @@ if [ -e "$WORK/i1/inst/boot-kit/scripts/tests" ]; then
   bad "I8 no boot-kit/scripts/tests/ in the kit" "$(ls "$WORK/i1/inst/boot-kit/scripts/tests" 2>&1 | tr '\n' ' ')"
 else ok "I8 no boot-kit/scripts/tests/ in the kit"; fi
 contains "I8 the kit's runner is the INSTANCE runner" "INSTANCE RUNNER" "$(cat "$WORK/i1/inst/boot-kit/scripts/run-tests.sh" 2>/dev/null)"
+
+echo "=== I9: df-operator-todo is on PATH, linked from the pinned Tier 1 ==="
+# ⛔ Measured 2026-09-11: a real kit install's bin held df-mission and df-preflight only, so
+# df-mission warned "df-operator-todo not found" and no mission in a kit had an operator page.
+L9="$WORK/i1/bin/df-operator-todo"
+if [ -L "$L9" ] && [ -x "$L9" ]; then ok "I9 bin/df-operator-todo is an executable link"
+else bad "I9 bin/df-operator-todo is an executable link" "$(ls -la "$WORK/i1/bin" 2>&1 | tr '\n' ' ')"; fi
+contains "I9 it points into the vendored Tier 1's df-governed plugin" \
+  "/inst/vendor/dark-factory/plugins/df-governed/bin/df-operator-todo" "$(readlink "$L9" 2>/dev/null)"
+contains "I9 and the install says so" "ok    $WORK/i1/bin/df-operator-todo" "$OUT1"
 
 echo
 printf 'install instance record: %d ok, %d failed\n' "$PASS" "$FAIL"
