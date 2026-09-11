@@ -47,15 +47,17 @@ EOF
 chmod +x "$SHIM/git"
 
 # A local bare origin, and an instance whose vendored upstream is a clone of it at its head.
-"$REALGIT" init -q --bare "$TMP/origin.git"
-"$REALGIT" init -q "$TMP/seed"
+# The branch is named on both inits and on the clone: with no init.defaultBranch (a CI runner)
+# the bare origin's HEAD names `master`, the clone checks out nothing, and the pin is empty.
+"$REALGIT" -c init.defaultBranch=main init -q --bare "$TMP/origin.git"
+"$REALGIT" -c init.defaultBranch=main init -q "$TMP/seed"
 : > "$TMP/seed/README"
 "$REALGIT" "${GITC[@]}" -C "$TMP/seed" add -A
 "$REALGIT" "${GITC[@]}" -C "$TMP/seed" commit -q -m seed
 "$REALGIT" -C "$TMP/seed" push -q "$TMP/origin.git" HEAD:refs/heads/main
 mkinst() {  # mkinst <dir>
   mkdir -p "$1/vendor"
-  "$REALGIT" clone -q "$TMP/origin.git" "$1/vendor/layer"
+  "$REALGIT" clone -q --branch main "$TMP/origin.git" "$1/vendor/layer"
   local sha; sha="$("$REALGIT" -C "$1/vendor/layer" rev-parse HEAD)"
   jq -n --arg c "$sha" '{vendorDir:"vendor",
       upstreams:{layer:{repo:"acme/layer",commit:$c}},
@@ -66,7 +68,8 @@ mkinst() {  # mkinst <dir>
 echo "=== F1: lock-verify L6 fetches without ever prompting ==="
 mkinst "$TMP/lv"
 : > "$TMP/git.log"
-OUT1="$(env -u GIT_TERMINAL_PROMPT PATH="$SHIM:$PATH" bash "$LV" --lock "$TMP/lv/loom.lock.json" 2>&1)"
+OUT1="$(env -u GIT_TERMINAL_PROMPT PATH="$SHIM:$PATH" LOOM_LIVE="$TMP/lv/live" \
+  bash "$LV" --lock "$TMP/lv/loom.lock.json" 2>&1)"
 # A suffix, not "$TMP/...": mktemp under a TMPDIR ending in "/" yields a "//" the scripts
 # never print, and a full-path match then reports a fetch that ran as one that did not.
 LOG1="$(grep -F "/lv/vendor/layer " "$TMP/git.log" 2>/dev/null)"
