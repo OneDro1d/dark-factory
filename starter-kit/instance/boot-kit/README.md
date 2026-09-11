@@ -88,7 +88,7 @@ A `hookSources` (or `skillSources`) value takes one of three forms:
 
 | value | resolves against |
 |---|---|
-| `local:boot-kit/hooks/mine.sh` | **your instance** — the directory holding the lockfile |
+| `local:boot-kit/hooks/mine.sh` | **your kit** — its root, the directory holding `install.sh`, whichever machine's record is installed |
 | `upstream:dark-factory/hooks/x.sh` | your vendor directory |
 | `dark-factory/hooks/x.sh` | your vendor directory — the bare form, and the one every existing lockfile uses |
 
@@ -98,8 +98,10 @@ would have to push its own file into some other repo and vendor it back.
 
 This was deliberately **one** rule and not two: the value carries a scheme, so there is
 still a single place that says where a hook comes from. `local:` is resolved against the
-**lockfile's** directory, never against the installer's own location — which is what makes
-it safe when the installer itself is the vendored copy.
+**kit root**, never against the installer's own location and never against the folder of the
+record being installed. The first is what makes it safe when the installer is the vendored
+copy; the second is what lets every machine's record under `instances/` name the same
+`local:` path.
 
 A source containing `..` is refused rather than normalised. A `..` could not escape before,
 because every source was confined to `vendor/` by construction.
@@ -153,9 +155,14 @@ output, because a check on the output only holds for the inputs someone thought 
 
 ## Tests
 
+In the public repo, from `starter-kit/instance/boot-kit/`:
+
 ```sh
 bash tests/test-boot-kit.sh     # prints a literal pass/fail count
 ```
+
+A kit made by `bootstrap.sh` does not carry that suite: its `boot-kit/tests/` holds the kit's
+own suites, which check its records, and `bash boot-kit/scripts/run-tests.sh` runs them.
 
 Everything runs in a scratch directory. Nothing in this suite reads or writes your real
 harness config — a test that has to touch it is a test nobody runs twice, and one whose own

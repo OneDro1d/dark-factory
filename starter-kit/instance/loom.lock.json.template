@@ -52,7 +52,7 @@
     },
     "hooks": ["df-instance-start.sh"],
     "hookSources": {
-      "$comment": "hook-file-name -> source. Under vendorDir by default. To ship a hook of your OWN, write it inside this instance and prefix the path with `local:` -- e.g. \"my-hook.sh\": \"local:boot-kit/hooks/my-hook.sh\". `local:` is resolved against THIS lockfile's directory, not against the installer's own location, so it still means your instance when the installer is the vendored copy.",
+      "$comment": "hook-file-name -> source. Under vendorDir by default. To ship a hook of your OWN, write it inside this instance and prefix the path with `local:` -- e.g. \"my-hook.sh\": \"local:boot-kit/hooks/my-hook.sh\". `local:` is resolved against the KIT ROOT (the directory holding install.sh), never against the installer's own location and never against the folder of the record being installed, so it means your kit both when the installer is the vendored copy and from every machine's record under instances/.",
       "df-instance-start.sh": "dark-factory/starter-kit/instance/boot-kit/hooks/df-instance-start.sh"
     },
     "plugins": [
