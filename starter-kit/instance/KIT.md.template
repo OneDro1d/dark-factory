@@ -37,3 +37,24 @@ should be written down rather than left blank.>
 
 Each machine has its own record under `instances/<machine>/`. One line each: the machine, and
 what it is for.
+
+## Running a mission
+
+1. **Make a notepad for the objective.** Tell Claude Code `/scope-init`. It creates a small git
+   repo (`NOTES.md`, `repos.manifest.json`, a session journal) that keeps the objective's memory
+   across sessions and drives the code repos from one place. Start every session for that
+   objective in the notepad.
+2. **Define the mission there.** Tell it `/dark-factory-build`, then one sentence of what done
+   looks like: *"Mission: <what done looks like>. Chart the map, then run it to done. Notify me
+   only when it is met or blocked."* Name anything it must never do (a production deploy, a merge
+   to a protected branch, a message to a customer). `/vinculum-loop` explains the contract it runs
+   under: it decides what it can, and comes back only when the mission is met or blocked.
+3. **Work `operator-todo.md`.** Once a mission runs, `operator-todo.md` appears at the notepad
+   root: the live page of what only a human can do, such as a login, a decision or a merge. The
+   agent adds to it, you work it, and either of you updates it to unblock the mission. A finished
+   item is deleted; git keeps the history. `df-operator-todo list` prints it.
+4. **Unattended, if you want it.** `df-mission start <id> --profile default --max-iter <n>
+   --max-usd <n>` runs the mission without a session open; `df-mission status <id>` shows it.
+
+A team kit that binds an estate names that estate's mission skill here instead of
+`/dark-factory-build`.

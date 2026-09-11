@@ -14,8 +14,29 @@
   ],
   "hooks": [
     "check-compound-bash.sh",
-    "context-budget.py"
+    "context-budget.py",
+    "agent-notepad/hooks/session-start.sh",
+    "agent-notepad/hooks/user-prompt.sh",
+    "agent-notepad/hooks/pre-compact.sh",
+    "agent-notepad/hooks/stop.sh",
+    "agent-notepad/hooks/commit-gate.sh",
+    "agent-notepad/hooks/push-gate.sh",
+    "agent-notepad/lib/notepad.sh",
+    "agent-notepad/lib/redact.sh",
+    "agent-notepad/lib/snapshot.sh",
+    "agent-notepad/lib/publish-handoff.sh",
+    "agent-notepad/lib/merge-session-index.py"
   ],
+  "$notepadNote": "⛔ ADDED 2026-09-11. This kit named the agent-notepad SKILL and none of its RUNTIME, so a kit made from it could run /scope-init and got a notepad that restored nothing: the four Notes hooks and the libraries they source were installed by no one. The plugin's own installer (skills/agent-notepad/plugin/install.sh) is the wrong door -- nothing on the fleet runs it, and it writes settings.json and the skills dir outside the lockfile. So the suite is DECLARED here like any other hook, under the nested names it is installed and wired at (~/.claude/hooks/agent-notepad/...). kit-resolve.py maps an `agent-notepad/` name to its source inside the plugin; the starter settings template wires the four event hooks; the rest is listed in hooksUnwired with the reason, which lock-verify L9 reads.",
+  "hooksUnwired": {
+    "agent-notepad/hooks/commit-gate.sh": "wired at PROJECT level in each notepad's own .claude/settings.json (laid down by /scope-init from the notepad template), so the commit gate arms only in notepad sessions. lock-verify L9 reads user-level settings only.",
+    "agent-notepad/hooks/push-gate.sh": "same wiring, same reason: PROJECT level in each notepad's own .claude/settings.json. It abstains on any repo with no .claude/docs-map.json.",
+    "agent-notepad/lib/notepad.sh": "NOT A HOOK -- a library the notepad hooks source via ../lib/. Declared so those hooks are runnable; nothing wires a library to an event.",
+    "agent-notepad/lib/redact.sh": "NOT A HOOK -- a library the notepad hooks source via ../lib/. Declared so those hooks are runnable; nothing wires a library to an event.",
+    "agent-notepad/lib/snapshot.sh": "NOT A HOOK -- a library the notepad hooks source via ../lib/. Declared so those hooks are runnable; nothing wires a library to an event.",
+    "agent-notepad/lib/publish-handoff.sh": "NOT A HOOK -- a library the handoff skill and the notepad hooks call. Declared so they are runnable; nothing wires a library to an event.",
+    "agent-notepad/lib/merge-session-index.py": "NOT A HOOK -- a git merge driver, run through merge.loom-session-index.driver in the user's git config (registered by rehydrate.sh's merge-driver step), never from settings.json. It must stay declared: register-merge-drivers.sh refuses to register a driver whose script is absent."
+  },
   "harnesses": [
     "claude-code",
     "codex"

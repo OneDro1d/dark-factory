@@ -46,6 +46,21 @@ def die(msg, code=2):
     sys.exit(code)
 
 
+def _hook_source_path():
+    """kit-resolve.py's hook-name -> source table, LOADED rather than copied.
+
+    A nested name such as `agent-notepad/hooks/stop.sh` lives inside the plugin, not in
+    hooks/. The resolver owns that mapping; a second copy here is how the two would come to
+    disagree about which files a kit can install.
+    """
+    import importlib.util
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kit-resolve.py")
+    spec = importlib.util.spec_from_file_location("kit_resolve", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.hook_source_path
+
+
 def check_repo(root):
     kits_dir = os.path.join(root, "kits")
     skills_dir = os.path.join(root, "skills")
@@ -60,6 +75,7 @@ def check_repo(root):
     have_skills = {d for d in os.listdir(skills_dir)
                    if os.path.isfile(os.path.join(skills_dir, d, "SKILL.md"))}
     have_hooks = set(os.listdir(hooks_dir)) if os.path.isdir(hooks_dir) else set()
+    hook_src = _hook_source_path()
 
     kits = sorted(d for d in os.listdir(kits_dir)
                   if os.path.isfile(os.path.join(kits_dir, d, "kit.json")))
@@ -92,7 +108,9 @@ def check_repo(root):
             problems.append("name %r != directory %r" % (man["name"], k))
 
         missing_s = [s for s in man.get("skills", []) if s not in have_skills]
-        missing_h = [h for h in man.get("hooks", []) if h not in have_hooks]
+        missing_h = [h for h in man.get("hooks", [])
+                     if h not in have_hooks
+                     and not os.path.isfile(os.path.join(root, hook_src(h)))]
         if missing_s:
             problems.append("skills not shipped: %s" % ", ".join(sorted(missing_s)))
         if missing_h:

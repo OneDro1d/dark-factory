@@ -112,6 +112,22 @@ def resolve(root, names):
     return skills, hooks, chain, errors
 
 
+# A hook NAME is where it lands under ~/.claude/hooks/ and what settings.json names. Most hooks
+# live in this repo's hooks/ under the same name. The agent-notepad suite does not: it is
+# installed as agent-notepad/hooks/<f> and agent-notepad/lib/<f> (the paths its own scripts
+# source each other by), and its files live inside the plugin. One table, used by both the
+# existence check and the emitted source, so the two cannot disagree.
+NESTED_HOOK_SOURCES = {"agent-notepad/": "skills/agent-notepad/plugin/"}
+
+
+def hook_source_path(name):
+    """Repo-relative path of the file a hook NAME installs from."""
+    for prefix, base in NESTED_HOOK_SOURCES.items():
+        if name.startswith(prefix):
+            return base + name[len(prefix):]
+    return "hooks/" + name
+
+
 def validate(root, skills, hooks):
     """Every named skill and hook must EXIST in this repo. Same contract as kit-check.py.
 
@@ -124,9 +140,26 @@ def validate(root, skills, hooks):
         if not os.path.isdir(os.path.join(root, "skills", s)):
             missing.append("skill %s (no skills/%s/)" % (s, s))
     for h in hooks:
-        if not os.path.isfile(os.path.join(root, "hooks", h)):
-            missing.append("hook %s (no hooks/%s)" % (h, h))
+        p = hook_source_path(h)
+        if not os.path.isfile(os.path.join(root, p)):
+            missing.append("hook %s (no %s)" % (h, p))
     return missing
+
+
+def unwired_for(root, chain, hooks):
+    """`hooksUnwired` from every kit in the chain, for the hooks this resolution declares.
+
+    A kit that declares a file which is deliberately never wired to an event (a library, a
+    project-level gate) says why in `hooksUnwired`. lock-verify L9 reads that reason in the
+    record; without it the file is reported as installed and inert, and the install exits 2.
+    """
+    out = {}
+    for name in chain:
+        kit, _err = load_kit(root, name)
+        for h, why in ((kit or {}).get("hooksUnwired") or {}).items():
+            if h in hooks and h not in out:
+                out[h] = why
+    return out
 
 
 def main(argv):
@@ -173,7 +206,8 @@ def main(argv):
         "skills": skills,
         "skillSources": {s: "dark-factory/skills/%s" % s for s in skills},
         "hooks": hooks,
-        "hookSources": {h: "dark-factory/hooks/%s" % h for h in hooks},
+        "hookSources": {h: "dark-factory/%s" % hook_source_path(h) for h in hooks},
+        "hooksUnwired": unwired_for(root, chain, hooks),
         "resolvedFrom": chain,
     }
     print(json.dumps(out, indent=2))
@@ -238,13 +272,32 @@ def self_test():
         if chain != ["floor"] or s != ["alpha"]:
             fails.append("a kit without extends was modified: %r %r" % (chain, s))
 
+        # a NESTED hook name resolves inside the plugin, a missing one is caught, and its
+        # hooksUnwired reason travels with it
+        os.makedirs(os.path.join(tmp, "skills", "agent-notepad", "plugin", "lib"))
+        with open(os.path.join(tmp, "skills", "agent-notepad", "plugin", "lib", "x.sh"), "w") as fh:
+            fh.write("#!/bin/sh\n")
+        os.makedirs(os.path.join(tmp, "kits", "nested"))
+        w("nested", {"name": "nested", "description": "d", "skills": [],
+                     "hooks": ["agent-notepad/lib/x.sh", "agent-notepad/lib/gone.sh"],
+                     "hooksUnwired": {"agent-notepad/lib/x.sh": "a library"}})
+        s, h, chain, errs = resolve(tmp, ["nested"])
+        miss = validate(tmp, s, h)
+        if hook_source_path("agent-notepad/lib/x.sh") != "skills/agent-notepad/plugin/lib/x.sh":
+            fails.append("a nested hook did not map into the plugin: %r"
+                         % hook_source_path("agent-notepad/lib/x.sh"))
+        if not any("gone.sh" in m for m in miss) or any("x.sh" in m and "gone" not in m for m in miss):
+            fails.append("nested hook existence judged wrongly: %r" % miss)
+        if unwired_for(tmp, chain, h) != {"agent-notepad/lib/x.sh": "a library"}:
+            fails.append("hooksUnwired did not travel: %r" % unwired_for(tmp, chain, h))
+
         for f in fails:
             sys.stderr.write("SELF-TEST FAIL: %s\n" % f)
         if fails:
             return 1
-        print("kit-resolve self-test: 5 cases, all pass "
+        print("kit-resolve self-test: 6 cases, all pass "
               "(extends pulls the floor, missing skill caught, cycle caught, "
-              "absent kit caught, no-extends left alone)")
+              "absent kit caught, no-extends left alone, nested hooks map into the plugin)")
         return 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

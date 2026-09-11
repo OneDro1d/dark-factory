@@ -158,6 +158,7 @@ if [ -n "$KIT_JSON" ]; then
     | .install.hooks        = (($lock.install.hooks  // []) + $kit.hooks        | unique_by(.))
     | .install.skillSources = ($kit.skillSources + ($lock.install.skillSources // {}))
     | .install.hookSources  = ($kit.hookSources  + ($lock.install.hookSources  // {}))
+    | .install.hooksUnwired = (($kit.hooksUnwired // {}) + ($lock.install.hooksUnwired // {}))
     | .install["$kitResolution"] = ("bootstrapped from kits/: " + ($kit.resolvedFrom | join(" -> "))
         + ". Regenerate with boot-kit/scripts/kit-resolve.py. This line records WHICH bundle these"
         + " names came from -- without it a later reader cannot tell a curated set from a hand-edited"
