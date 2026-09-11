@@ -153,10 +153,12 @@ The command sets `machine.home` and `machine.platform` from this machine, so a r
 a laptop does not describe a Linux workspace as a Mac. It also drops the source record's declared
 identity and its `probed` measurements: those describe the machine the root record came from, and
 `identify.sh --declare` in step 4 refuses a record that already declares one. Then edit what else is true of **this**
-machine: `codeRoot`, where code checkouts live (for example `$HOME/code`), and `codeLayout` if
-`KIT.md` says the kit uses lanes. Leave `probed` alone; the tools write it.
+machine: `codeRoot`, an existing directory where code checkouts live (for example `$HOME/code`;
+create it first, because step 4's proof checks that it exists), and `codeLayout` if `KIT.md` says
+the kit uses lanes. Leave `probed` alone; the tools write it.
 
-**Check:** `jq -r .instance.name "instances/$M/loom.lock.json"` prints the machine name.
+**Check:** `jq -r .instance.name "instances/$M/loom.lock.json"` prints the machine name, and the
+directory `jq -r .codeRoot "instances/$M/loom.lock.json"` names exists.
 
 ## 4 · Install
 
