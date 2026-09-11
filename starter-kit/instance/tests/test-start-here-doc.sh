@@ -199,7 +199,7 @@ if head -5 "$DOC" | grep -q 'Read START-HERE.md and execute it'; then
 else bad "the instruction to the human is in the first lines" "$(head -3 "$DOC")"; fi
 
 for want in 'gh repo create' '--private' 'kit-upstream' 'instances/' 'install.sh --lock=' \
-            'identify.sh --declare' 'validate.sh' 'KIT.md' '**HUMAN'; do
+            'identify.sh --declare' 'validate.sh' 'KIT.md' '**HUMAN' '.machine.home = $h'; do
   if grep -qF -- "$want" "$DOC"; then ok "names: $want"
   else bad "names: $want" "the runbook lost a step every kit depends on"; fi
 done

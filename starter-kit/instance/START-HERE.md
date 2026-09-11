@@ -33,7 +33,7 @@ From this directory:
 ```sh
 ls starter-kit/instance/bootstrap.sh 2>/dev/null   # present: the public method repo
 ls ./*.lock.json 2>/dev/null                        # present: a kit
-jq -r '.instance.kind // "unset"' ./*.lock.json 2>/dev/null
+jq -r '.instance | if type == "object" then (.kind // "unset") else "instance" end' ./*.lock.json 2>/dev/null
 git remote -v
 ```
 
@@ -110,7 +110,7 @@ list is in `ACCESS-CHECKLIST.md` when the kit has one) and anything it marks as 
 ```sh
 git remote rename origin kit-upstream     # keep the kit as a second remote, for its updates
 gh repo create <owner>/<name> --private --source . --remote origin --push
-jq '.instance.kind = "instance" | .instance.name = "<name>"' loom.lock.json > loom.lock.json.tmp
+jq '.instance.kind = "instance" | .instance.name = "<name>" | del(.instance["$kindNote"])' loom.lock.json > loom.lock.json.tmp
 mv loom.lock.json.tmp loom.lock.json
 git add loom.lock.json
 git commit -q -m "make this kit mine"
@@ -138,16 +138,23 @@ Name the machine like this, and use the same name every time you come back to it
 ls instances/ 2>/dev/null        # does this machine already have a record?
 M=<machine-name>
 mkdir -p "instances/$M"
-jq --arg m "$M" '.instance.name = $m | .instance.kind = "instance"' loom.lock.json > "instances/$M/loom.lock.json"
+jq --arg m "$M" --arg h "$HOME" --arg p "$(uname -s)" \
+  '.instance = ((.instance | if type == "object" then . else {} end) + {name: $m, kind: "instance"})
+   | del(.instance["$kindNote"]) | del(.install.identity) | .probed = {}
+   | .machine.home = $h | .machine.platform = $p' \
+  loom.lock.json > "instances/$M/loom.lock.json"
 ```
 
 If `instances/<this machine>/` already exists, someone set this machine up before: skip the copy
 and use it. **Never install another machine's record.** It installs that machine's paths and
 profile here and still reports success.
 
-Edit the new record for what is true of **this** machine: `codeRoot`, where code checkouts live
-(for example `$HOME/code`), and `codeLayout` if `KIT.md` says the kit uses lanes. Leave `probed`
-alone; the tools write it.
+The command sets `machine.home` and `machine.platform` from this machine, so a record copied from
+a laptop does not describe a Linux workspace as a Mac. It also drops the source record's declared
+identity and its `probed` measurements: those describe the machine the root record came from, and
+`identify.sh --declare` in step 4 refuses a record that already declares one. Then edit what else is true of **this**
+machine: `codeRoot`, where code checkouts live (for example `$HOME/code`), and `codeLayout` if
+`KIT.md` says the kit uses lanes. Leave `probed` alone; the tools write it.
 
 **Check:** `jq -r .instance.name "instances/$M/loom.lock.json"` prints the machine name.
 
@@ -271,10 +278,17 @@ this file and execute it. It lands at step 3, because the repo already exists.
 
 - **Your own changes:** commit and push from any machine. On the others, `git pull`, then re-run
   step 4 with that machine's `--lock=`.
-- **A team kit's updates:** `git fetch kit-upstream`, then `git merge kit-upstream/main`. Resolve
-  anything that conflicts in the records, push, then re-run step 4.
-- **The method's updates (generic kits):** set `upstreams.dark-factory.commit` in every record to
-  the commit you want, push, then re-run step 4 on each machine.
+- **A team kit's updates:** `git fetch kit-upstream`, then `git merge kit-upstream/main`. The
+  merge moves the pins in the root record only. Carry each pin that moved into every machine's
+  record, or those machines keep installing the old one:
+  ```sh
+  C="$(jq -r '.upstreams["dark-factory"].commit' loom.lock.json)"
+  for r in instances/*/loom.lock.json; do jq --arg c "$C" '.upstreams["dark-factory"].commit = $c' "$r" > "$r.tmp"; mv "$r.tmp" "$r"; done
+  ```
+  Do the same for any other upstream whose pin moved. Push, then re-run step 4 on each machine.
+- **The method's updates (generic kits):** set `upstreams.dark-factory.commit` to the commit you
+  want in the root record and in every `instances/*/loom.lock.json`, push, then re-run step 4 on
+  each machine.
 - **Never edit `vendor/`.** It is a cache the installer rebuilds, and edits there are lost.
 
 ## Working in it
