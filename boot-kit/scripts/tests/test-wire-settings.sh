@@ -313,7 +313,9 @@ JSON
 LL="$T/l.json"
 O="$(python3 "$W8" --template "$LT" --live "$LL" --home "$H" --lock "$LLOCK" 2>&1)"
 contains "L: the declared hook behind bash is wired" "boot.sh"   "$(cat "$LL" 2>/dev/null)"
-absent   "L: and it is not skipped as undeclared"     "NOT wired" "$O"
+# ⚠️ "does not declare" is what the FRESH-file path prints for a skip; matching "NOT wired" (the
+# merge path's wording) passed vacuously against the unfixed tree.
+absent   "L: and it is not skipped as undeclared"     "does not declare" "$O"
 
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
