@@ -93,6 +93,10 @@ HARD-STOP and ask for explicit go-ahead before any irreversible real-world actio
 
 Pushing to a **feature branch / your own project repo** is fine; merging and prod are not. Dev DB read/write is fine; prod DB is a hard stop.
 
+The ask for each hard stop, and anything else only the human can do, goes on the notepad's
+`operator-todo.md` with `df-operator-todo add`, and work continues on every other front. The
+page, and what is admitted to it, is in [`vinculum-loop`](../vinculum-loop/SKILL.md).
+
 ## Documentation — everything, at every stage
 
 The build is not done until it is documented in three places:

@@ -40,6 +40,30 @@ Two pieces work together. Keep them distinct:
    lives at Tier 1; what an organisation adds is the **binding**: which boundaries its
    estate treats as real-world, and which of its own skills implement them. Reference a
    binding by name only, never by path — it resolves on that lane and nowhere else.
+5. **Keep the operator's page** (next section) from the first moment something is theirs.
+
+## The operator's page — `operator-todo.md`
+
+Everything only the human can do goes on **one page at the notepad root**, `operator-todo.md`,
+beside `NOTES.md`. The agent writes it, the human works it while the loop keeps running, and
+either of them updates it to unblock the mission. It is how a mission asks for a login, a
+decision or a merge without stopping every other front.
+
+- **At mission start**, from the notepad: `df-operator-todo init`. It is idempotent, and
+  `df-mission start` runs it too.
+- **The moment an item is the operator's**:
+  `df-operator-todo add --id <slug> --category <decision|approval|credential|access|irreversible|attention> --task "<what>" --why "<why it is theirs>" --do "<the exact command, URL or PR>"`.
+  Add `--blocking` only when the loop cannot go on without it; the default is that the loop
+  continues. Re-adding an id updates that entry, so a blocker re-found every iteration stays one line.
+- **When it is done**: `df-operator-todo done --id <slug> --verified "<evidence>"`, or
+  `--by-operator` when the human says so. Never remove an item you did not see done.
+- `df-operator-todo list` prints the page. A finished item is deleted; the notepad's git history
+  keeps it.
+
+⚠️ **Only actions waiting on the human belong there.** An FYI, a status line, a finding, or work
+you are able to do yourself is not an item: if you cannot name which of the six categories it
+needs, it was never theirs. A page of things nobody has to act on teaches the reader to skim the
+ones they do.
 
 ## The heartbeat tick — how an attended loop survives the orchestrator's attention
 

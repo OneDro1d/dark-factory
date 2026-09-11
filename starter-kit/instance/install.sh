@@ -703,7 +703,7 @@ else
 fi
 
 # ---- 4. PATH -----------------------------------------------------------------
-step "df-mission and df-preflight on PATH"
+step "df-mission, df-preflight and df-operator-todo on PATH"
 # Overridable for the same reason rehydrate.sh takes LOOM_LIVE: a test that has to write
 # into the real ~/.local/bin is a test nobody runs twice.
 #
@@ -715,18 +715,26 @@ step "df-mission and df-preflight on PATH"
 # workspace. On PATH it is one command from any notepad, and the script resolves its kit
 # through the link (realpath). VALIDATE-INSTALL.md has expected `command -v df-preflight`
 # since it was written; this is the step that makes that line true.
+#
+# df-operator-todo writes the page of what only the human can do (operator-todo.md, at the
+# notepad root). It lives in Tier 1's df-governed plugin, which no kit installs, so until
+# 2026-09-11 a kit's bin held df-mission and df-preflight only: `df-mission start` warned
+# "df-operator-todo not found" and created no page, and an attended mission had no command to
+# keep one with. It is linked from the pinned Tier 1, not the engine copy, because that is
+# where it is versioned.
 BINDIR="${LOOM_BIN:-$HOME/.local/bin}"
 if [ "$DRY" -eq 1 ]; then
-  say "would  link $BINDIR/df-mission and $BINDIR/df-preflight"
+  say "would  link $BINDIR/df-mission, $BINDIR/df-preflight and $BINDIR/df-operator-todo"
 else
-  for pair in "df-mission:df-mission" "df-preflight:df-preflight.py"; do
-    name="${pair%%:*}"; file="${pair#*:}"
-    if [ -f "$ENGINE_DST/$file" ]; then
+  for pair in "df-mission:$ENGINE_DST/df-mission" "df-preflight:$ENGINE_DST/df-preflight.py" \
+              "df-operator-todo:$T1/plugins/df-governed/bin/df-operator-todo"; do
+    name="${pair%%:*}"; src="${pair#*:}"
+    if [ -f "$src" ]; then
       mkdir -p "$BINDIR"
-      ln -sf "$ENGINE_DST/$file" "$BINDIR/$name"
+      ln -sf "$src" "$BINDIR/$name"
       say "ok    $BINDIR/$name"
     else
-      say "WARN  $file not present in the pinned engine"
+      say "WARN  ${src#"$ROOT"/} not present in the pinned Tier 1"
     fi
   done
   case ":$PATH:" in
