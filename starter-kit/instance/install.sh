@@ -717,11 +717,12 @@ step "df-mission, df-preflight and df-operator-todo on PATH"
 # since it was written; this is the step that makes that line true.
 #
 # df-operator-todo writes the page of what only the human can do (operator-todo.md, at the
-# notepad root). It lives in Tier 1's df-governed plugin, which no kit installs, so until
-# 2026-09-11 a kit's bin held df-mission and df-preflight only: `df-mission start` warned
-# "df-operator-todo not found" and created no page, and an attended mission had no command to
-# keep one with. It is linked from the pinned Tier 1, not the engine copy, because that is
-# where it is versioned.
+# notepad root). It lives in Tier 1's df-governed plugin. A record that declares that plugin
+# gets it under ~/.claude/skills/, where df-mission looks; the generic kits declare no plugins,
+# so there `df-mission start` warned "df-operator-todo not found" and created no page. And on
+# no kit was it a command: until 2026-09-11 a kit's bin held df-mission and df-preflight only,
+# while the kit docs said `df-operator-todo list`. It is linked from the pinned Tier 1, not
+# the engine copy, because that is where it is versioned and every kit has it.
 BINDIR="${LOOM_BIN:-$HOME/.local/bin}"
 if [ "$DRY" -eq 1 ]; then
   say "would  link $BINDIR/df-mission, $BINDIR/df-preflight and $BINDIR/df-operator-todo"

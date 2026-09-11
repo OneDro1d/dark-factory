@@ -350,6 +350,21 @@ l6_restore() {
 }
 trap l6_restore EXIT INT TERM
 
+# ⛔ MEASURED 2026-09-11, a kit's first install: a plain `git fetch` of a PRIVATE layer on a
+# machine where gh is logged in but git has no credential helper (`gh auth setup-git` never
+# run, and the runbook never asks for it) does not fail. It prompts for a password on the
+# terminal, and with stderr sent to /dev/null the install sat in L6 for ten minutes printing
+# nothing. So: offer gh's login as a helper after any the user has, and never prompt. A fetch
+# that still cannot authenticate now fails at once and reports UNVERIFIED, as intended.
+l6_fetch() {
+  if command -v gh >/dev/null 2>&1; then
+    GIT_TERMINAL_PROMPT=0 git -C "$1" -c 'credential.https://github.com.helper=!gh auth git-credential' \
+      fetch --prune --quiet origin 2>/dev/null
+  else
+    GIT_TERMINAL_PROMPT=0 git -C "$1" fetch --prune --quiet origin 2>/dev/null
+  fi
+}
+
 DEADPIN=""; L6CHECKED=0; L6SKIPPED=""; L6SWITCHED=0
 while read -r name; do
   [ -n "$name" ] || continue
@@ -357,14 +372,14 @@ while read -r name; do
   [ -d "$VENDOR/$name/.git" ] || continue
   # --prune matters: a branch deleted upstream leaves a stale remote-tracking ref
   # that would keep vouching for a pin the remote no longer serves.
-  if ! git -C "$VENDOR/$name" fetch --prune --quiet origin 2>/dev/null; then
+  if ! l6_fetch "$VENDOR/$name"; then
     # Retry as the account the lock names for THIS upstream, if that is not already active.
     acct="$(jq -r --arg n "$name" '.upstreams[$n].account // empty' "$LOCK")"
     fetched=0
     if [ -n "$L6_ORIG" ] && [ -n "$acct" ] && [ "$acct" != "null" ] && [ "$acct" != "$L6_ORIG" ]; then
       if gh auth switch --user "$acct" >/dev/null 2>&1; then
         L6SWITCHED=1
-        git -C "$VENDOR/$name" fetch --prune --quiet origin 2>/dev/null && fetched=1
+        l6_fetch "$VENDOR/$name" && fetched=1
         gh auth switch --user "$L6_ORIG" >/dev/null 2>&1 || true
       fi
     fi
