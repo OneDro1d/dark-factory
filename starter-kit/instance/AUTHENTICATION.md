@@ -339,8 +339,9 @@ For the default hub, the vendor keeps the authoritative failure table — includ
 
 - [`boot-kit/README.md`](boot-kit/README.md) — the four boot-kit pieces, and which of them
   no installer will ever do for you
-- [`START-HERE.md`](START-HERE.md) — the ten-minute path from clone to a first session
-- [`README.md`](README.md) — this directory's shape and the two rules it depends on
+- [`START-HERE.md`](START-HERE.md) — the runbook: your own private repo, one record per
+  machine, install, sign-ins, validate
+- [`README.md`](README.md) — this directory's shape and the rules it depends on
 
 For the default hub, the vendor's own pages — authoritative, and deliberately not copied
 into this kit:

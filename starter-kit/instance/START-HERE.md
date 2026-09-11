@@ -1,358 +1,304 @@
-# START HERE — clone to a first working session, in about ten minutes
+# START HERE — set up your agent from this kit
 
-You are about to turn this template into **your** instance: a directory you own, a lockfile
-that says exactly what is installed on this machine, and a session where the method is
-actually running rather than merely described.
+> **Human:** open Claude Code in this directory and tell it:
+> **"Read START-HERE.md and execute it."**
+>
+> **Claude:** this file is your runbook. Execute it top to bottom. Every step ends with a
+> **Check**: run it, and do not move on until it passes. Stop and ask the human only at steps
+> marked **HUMAN**. Those need a decision, a login or a grant that only they can give. Report
+> what you ran and what each check printed; never report a step as done without its check.
 
-Read this page through once before typing. It is short, and several of its steps fail in
-ways that look like success if you do not know what to check.
+## What you end up with
 
-> **One machine, one person.** If you are setting up a whole organisation — a shared layer
-> plus a tier per developer — you want `../new-org-layer.sh` instead. The two are siblings;
-> `README.md` in this directory explains which question each answers. An instance made here
-> can be folded into an org layer later.
+- **Your own private GitHub repo** holding your agent's setup. You install from it on every
+  machine you use, and each machine's validation report lands in it.
+- **One record per machine** in that repo, at `instances/<machine>/loom.lock.json`. A laptop, a
+  cloud workspace and a second laptop are three records in one repo. Each machine installs only
+  its own.
+- **A working, validated agent** on this machine: the skills, hooks and gates the kit declares,
+  proven by a validation run that commits its own report.
 
----
+What is specific to this kit is in **`KIT.md`**: who it is for, what it connects to, the access
+you need, and what here cannot be undone. You read it in step 2.
 
-## Before you start
-
-| you need | why |
-|---|---|
-| `git`, `jq`, `bash`, `python3` | `bootstrap.sh` refuses to run without `git` and `jq`; the engine is Python |
-| an agent harness that reads `SKILL.md` and supports hooks | the skills and the session hook are the method's delivery mechanism |
-| a hub — **or none** | needed only from step 4; [§4a](#4a--if-you-do-not-have-a-hub-yet) is the path if you have none. Steps 1–3 are fully offline-capable |
-
-**You do not need a hub to finish steps 1–3**, and it is worth doing them first: an install
-that is broken and a hub that is misconfigured produce similar-looking silence, and
-separating them is most of the debugging.
+This file is the same in every kit. It never names a commit: the pins live in the records, and
+a commit written into prose is out of date the first time the kit updates.
 
 ---
 
-## 1 · Clone and bootstrap
+## 0 · Where are you?
+
+From this directory:
 
 ```sh
-git clone https://github.com/OneDro1d/dark-factory.git
-cd dark-factory
-bash starter-kit/instance/bootstrap.sh --kit list          # what kinds of work are bundled
-bash starter-kit/instance/bootstrap.sh my-instance --kit dev
+ls starter-kit/instance/bootstrap.sh 2>/dev/null   # present: the public method repo
+ls ./*.lock.json 2>/dev/null                        # present: a kit
+jq -r '.instance.kind // "unset"' ./*.lock.json 2>/dev/null
+git remote -v
 ```
 
-**Pick the kit that matches the work, not the person.** `kits/dev` for writing and shipping
-code; `kits/knowledge-worker` if what you produce is documents rather than code;
-`kits/code-review`, `kits/frontend`, `kits/distributed-systems` for the narrower jobs. Repeat
-`--kit` to compose. Each one pulls in `kits/method-core` — the method itself — through its own
-`extends`, so you never name the floor by hand.
-
-⚠️ **`--kit` is optional, and omitting it is a real choice rather than a mistake.** Without it
-your instance ships an **empty** skill list and you fill it in at step 2. That is honest: a
-default set nobody chose would arrive in every install, and this repo declines to ship one
-anywhere else either.
-
-`bootstrap.sh` runs **once**. It creates `../my-instance` — deliberately a sibling of this
-checkout, never inside it, because an instance nested in its own upstream gets committed to
-that upstream by the first careless `git add -A` and nothing about the layout warns you.
-
-It resolves the Tier-1 pin from the remote **at this moment** and writes it as a commit SHA.
-If the remote is unreachable it pins your local `HEAD` and says so in `$refSource`. That
-message is the whole point — a pin whose origin is unrecorded is a pin nobody can re-derive.
-
-**Checkpoint.** The last lines print your instance path and `pinned: <8 chars>`. If instead
-you see `WARN could not resolve any Tier-1 commit`, the lockfile holds `__T1_COMMIT__` and
-step 3 will stop on it.
-
-## 2 · Fill in the lockfile
-
-```sh
-cd ../my-instance
-$EDITOR loom.lock.json
-```
-
-Three things to set, and one to leave alone:
-
-- **`codeRoot`** — the directory your checkouts live under. Defaulted to `$HOME/code`;
-  change it if that is not true. Tools find a repo under it by its **origin remote**, never
-  by directory name, because names drift when a checkout is cloned or renamed and remotes
-  do not.
-- **`codeLayout`** — lane → directory. A lane is one grouping of repos you work in; name
-  them however your work is actually divided. **Leaving it empty is correct** if you do not
-  have lanes yet: the preflight then reports `unknown` for that probe, which is the honest
-  answer. A guessed lane reports as a fact.
-- **`install.skills` / `install.skillSources`** — the skills you want, and where each comes
-  from. **If you passed `--kit`, these are already filled in and paired** — read them, prune
-  what you will not use, and move on; `install.$kitResolution` records which bundle they came
-  from. If you did not, list them by hand: `../../skills/` lists what is available, e.g.
-  `"vinculum-loop": "dark-factory/skills/vinculum-loop"`.
-
-  Every name must have a matching source entry and every source entry must have a name;
-  `lock-verify` (L7) checks both directions, because either half alone installs nothing while
-  still reading like a declaration. A source resolves under your vendor directory unless it
-  begins with `local:`, which resolves inside your own instance — that is how you declare a
-  skill or hook you wrote yourself.
-
-  ⚠️ **Adding a name here is not the same as adding a skill.** The lockfile is the authority;
-  a directory nothing declares is installed by nothing and reported by nothing, so it does not
-  exist as far as any check is concerned.
-- **Leave `probed` alone.** Tools write it; you do not.
-
-Anything still holding a `__PLACEHOLDER__` is a value nobody supplied, and step 3 names it
-rather than defaulting it.
-
-### ⚠️ Is this instance yours yet? — `instance.kind`
-
-There are two kinds of kit and they need opposite handling.
-
-| | **instance** | **template** |
+| you see | you are in | go to |
 |---|---|---|
-| describes | one real machine | nobody's machine yet |
-| you should | install and re-install from it | clone it somewhere you own, THEN customise |
-| identity | declared, and the guard is armed | not declared, correctly |
+| `starter-kit/instance/bootstrap.sh` exists | the public method repo | step 1, then **2A** |
+| a `*.lock.json` whose `instance.kind` is `template` | a team kit someone shared with you | step 1, then **2B** |
+| `instance.kind` is `instance` and `origin` is **the human's own private repo** | their setup, on a new machine | step 1, then **3** |
+| `instance.kind` is `instance` and `origin` is **somebody else's** repo | somebody else's setup | **stop and ask the human.** Installing it gives this machine another person's environment |
 
-`bootstrap.sh` gives you an **instance**: you named it, so it is about your machine. A kit
-somebody hands you — a shared team kit — is a **template**, and its installer says so on every
-run until you flip the marker.
+The kit's record is the one `*.lock.json` at this directory's root. It is `loom.lock.json` in
+almost every kit; wherever this file says `loom.lock.json`, use the real name.
 
-**Making a template yours, once:**
-
-1. put it somewhere **you** own — a fork, or your own branch
-2. customise the lockfile: `codeRoot`, `codeLayout`, `instance.name`
-3. declare the machine: `bash boot-kit/scripts/identify.sh --declare loom.lock.json`
-4. flip the marker: `"instance": { "kind": "instance", ... }`
-5. commit and push to **your** copy — that is what you re-install from ever after
-
-⚠️ **Step 4 is not bookkeeping.** It is you saying this repo now describes a real machine, which
-is what makes the identity guard meaningful here. Until then the guard is present, passing, and
-checking nothing — and a check that cannot disagree with anything agrees with everything.
-
-⚠️ **Step 1 is not optional, and skipping it is the failure people actually hit.** If you
-customise a shared template in place, your setup lives where the maintainer also pushes, and the
-next upstream change overwrites it. Installing an uncustomised template still *works* — it
-installs the defaults — so nothing breaks loudly. It just silently is not yours.
-
-## 3 · Install
+## 1 · Check the tools
 
 ```sh
-bash install.sh
+for c in git jq bash python3 gh claude; do command -v "$c" >/dev/null && echo "ok       $c" || echo "MISSING  $c"; done
+gh auth status
+claude -p 'Reply with the single word: ok' --output-format text
 ```
 
-It fetches Tier 1 at the pin, copies the engine into `boot-kit/scripts/` **here**, hands the
-remaining upstreams, skills and hooks to Tier 1's own `rehydrate.sh`, puts `df-mission` on
-your `PATH`, verifies against the lockfile, and then prints what it could not do for you.
+**Check:** every tool prints `ok`; `gh auth status` shows a GitHub account that can see this
+kit; the last command prints `ok`.
 
-`install.sh` is the re-runnable half — run it again after any lockfile edit. Two flags worth
-knowing: `--dry-run` prints the plan and changes nothing, `--offline` installs from whatever
-is already vendored and touches no network.
+- A tool is missing: tell the human which, and stop.
+- **HUMAN**, if `gh` is not logged in: `gh auth login`. When the kit lives in an organisation the
+  account cannot see, GitHub answers "Repository not found". That means the wrong account far
+  more often than a missing repo.
+- ⚠️ `claude auth status` is not a login test. It reads a file, and it reports a signed-in
+  account even when the session can no longer refresh. The one-word call above is the test.
 
-**Checkpoint — read the exit code, not the last line of output.**
+## 2A · Make your own copy of a generic kit
+
+The public repo ships **generic kits**: sets of skills for a kind of work, not for a person.
+`kits/dev` is for writing and shipping code. `kits/knowledge-worker` is for work whose output is
+documents rather than code. Each pulls in `kits/method-core`, the method itself, on its own.
+There are narrower kits too:
+
+```sh
+bash starter-kit/instance/bootstrap.sh --kit list
+```
+
+**HUMAN:** choose the kit (or kits; `--kit` repeats), a name for the setup such as `my-agent`,
+and the GitHub owner of the private repo: their own account, or their organisation.
+
+```sh
+bash starter-kit/instance/bootstrap.sh <name> --kit <kit>
+cd ../<name>
+git init -q
+git add -A
+git commit -q -m "my agent setup, from kits/<kit>"
+gh repo create <owner>/<name> --private --source . --remote origin --push
+```
+
+`bootstrap.sh` writes the new directory beside this checkout, never inside it, and pins the
+method at the commit that is current right now. Then fill in `KIT.md` in the new directory with
+the human. It takes five minutes and it is what the next person reads.
+
+**Check:** `gh repo view <owner>/<name> --json visibility -q .visibility` prints `PRIVATE`, and
+`git remote get-url origin` names that repo. **Tell the human to run Claude Code from the new
+directory from now on**, and continue at step 3 there.
+
+## 2B · Make your own copy of a team kit
+
+A team kit is a template. It describes nobody's machine yet, and its maintainer keeps pushing
+to it. Customise your own copy, never the shared one: a change made in the shared repo is
+overwritten by the next update, and nothing warns you.
+
+**Read `KIT.md` now.** Tell the human what it says must be granted before an install (the full
+list is in `ACCESS-CHECKLIST.md` when the kit has one) and anything it marks as not reversible.
+
+**HUMAN:** choose the name and the GitHub owner of the private repo.
+
+```sh
+git remote rename origin kit-upstream     # keep the kit as a second remote, for its updates
+gh repo create <owner>/<name> --private --source . --remote origin --push
+jq '.instance.kind = "instance" | .instance.name = "<name>"' loom.lock.json > loom.lock.json.tmp
+mv loom.lock.json.tmp loom.lock.json
+git add loom.lock.json
+git commit -q -m "make this kit mine"
+git push -q origin HEAD
+```
+
+**Check:** `gh repo view <owner>/<name> --json visibility -q .visibility` prints `PRIVATE`;
+`git remote -v` shows `origin` (the human's repo) and `kit-upstream` (the kit);
+`jq -r .instance.kind loom.lock.json` prints `instance`.
+
+## 3 · Add this machine (once per machine)
+
+Every machine has its own record under `instances/`. The root `loom.lock.json` is the base new
+records are copied from. A few older kits also use the root file as their first machine's
+record, and their `KIT.md` says which machine; every other machine still gets its own.
+
+Name the machine like this, and use the same name every time you come back to it:
+
+| machine | name |
+|---|---|
+| a laptop | `laptop-<user>-<os>`, for example `laptop-ana-macos` |
+| a cloud workspace | `<provider>-<deployment>--<workspace>`, for example `coder-acme--dev-1` |
+
+```sh
+ls instances/ 2>/dev/null        # does this machine already have a record?
+M=<machine-name>
+mkdir -p "instances/$M"
+jq --arg m "$M" '.instance.name = $m | .instance.kind = "instance"' loom.lock.json > "instances/$M/loom.lock.json"
+```
+
+If `instances/<this machine>/` already exists, someone set this machine up before: skip the copy
+and use it. **Never install another machine's record.** It installs that machine's paths and
+profile here and still reports success.
+
+Edit the new record for what is true of **this** machine: `codeRoot`, where code checkouts live
+(for example `$HOME/code`), and `codeLayout` if `KIT.md` says the kit uses lanes. Leave `probed`
+alone; the tools write it.
+
+**Check:** `jq -r .instance.name "instances/$M/loom.lock.json"` prints the machine name.
+
+## 4 · Install
+
+```sh
+bash install.sh --lock=instances/$M/loom.lock.json
+```
+
+It fetches everything at the pinned commits, installs the skills and hooks the record declares,
+links the `vendor/` cache beside the record, checks the result against the record, and proves
+the machinery runs. It is safe to re-run. `--dry-run` prints the plan and changes nothing.
+
+**Check: read the exit code, not the last line.**
 
 | exit | means | do |
 |---|---|---|
-| `0` | installed, and `lock-verify` says **LOCKED** | go to step 4 |
-| `1` | a precondition failed — nothing was installed | fix what it named; the cause is one line |
-| `2` | it installed, and the result does **not** match the lockfile | read the `verify` section. Do not proceed |
+| `0` | installed; `RESULT: LOCKED` and `PROVE: PASS` | continue |
+| `1` | a precondition failed and nothing was installed | fix the one thing it names, and re-run |
+| `2` | installed, but the result does **not** match the record | read the `DRIFT` and `FAIL` lines; each names the item and its repair |
 
-`2` is deliberately neither `0` nor `1`. Collapsing "ran but does not match" into success is
-how an instance ships half-configured and stays that way.
+Then record this machine's identity, so that installing this record on a different machine is
+refused, and save the record:
 
-If it warns that your bin directory is not on `PATH`, fix that now. Installed-but-unreachable
-is not installed, and it fails much later as `command not found`, pointing at the wrong thing.
+```sh
+bash boot-kit/scripts/identify.sh --declare "instances/$M/loom.lock.json"
+git add "instances/$M"
+git commit -q -m "add machine $M"
+git push -q origin HEAD
+```
 
-## 4 · The three pieces no installer will do for you
+If `boot-kit/scripts/identify.sh` is absent, the kit keeps the engine only in its cache: use
+`vendor/dark-factory/boot-kit/scripts/identify.sh`. The same holds for `validate.sh` in step 6.
 
-`install.sh` prints these on **every** run, not once, so that a green install is never read
-as a complete setup:
+**Check:** `bash boot-kit/scripts/identify.sh --lock "instances/$M/loom.lock.json"` exits `0`,
+and the push succeeded. Push before relying on the record: a record that exists only on the
+machine it describes is one rebuild away from gone.
+
+## 5 · Connect your tools (HUMAN)
+
+No script can sign in for you, mint a token or grant access, so the install ends by printing what
+is left. Walk the human through it one item at a time. [`AUTHENTICATION.md`](AUTHENTICATION.md)
+explains each connection; `ACCESS-CHECKLIST.md`, when present, says who grants what.
+
+**Three settings you merge by hand.** Each lands in a file shared with everything else the human
+runs, and a script that rewrote those files would silently delete another tool's configuration.
 
 | do this | from |
 |---|---|
-| merge the hook registration into your harness settings | `boot-kit/settings.template.json` |
-| point the hub config at a hub — it already points at one; the token is yours to export | `boot-kit/mcp.template.json` |
-| copy the output style into your harness's output-styles directory and select it | `boot-kit/output-style.md` |
+| merge the hook registration into the harness settings | `boot-kit/settings.template.json` |
+| copy the hub entry into the harness config; the token stays in the environment | `boot-kit/mcp.template.json` |
+| copy the output style into the harness's output-styles directory and select it | `boot-kit/output-style.md` |
 
-Each of these lands in a file shared with everything else you run. A script that rewrites
-them silently deletes another tool's configuration, and the loss shows up much later as
-behaviour that used to happen and now does not. So they stay manual, and
-`boot-kit/README.md` says which is which and why.
+**The hub is optional.** It gives the agent shared memory across sessions and machines, plus
+connectors to the systems the human already uses. The method runs without one.
 
-**The token is read from the environment, not stored.** Export it in your shell profile
-before launching anything unattended: a headless run whose parent process lacks the variable
-boots cleanly, fails every hub write, and keeps going.
+- **Already have a hub:** put its address in the `url`, and export its token as `DF_HUB_TOKEN`
+  in the shell profile. The config refers to the variable; the token itself is never written to
+  a file. A headless run whose parent never exported it starts cleanly, then fails every hub call.
+- **No hub yet:** the template points at OneDroid Synapse, a public hub anyone can sign up for.
+  It is a default, not a requirement. The vendor's walkthrough is
+  <https://docs.onedroid.ai/quickstart>; follow it, with these four traps in mind:
+  1. Sign up at <https://synapse.onedroid.ai>, and **use the same sign-in method every time**.
+     Sign-in is Clerk, so Google and Microsoft on the identical email are two separate accounts.
+     The symptom is signing in fine and finding no hub.
+  2. If you bring your own Postgres, leave the literal `[YOUR-PASSWORD]` placeholder in the
+     connection string exactly as it appears. The password is spliced in from its own field.
+  3. Before minting a token, check the hub picker shows the hub you mean. A token is bound to one
+     hub, and its plaintext is shown once.
+  4. A new hub has zero connections. If it stays at zero, the upstreams are not enabled, and only
+     an admin can enable them. Someone invited into another person's hub holds a valid token,
+     sees no tools, and has to ask the hub's owner.
+- **Bring your own hub instead:** replace the `url` and rename the server key. Ask your provider
+  for the exact path rather than assuming it matches the default's.
+- **No hub at all:** delete `boot-kit/mcp.template.json`. Everything else still works.
 
-## 4a · If you do not have a hub yet
-
-Skip this if you already have one, or if you are running without one. Otherwise it is about
-five minutes, once, and then step 4's middle row is done.
-
-`boot-kit/mcp.template.json` ships pointing at **OneDroid Synapse**, a public MCP hub that
-anyone can sign up for. That is a **default, not a requirement** — the two other paths are at
-the end of this section, and neither is second-class.
-
-The vendor's own walkthrough is <https://docs.onedroid.ai/quickstart>, and it is the page to
-follow. What is below is the *order*, plus the things that go wrong along the way — each of
-which presents as something other than its cause.
-
-1. **Sign up** at <https://synapse.onedroid.ai>. Google, Microsoft, or email.
-
-   > ⚠️ **Use the same method every time.** Sign-in is Clerk, so Google and Microsoft on the
-   > *identical* email address are two separate accounts. The symptom is not an error; it is
-   > signing in successfully and finding no hub, or the wrong one.
-
-2. **Choose where the data lives** — managed, or your own Postgres.
-
-   > ⚠️ If you bring your own: leave the literal `[YOUR-PASSWORD]` placeholder in the
-   > connection string **exactly as it appears**, because the password is spliced in from a
-   > separate field and is deliberately never stored in the URI. Substituting the real one
-   > presents as *"the credentials are right and the connection test fails"*, which sends
-   > you looking at the database.
-
-3. **Create the hub.** The slug you get back is not the slug you typed — a short unique
-   suffix is appended. It does not matter here: the slug selects a hub for *browser* clients,
-   and this kit is the token avenue, which carries the hub in the token instead. That is why
-   the template's URL has no slug in it and must not gain one.
-
-4. **Mint a token** — check the hub picker is on the hub you mean first, since a token is
-   bound to one hub at creation. The plaintext is shown **once**.
-
-5. **Wire it.** Export the token as `DF_HUB_TOKEN` in your shell profile, then copy the
-   `mcpServers` block out of `boot-kit/mcp.template.json` into your harness config. The
-   template already carries the URL, and carries the token as `${DF_HUB_TOKEN}` rather than
-   as a value — [`AUTHENTICATION.md`](AUTHENTICATION.md) is why, and it is worth two minutes
-   before you paste anything.
-
-Then go to step 5 and prove it, rather than assuming it.
-
-> ⚠️ **A fresh hub has zero connections, and that is expected.** If it *stays* at zero, the
-> upstreams have not been enabled — which only an admin can do. Sign up on your own and you
-> are the admin of your own hub, so this is yours to fix. Get *invited* into someone else's
-> and it is not: you will hold a perfectly valid token, see no tools, and have every reason
-> to blame the token. Ask whoever owns the hub.
-
-**Bring your own hub instead.** Replace the `url` and rename the server key. Ask your
-provider for the exact path rather than assuming it looks like the default's — the split
-between token and browser paths above is one product's design, not a standard.
-[`AUTHENTICATION.md`](AUTHENTICATION.md) covers what stays true either way.
-
-**Or run no hub at all.** Delete `boot-kit/mcp.template.json`. You lose shared memory across
-sessions and machines, and connectors to systems you already use. Nothing else in the method
-depends on it, and steps 5 through 7 all still work.
-
-## 5 · Prove it, rather than assuming it
+Then prove it:
 
 ```sh
-df-preflight --report          # on PATH after install.sh; the same file as boot-kit/scripts/df-preflight.py
+df-preflight --report          # or: python3 boot-kit/scripts/df-preflight.py --report
 ```
 
-This makes a **live call** against every configured hub and probes every binary, identity
-and repo the lockfile declares. A present `Authorization` header proves nothing — an expired
-token looks exactly like a working one until something needs it.
+**Check:** no `drift` on a hub or connector the record declares. `unknown` means it could not
+look, which is neither a pass nor a failure; say which one, and why. A hub answering `401`
+means a wrong token or a header that never arrived, and those look identical from here:
+<https://docs.onedroid.ai/troubleshooting> tells them apart.
 
-Three verdicts, and the third is not a polite synonym for the second:
+Then **open a new Claude Code session in this directory.** Tools and hooks load only when a
+session starts.
 
-| verdict | means |
+## 6 · Validate
+
+```sh
+bash boot-kit/scripts/validate.sh --kit-root "$PWD" --headless
+```
+
+It opens a fresh session that exercises every gate the kit installs, writes
+`VALIDATE-REPORT-<time>-<machine>.md`, and commits and pushes that report to the human's repo by
+itself. It takes about ten minutes and costs a few dollars.
+
+**Check:** exit `0`; a new report on the repo's `main`; and the report's **Broken** section says
+nothing in the kit is broken. Show the human that section verbatim.
+
+| exit | means |
 |---|---|
-| `ok` | probed; reality matches the record |
-| `drift` | probed; reality **differs**. A positive finding, and it may carry a proposal |
-| `unknown` | could not probe — binary absent, network down. **Not** a fact about the world |
+| `3` | the report did not reach the repo. The output names the step that failed |
+| `4` | the session could not start, almost always the login from step 1 |
+| `5` | another validation is already running against this kit |
 
-Only a positive `drift` justifies changing anything. Collapsing `unknown` into `drift` is
-how a network blip gets written into a lockfile as "no checkout on this machine". Proposals
-are never applied for you: confirm one, then `--apply` records it under `probed`.
-
-**What this check cannot tell you apart.** A hub that answers `401` is reported as `drift`,
-and the note says *token expired or revoked* — but a wrong token and a header that never
-arrived produce the same `401` here. Those are the two failures that look identical from
-inside an agent, and the vendor's probe distinguishes them by returning a different code in
-the body: <https://docs.onedroid.ai/troubleshooting>. Run that before changing anything in
-your config, because the two causes have nothing in common.
-
-## 6 · Open a session
-
-Open a **new** session in your instance directory. Hooks are read once, at session start, so
-a hook installed mid-session does nothing — that, and the fact that hooks are *copied* while
-skills are *symlinked*, account for almost every "my change did nothing".
-
-⛔ **The directory you start in decides what gets restored, and nothing else does.** Working
-memory — `NOTES.md`, the newest handoff, the mission gates — is resolved by walking **up from
-the session's cwd for a `NOTES.md`**. That is the same rule as "drive repos via `git -C`, never
-`cd`", seen from the other side: a session started inside a *code repo* the notepad drives gets
-**nothing** from the notepad, because the notepad is not above it. Measured 2026-09-08: a real
-`/clear` from a code-repo cwd restored nothing and said nothing. If you are resuming work, start
-with cwd = the notepad (the directory holding `NOTES.md`), then reach the repos with `git -C`.
-The hook now names the notepad and says so when it catches this; before, it emitted `{}`.
-
-The session hook should tell you which instance you are in, whether it is actually installed,
-and what missions are running. If it says nothing at all, run it directly before blaming it:
-
-```sh
-printf '{"cwd":"%s"}' "$PWD" | bash ~/.claude/hooks/df-instance-start.sh | jq .
-```
-
-A SessionStart hook that errors, or prints anything that is not JSON, is discarded
-**silently** — so a broken hook and a hook with nothing to say look identical from inside a
-session. (Substitute your harness's hooks directory if it is not `~/.claude`.)
-
-## 7 · Run the worked example, before you frame anything of your own
-
-`bootstrap.sh` installed one mission already: `EXAMPLE-FIRST-RUN`, under
-`.df/missions/`. It is a real mission — a supervisor runs it, fresh iterations claim its
-tickets — and it is safe to run on any machine because its own `HARD-STOPS.md` confines
-every write to its own directory. It makes no network call and touches no hub.
-
-```sh
-df-mission start EXAMPLE-FIRST-RUN --profile default --max-iter 5 --max-usd 5
-df-mission status EXAMPLE-FIRST-RUN
-```
-
-It leaves behind `RESULT.md` in that directory: what the runtime here was *shown* to do,
-what it could not be shown to do, and which of the two a reader on another machine should
-expect to differ. Read the second section first — a run with no blind spots has not looked
-hard enough at itself.
-
-Run this before framing a mission of your own. Everything above this line is a check that
-the pieces are present; this is the first thing that tells you they work together. It also
-shows you the three overrides a mission makes against the generic iteration prompt — its
-own tracker (`TICKETS.md`, a file, because the discipline is the claim convention and not
-any particular product), its own handoff directory, and no estate binding at all.
-
-**If it stops at `BLOCKED`, that is not a failed install.** The example is written so a
-blocked run with a well-named reason is a successful run: read `state` and the ticket it
-was on. The failure mode to worry about is the opposite one — a `DONE` whose `RESULT.md`
-has an empty "what could not be shown" section.
+`VALIDATE-INSTALL.md`, where the kit ships it, is the same check as a prompt to paste into a
+session by hand.
 
 ---
+
+## Every other machine
+
+On each new machine: `gh repo clone <owner>/<name>`, open Claude Code in it, and tell it to read
+this file and execute it. It lands at step 3, because the repo already exists.
+
+## Keeping current
+
+- **Your own changes:** commit and push from any machine. On the others, `git pull`, then re-run
+  step 4 with that machine's `--lock=`.
+- **A team kit's updates:** `git fetch kit-upstream`, then `git merge kit-upstream/main`. Resolve
+  anything that conflicts in the records, push, then re-run step 4.
+- **The method's updates (generic kits):** set `upstreams.dark-factory.commit` in every record to
+  the commit you want, push, then re-run step 4 on each machine.
+- **Never edit `vendor/`.** It is a cache the installer rebuilds, and edits there are lost.
+
+## Working in it
+
+Start sessions in this directory, or in a notepad beside it, not inside a code repo. Working
+memory and mission state are found by walking **up** from where the session starts, so a session
+started inside a code repo restores nothing and says nothing. Reach code repos with `git -C`.
+
+A kit made by `bootstrap.sh` also carries a worked example, `.df/missions/EXAMPLE-FIRST-RUN/`.
+It confines every write to its own directory and needs no hub:
+`df-mission start EXAMPLE-FIRST-RUN --profile default --max-iter 5 --max-usd 5`.
 
 ## When it goes wrong
 
 | symptom | almost always |
 |---|---|
-| `install.sh` exits `1` naming a `__PLACEHOLDER__` | `bootstrap.sh` could not resolve it and you have not filled it in |
-| `install.sh` exits `2` | something on disk is not declared in the lockfile, or something declared is missing. `lock-verify` checks **both** directions and the second is the one that usually goes missing |
-| `df-mission: command not found` | it installed; your bin directory is not on `PATH` |
-| a skill you declared is "unknown" | the session started before the install, or `skillSources` has no entry for that name |
-| the hook does nothing | old session, or it is not valid JSON — run it directly, above |
-| every hub call fails, nothing else is wrong | the token variable is not exported in **this** process |
-| `df-mission: no such mission` for the example | you are not inside the instance directory, or an inherited `$NOTEPAD` is pointing at a different notepad — it wins over the upward walk |
-| the example finishes `DONE` with nothing it could not verify | read it again; that section being empty is the defect the ticket warns about |
-| signed in, but there is no hub or it is the wrong one | you signed in with a different provider than you signed up with — two accounts, one email. [§4a](#4a--if-you-do-not-have-a-hub-yet) |
-| the connection test fails and the credentials look right | the real password was substituted for the `[YOUR-PASSWORD]` placeholder, which is meant to stay literal |
-| connected, token valid, and zero tools appear | the hub has no upstreams enabled. Only an admin can enable them, so if you were invited into someone else's hub this is not yours to fix |
-| `ERR_SCOPE_UNAVAILABLE` | a token sent to a slug-carrying URL. The token avenue has no slug — see [`AUTHENTICATION.md`](AUTHENTICATION.md) |
-
-## What to read next
-
-- [`README.md`](README.md) — this directory's shape, and the two rules it depends on
-- [`boot-kit/README.md`](boot-kit/README.md) — what your harness loads at session start, and
-  which of it is automatable
-- [`../../README.md`](../../README.md) — the method itself: the stages, the control loop, the
-  delegability test
-- [`AUTHENTICATION.md`](AUTHENTICATION.md) — what a hub is, how to point at your own, and
-  what each kind of connector needs. Read it **before** step 5 if you are configuring a hub:
-  the token is an environment reference, and a headless run whose parent never exported it
-  boots cleanly and then fails every hub write in silence.
-
-For the default hub, the vendor's own pages — authoritative, and deliberately not copied into
-this kit, because two copies of a setup path drift and then neither can be trusted:
-
-- <https://docs.onedroid.ai/quickstart> — sign-up through to a first verified call
-- <https://docs.onedroid.ai/troubleshooting> — the failure table, including the two `401`s
-
-The one thing to carry out of this page: **a green run is not evidence.** Every check here
-tells you what it could not see, and the parts that stay manual stay visible on purpose.
+| "Repository not found" for a repo you can open in a browser | the wrong `gh` account, not a missing repo |
+| `install.sh` exits `2` and reports every pin missing | the record's `vendor` link is absent. Re-run step 4, which creates it |
+| "`--lock` takes an = sign" | write `--lock=instances/<machine>/loom.lock.json` |
+| validate exits `4` with "OAuth session expired" | the login cannot refresh. **HUMAN:** `claude auth login` on this machine |
+| a tool you connected does not appear | the session started before you connected it. Open a new one |
+| a skill you declared is "unknown" | the session started before the install, or the record has no source for it |
+| every hub call fails and nothing else is wrong | the token variable is not exported in this process |
+| signed in, but there is no hub or the wrong one | a different sign-in method from the one used at sign-up: two accounts, one email |
+| connected, token valid, zero tools | the hub has no upstreams enabled. Only an admin can enable them |
+| `ERR_SCOPE_UNAVAILABLE` | a token sent to a browser-style hub address. See `AUTHENTICATION.md` |
+| `df-mission: command not found` | it installed, but the bin directory is not on `PATH` |

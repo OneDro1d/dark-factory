@@ -180,6 +180,26 @@ cp "$SELF/dot-gitignore.template" "$TARGET/.gitignore" 2>/dev/null || true
 cp "$SELF/VALIDATE-INSTALL.md" "$TARGET/VALIDATE-INSTALL.md" 2>/dev/null \
   || say "WARN  could not copy VALIDATE-INSTALL.md — this instance ships with no way to prove it works"
 
+# The runbook, and the kit's own page. ⛔ ADDED 2026-09-11: until then bootstrap copied NEITHER
+# START-HERE.md nor AUTHENTICATION.md, so every kit it made pointed its reader back at this public
+# repo for the steps that make the kit theirs. A person tells their agent "read START-HERE.md and
+# execute it" in the KIT, so the file has to be in the kit. It is the same file in every kit, byte
+# for byte, which is why nothing kit-specific lives in it: that goes in KIT.md, rendered here.
+for f in START-HERE.md AUTHENTICATION.md; do
+  cp "$SELF/$f" "$TARGET/$f" 2>/dev/null || say "WARN  could not copy $f — the instance ships without it"
+done
+KIT_LABEL="no kit — an empty skill list"
+# shellcheck disable=SC2086
+[ -n "${KITS// /}" ] && KIT_LABEL="$(printf 'kits/%s ' $KITS | sed 's/ $//; s/ / + /g')"
+if [ -f "$SELF/KIT.md.template" ]; then
+  # sed is safe for the same reason as CLAUDE.md below: the name is validated, and every kit
+  # name has already been resolved to a directory under kits/.
+  sed -e "s|__INSTANCE_NAME__|$NAME|g" -e "s|__KITS__|$KIT_LABEL|g" "$SELF/KIT.md.template" > "$TARGET/KIT.md" \
+    || say "WARN  could not render KIT.md"
+else
+  say "WARN  KIT.md.template missing — the instance ships with no page saying what it is for"
+fi
+
 # The instance's project instructions. Rendered, not copied: it carries the instance name,
 # and it ships as a .template so that a file named CLAUDE.md never sits in the kit itself --
 # a harness would auto-load it into sessions ABOUT the kit and inject instructions meant for
@@ -284,26 +304,21 @@ say ""
 say "  lockfile   loom.lock.json      (pinned: ${T1_COMMIT:0:8})"
 say "  pin source $T1_SOURCE"
 say ""
-say "NEXT"
-say "  read starter-kit/instance/START-HERE.md — the ten-minute path, with the checkpoints"
-say "  cd $TARGET"
-if [ -n "$KIT_JSON" ]; then
-  say "  \$EDITOR loom.lock.json     # set codeRoot / codeLayout. Skills and hooks are already"
-  say "                             # filled in from the kit(s) you selected -- prune, do not retype."
-else
-  say "  \$EDITOR loom.lock.json     # set codeRoot / codeLayout, then list the skills and hooks you want"
-  say "                             # or re-run with --kit <name> to fill them from a curated bundle"
-  say "                             # (bash bootstrap.sh --kit list)"
-fi
-say "  bash install.sh"
-say "  df-mission start $EXAMPLE_ID --profile default --max-iter 5 --max-usd 5"
-say "                             # the worked example: proves the loop, writes only inside"
-say "                             # .df/missions/$EXAMPLE_ID/, needs no hub and no network"
+say "NEXT — open Claude Code in $TARGET and tell it:"
 say ""
-say "  THEN VALIDATE IT — the install is not finished until something has RUN:"
-say "    paste VALIDATE-INSTALL.md into a fresh session on this machine"
-say "    ⚠️ every check that looks for a FILE already passes on a broken install; that document"
-say "       exercises the machinery instead."
+say "    Read START-HERE.md and execute it."
+say ""
+say "  It makes the directory a private repo of yours (step 2A), adds this machine's record under"
+say "  instances/ (step 3), installs it (step 4), walks you through the sign-ins (step 5) and"
+say "  validates the result (step 6). Fill in KIT.md as you go: it is what the next person reads."
+if [ -z "$KIT_JSON" ]; then
+  say ""
+  say "  ⚠️ no --kit: the skill list is EMPTY. Re-run with --kit <name> (bash bootstrap.sh --kit list),"
+  say "     or list the skills you want in loom.lock.json before installing."
+fi
+say ""
+say "  Once installed, the worked example proves the loop with no hub and no network:"
+say "    df-mission start $EXAMPLE_ID --profile default --max-iter 5 --max-usd 5"
 say ""
 say "NOT DONE BY THIS SCRIPT, and not doable by any script:"
 say "  - git hosting login"

@@ -97,13 +97,46 @@ else
   bad "bootstrap points the reader at START-HERE.md" "not mentioned in its output"
 fi
 
+printf '\n== the kit carries its own runbook ==\n'
+
+# ⛔ ADDED 2026-09-11. Until then bootstrap copied neither START-HERE.md nor AUTHENTICATION.md,
+# so "tell your Claude Code to read START-HERE.md and execute it" had nothing to read inside the
+# kit it made. Byte-identical, because the runbook is the same file in every kit: a kit-local
+# edit is how two kits' instructions start to disagree.
+for f in START-HERE.md AUTHENTICATION.md; do
+  if cmp -s "$KIT/$f" "$TMP/$NAME/$f"; then ok "the kit carries $f, byte-identical to the source"
+  else bad "the kit carries $f, byte-identical to the source" "missing or different at $TMP/$NAME/$f"; fi
+done
+
+KITMD="$TMP/$NAME/KIT.md"
+if [ -s "$KITMD" ] && head -1 "$KITMD" | grep -q "$NAME"; then ok "KIT.md is rendered and names this kit"
+else bad "KIT.md is rendered and names this kit" "first line: $(head -1 "$KITMD" 2>/dev/null)"; fi
+if grep -q '__KITS__\|__INSTANCE_NAME__' "$KITMD" 2>/dev/null; then
+  bad "KIT.md keeps no render placeholder" "$(grep -n '__KITS__\|__INSTANCE_NAME__' "$KITMD")"
+else ok "KIT.md keeps no render placeholder"; fi
+if grep -q 'no kit' "$KITMD" 2>/dev/null; then ok "KIT.md says no kit was chosen, when none was"
+else bad "KIT.md says no kit was chosen, when none was" "$(grep -n 'Built from' "$KITMD" 2>/dev/null)"; fi
+if [ -e "$TMP/$NAME/KIT.md.template" ]; then bad "the KIT.md template itself is not copied"
+else ok "the KIT.md template itself is not copied"; fi
+
+OUTK="$TMP/outk.txt"
+if bash "$KIT/bootstrap.sh" "$NAME-dev" "$TMP/$NAME-dev" --kit dev >"$OUTK" 2>&1; then
+  if grep -q 'kits/dev' "$TMP/$NAME-dev/KIT.md" 2>/dev/null; then ok "KIT.md names the kit it was built from"
+  else bad "KIT.md names the kit it was built from" "$(grep -n 'Built from' "$TMP/$NAME-dev/KIT.md" 2>/dev/null)"; fi
+else
+  bad "bootstrap.sh --kit dev exits 0" "$(tail -3 "$OUTK")"
+fi
+
+if grep -q 'Read START-HERE.md and execute it' "$OUT"; then ok "bootstrap's next step is the one sentence"
+else bad "bootstrap's next step is the one sentence" "not in its output"; fi
+
 printf '\n== and says so when it cannot ==\n'
 
-# Copy the kit, remove the template, and prove the WARN branch fires. Done on a copy so a
+# Copy the kit, remove the templates, and prove the WARN branch fires. Done on a copy so a
 # failing test can never damage the real kit.
 SBX="$TMP/sandbox"
 cp -R "$KIT" "$SBX" 2>/dev/null
-rm -f "$SBX/CLAUDE.md.template"
+rm -f "$SBX/CLAUDE.md.template" "$SBX/KIT.md.template"
 OUT2="$TMP/out2.txt"
 bash "$SBX/bootstrap.sh" "$NAME" "$TMP/nodocs" >"$OUT2" 2>&1
 
@@ -111,6 +144,11 @@ if grep -q 'WARN.*CLAUDE.md.template missing' "$OUT2"; then
   ok "a missing template is reported, not skipped"
 else
   bad "a missing template is reported, not skipped" "$(tail -3 "$OUT2")"
+fi
+if grep -q 'WARN.*KIT.md.template missing' "$OUT2"; then
+  ok "a missing KIT.md template is reported, not skipped"
+else
+  bad "a missing KIT.md template is reported, not skipped" "$(tail -3 "$OUT2")"
 fi
 
 if [ -e "$TMP/nodocs/CLAUDE.md" ]; then

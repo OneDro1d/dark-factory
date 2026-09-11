@@ -1,0 +1,39 @@
+# KIT — __INSTANCE_NAME__
+
+<!--
+  Rendered by bootstrap.sh. This file is the ONE place for what is specific to this kit.
+  START-HERE.md is the same in every kit and sends the reader here at step 2, so anything a
+  newcomer needs that is not in START-HERE.md belongs in a section below. Fill every section:
+  a section still holding a placeholder is a question the next person has to ask you.
+-->
+
+**Built from:** __KITS__. The resolved list is `install.$kitResolution` in `loom.lock.json`.
+
+## Who this kit is for
+
+<The kind of work, and the reader. One or two lines.>
+
+## What it connects to
+
+| | |
+|---|---|
+| organisation or estate | <none, or its name> |
+| hub or MCP connector | <none, or which, and how it is reached> |
+| tracker | <none, or which board> |
+| organisation layer (Tier 2) | <none, or its repo> |
+
+## Before you install: access you need
+
+<"Nothing beyond a GitHub account and a Claude Code login", or the list. If the list is long,
+keep it in ACCESS-CHECKLIST.md and name that file here.>
+
+## What cannot be undone here
+
+<The actions that are irreversible or reach people outside your team — deploys, merges to a
+protected branch, messages, spending — and who approves each. "None" is a valid answer, and it
+should be written down rather than left blank.>
+
+## Machines
+
+Each machine has its own record under `instances/<machine>/`. One line each: the machine, and
+what it is for.
