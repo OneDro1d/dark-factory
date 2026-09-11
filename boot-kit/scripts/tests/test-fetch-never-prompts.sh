@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # test-fetch-never-prompts.sh — lock-verify L6 and rehydrate's re-fetch never wait at a prompt.
 #
-# ⛔ WHAT IT PROTECTS. Measured 2026-09-11 on a kit's first install: lock-verify L6 ran a plain
-# `git fetch` of a PRIVATE layer on a machine where gh was logged in but git had no credential
-# helper (`gh auth setup-git` never run, and the runbook never asks for it). git did not fail.
-# It prompted for a password on the terminal, stderr went to /dev/null, and the install sat in
-# L6 for ten minutes printing nothing. rehydrate's re-fetch of an existing vendor dir is the
-# same call.
+# ⛔ WHAT IT PROTECTS. lock-verify L6 ran a plain `git fetch` of a PRIVATE layer. On a machine
+# where gh is logged in but git has no credential helper (`gh auth setup-git` never run, and the
+# runbook never asks for it), that fetch cannot authenticate: L6 reports the pin UNVERIFIED, or
+# waits at a password prompt if there is a terminal. rehydrate's re-fetch of an existing vendor
+# dir is the same call.
+# ⚠️ CORRECTED 2026-09-11: a ten-minute hang first cited here as that prompt was a test harness
+# with HOME moved, where macOS's built-in `osxkeychain` helper blocked. Not a user scenario.
 #
 # Both fetches must now run with GIT_TERMINAL_PROMPT=0 (fail at once, never wait) and, where
 # gh is installed, offer gh's login as a credential helper. A git shim first on PATH records
