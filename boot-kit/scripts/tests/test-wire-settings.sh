@@ -297,6 +297,24 @@ BODY_K6="$(cat "$K6" 2>/dev/null)"
 contains "DN6: the seeded file carries the first entry"  "claude.ai Estate B"  "$BODY_K6"
 contains "DN6: the seeded file carries the second entry" "https://hub-c/mcp"  "$BODY_K6"
 
+echo "=== L: an interpreter-prefixed command is wired as the FILE it runs ==="
+# ⛔ Measured 2026-09-11 on the first real install of a starter-shape kit: the starter template's
+# own `bash "$HOME/.claude/hooks/df-instance-start.sh"` read as a hook called `bash`, so it was
+# skipped as undeclared on every install and lock-verify L9 found the hook inert.
+LT="$T/tmpl-interp.json"
+cat > "$LT" <<'JSON'
+{ "hooks": { "SessionStart": [ { "hooks": [
+  { "type": "command", "command": "bash \"$HOME/.claude/hooks/boot.sh\"", "timeout": 10 } ] } ] } }
+JSON
+LLOCK="$T/lock-interp.json"
+cat > "$LLOCK" <<'JSON'
+{ "instance": "t-interp", "install": { "hooks": ["boot.sh"] } }
+JSON
+LL="$T/l.json"
+O="$(python3 "$W8" --template "$LT" --live "$LL" --home "$H" --lock "$LLOCK" 2>&1)"
+contains "L: the declared hook behind bash is wired" "boot.sh"   "$(cat "$LL" 2>/dev/null)"
+absent   "L: and it is not skipped as undeclared"     "NOT wired" "$O"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"

@@ -684,7 +684,15 @@ else
     # first whitespace-delimited token: chains carry arguments, paths do not.
     p="${c//\$\{HOME\}/$HOME}"
     p="${p//\$HOME/$HOME}"
+    # `bash "<path>"`, `python3 <path>`: the file is the interpreter's FIRST ARGUMENT. Taking
+    # the first word read the starter template's own `bash "$HOME/.claude/hooks/df-instance-start.sh"`
+    # as a missing file called `bash` -- the same misreading wire-settings.py made, one tool over.
+    case "${p%% *}" in
+      bash|sh|zsh|python|python3|node|*/bash|*/sh|*/zsh|*/python|*/python3|*/node) p="${p#* }" ;;
+    esac
+    p="${p#\"}"
     p="${p%% *}"
+    p="${p%\"}"
     [ -e "$p" ] || L9GHOST="$L9GHOST $p"$'\n'
   done <<< "$L9CMDS"
 

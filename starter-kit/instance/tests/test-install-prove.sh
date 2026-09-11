@@ -56,7 +56,10 @@ GITC=(-c user.email=test@example.com -c user.name=test)
 # something to discover. Plus a fresh instance root with the given `install` block.
 mk_instance() {
   local c="$1" ins="$2" d="$WORK/$1"
-  mkdir -p "$d/inst" "$d/t1/boot-kit/scripts/tests"
+  # The trivial suite lives in the KIT (boot-kit/tests/), where a kit's own suites live. It used to
+  # live in the engine's tests/, which install.sh no longer ships into a kit (2026-09-11): those are
+  # Tier 1's suites, and run inside a kit they failed on layout alone.
+  mkdir -p "$d/inst/boot-kit/tests" "$d/t1/boot-kit/scripts"
   cp "$PROVE_SRC" "$d/t1/boot-kit/scripts/prove.sh"
   cp "$IDENTIFY_SRC" "$d/t1/boot-kit/scripts/identify.sh"
   cp "$RUNTESTS_SRC" "$d/t1/boot-kit/scripts/run-tests.sh"
@@ -70,7 +73,7 @@ EOF
 #!/usr/bin/env python3
 print("preflight now  ok=1 drift=0 unknown=0")
 EOF
-  cat > "$d/t1/boot-kit/scripts/tests/test-fixture-noop.sh" <<'EOF'
+  cat > "$d/inst/boot-kit/tests/test-fixture-noop.sh" <<'EOF'
 #!/usr/bin/env bash
 echo "fixture noop suite ran"
 echo "ASSERTIONS: 1"
@@ -81,7 +84,7 @@ EOF
   printf '#!/usr/bin/env bash\necho "fixture validate.sh — never run by the suite"\n' \
     > "$d/t1/boot-kit/scripts/validate.sh"
   chmod +x "$d/t1/boot-kit/scripts"/*.sh "$d/t1/boot-kit/scripts"/*.py \
-           "$d/t1/boot-kit/scripts/tests"/*.sh
+           "$d/inst/boot-kit/tests"/*.sh
   git -C "$d/t1" init -q
   git "${GITC[@]}" -C "$d/t1" add -A
   git "${GITC[@]}" -C "$d/t1" commit -q -m fixture
