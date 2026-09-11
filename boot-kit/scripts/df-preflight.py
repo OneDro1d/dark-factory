@@ -1117,7 +1117,16 @@ def probe_mcp(profile=None, scope=None, notes=None, lock=None):
 
     # ---- no declaration: the ORIGINAL name-prefix rule, now over the union -------------
     if not servers:
-        out.append(finding("mcp", "mcpServers", "drift", "no MCP servers configured in %s" % both_paths))
+        # ⛔ UNKNOWN, NOT DRIFT, when nothing declares a hub. Measured 2026-09-11 on the first real
+        # install of a starter-shape kit: no kit record declares an MCP profile, and the runbook
+        # connects a hub at step 5 -- AFTER the install's own proof runs. Drift here failed PROVE
+        # P4 on every first install, over a machine exactly as its record describes it. Same rule
+        # as the Azure probe: when the record declares no need, an absent capability is
+        # unconfirmed, not wrong. A DECLARED `hubs` profile with no servers stays drift (above).
+        out.append(finding("mcp", "mcpServers", "unknown",
+                           "no MCP servers configured in %s. UNKNOWN, not drift: this record "
+                           "declares no MCP profile, so nothing says this machine needs a hub. "
+                           "Connect one (runbook step 5) if a mission needs it." % both_paths))
     else:
         # A DENOMINATOR THAT SHRINKS IN SILENCE IS A LIE THE REPORT TELLS BY OMISSION.
         # `--profile onedroid` skips every hub whose name lacks that prefix. That filtering
