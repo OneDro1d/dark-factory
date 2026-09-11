@@ -18,6 +18,8 @@
 #   bash rehydrate.sh                 fetch at pins, then install
 #   bash rehydrate.sh --offline       install from existing vendor/ only
 #   bash rehydrate.sh --dry-run       print the plan, change nothing
+#   bash rehydrate.sh --lock=instances/<machine>/loom.lock.json
+#                                     install THAT machine's record (LOOM_LOCK works too)
 #
 # NOT handled (documented rather than silently skipped):
 #   - claude.ai-hosted MCP connectors (e.g. the ESO hub) are ACCOUNT-level, not in
@@ -41,12 +43,26 @@
 #     those and never applies it.
 set -uo pipefail
 
-LOCK="loom.lock.json"
+# ⛔ WHICH RECORD. A kit holds one record per machine -- the root loom.lock.json and
+# instances/<machine>/loom.lock.json -- and until 2026-09-11 this line was the literal
+# "loom.lock.json" and nothing else. An install that named a machine's record therefore had
+# THAT record verified and the ROOT record's skills and hooks installed: two records in one
+# install, each step reporting success about its own. The record is LOOM_LOCK, else --lock=,
+# else the root file -- a path relative to the current directory, which is the kit root and
+# stays ROOT: vendor/ and `local:` sources resolve against the REPO, never the record's folder.
+LOCK="${LOOM_LOCK:-loom.lock.json}"
 OFFLINE=0; DRY=0
 for a in "$@"; do
   case "$a" in
     --offline) OFFLINE=1 ;;
     --dry-run) DRY=1 ;;
+    --lock=*) LOCK="${a#--lock=}"
+              [ -n "$LOCK" ] || { echo "FATAL: --lock= needs a path" >&2; exit 2; } ;;
+    # An unrecognised flag is an ERROR, not a no-op: a silently ignored `--lock <space> <path>`
+    # installs the root record and reports success. (It was ignored until 2026-09-11.)
+    *) printf 'FATAL: unknown option: %s\n  valid: --offline --dry-run --lock=<path>\n' "$a" >&2
+       [ "$a" = "--lock" ] && printf '  note:  --lock takes an = sign, not a space\n' >&2
+       exit 2 ;;
   esac
 done
 [ -f "$LOCK" ] || { echo "FATAL: no $LOCK here"; exit 1; }
@@ -460,7 +476,7 @@ else
   # list from ITS OWN record -- instances/<name>/loom.lock.json -- not the root's. --kit-root
   # stays $ROOT so the comparison still sees every record the kit holds, root and instances/*
   # alike (the shape kit_records() and other_estates() already assume).
-  SD_LOCK="${LOOM_LOCK:-$LOCK}"
+  SD_LOCK="$LOCK"   # LOCK already folds LOOM_LOCK and --lock=, in that precedence
   case "$SD_LOCK" in
     /*) : ;;
     *)  SD_LOCK="$ROOT/$SD_LOCK" ;;

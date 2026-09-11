@@ -3,6 +3,22 @@
 A **kit** is a named set of this repo's skills plus the hooks that make them work: the unit
 somebody installs to get a working agent for a particular kind of work.
 
+## Which kit, and how to start
+
+| you do | start from |
+|---|---|
+| write and ship code | `kits/dev`, which brings `kits/method-core` and `kits/agent-ops` with it |
+| work whose output is documents, walkthroughs or intake, not code | `kits/knowledge-worker`, which brings `kits/method-core` |
+| one narrower job | `kits/code-review`, `kits/frontend` or `kits/distributed-systems`, alone or with one of the above |
+
+To start, open Claude Code in a clone of this repo and tell it: **"Read
+`starter-kit/instance/START-HERE.md` and execute it."** It asks which kit, makes your own private
+repo from it, adds a record for the machine you are on, installs and validates. Every later
+machine is a clone of that private repo and the same sentence.
+
+The kits here are generic and public. A team kit — one somebody set up for an organisation and
+shared with you — carries the same `START-HERE.md`, and the same sentence works in it.
+
 ```
 kits/<name>/kit.json     name · description · skills[] · hooks[] · harnesses[] · extends[]
 ```

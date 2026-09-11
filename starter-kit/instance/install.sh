@@ -7,6 +7,8 @@
 #   bash install.sh --offline    install from whatever is already vendored; touch no network
 #   bash install.sh --dry-run    print the plan, change nothing
 #   bash install.sh --no-prove   skip the prove.sh step (lock-verify.sh still runs)
+#   bash install.sh --lock=instances/<machine>/loom.lock.json
+#                                install ONE MACHINE's record (LOOM_LOCK=<path> works too)
 #
 # ORDER, AND WHY IT IS THIS ORDER
 #   0  preconditions        fail here, where the cause is one line, not three steps later
@@ -36,19 +38,35 @@
 # lockfile. Collapsing that into success is how an instance ships half-configured.
 set -uo pipefail
 
-OFFLINE=0; DRY=0; PROVE=1
+OFFLINE=0; DRY=0; PROVE=1; LOCK_ARG=""
 for a in "$@"; do
   case "$a" in
     --offline) OFFLINE=1 ;;
     --dry-run) DRY=1 ;;
     --no-prove) PROVE=0 ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
-    *) printf 'unknown flag: %s\n' "$a" >&2; exit 1 ;;
+    --lock=*) LOCK_ARG="${a#--lock=}"
+              [ -n "$LOCK_ARG" ] || { printf 'FATAL: --lock= needs a path\n' >&2; exit 1; } ;;
+    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
+    *) printf 'unknown flag: %s\n' "$a" >&2
+       [ "$a" = "--lock" ] && printf 'note:  --lock takes an = sign: --lock=instances/<machine>/loom.lock.json\n' >&2
+       exit 1 ;;
   esac
 done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOCK="$ROOT/loom.lock.json"
+# ⛔ ONE REPO, ONE RECORD PER MACHINE. A kit holds the root loom.lock.json plus
+# instances/<machine>/loom.lock.json for every machine it runs on, and this picks which one THIS
+# install is: --lock=<path>, else $LOOM_LOCK, else the root file. Until 2026-09-11 it was the
+# root file and nothing else, so every kit copied from this installer could describe exactly
+# one machine -- the record repos that serve several machines carried their own hand-ported
+# installers to get this, and a fix to either copy reached only that copy. A relative path is
+# relative to the kit root; vendor/ and every source still resolve against the KIT ROOT.
+case "${LOCK_ARG:-${LOOM_LOCK:-}}" in
+  "") LOCK="$ROOT/loom.lock.json" ;;
+  /*) LOCK="${LOCK_ARG:-$LOOM_LOCK}" ;;
+  *)  LOCK="$ROOT/${LOCK_ARG:-$LOOM_LOCK}" ;;
+esac
+LOCK_REL="${LOCK#"$ROOT"/}"
 
 say()  { printf '%s\n' "$1"; }
 step() { printf '\n== %s ==\n' "$1"; }
@@ -57,7 +75,7 @@ act()  { if [ "$DRY" -eq 1 ]; then printf 'would  %s\n' "$1"; else printf '%s\n'
 
 # ---- 0. preconditions --------------------------------------------------------
 step "preconditions"
-[ -f "$LOCK" ] || die "no loom.lock.json in $ROOT — run bootstrap.sh first"
+[ -f "$LOCK" ] || die "no record at $LOCK_REL in $ROOT — run bootstrap.sh first, or mint this machine's record (START-HERE.md step 3)"
 for b in git jq; do
   command -v "$b" >/dev/null 2>&1 || die "$b is required and is not on PATH"
 done
@@ -145,10 +163,10 @@ if [ "$KIND" = "template" ]; then
   say ""
   say "     To make it yours — once, before or after this install:"
   say "       1. put it somewhere YOU own:   a fork, or your own branch of this repo"
-  say "       2. customise loom.lock.json:   codeLayout (where YOUR repos live), lanes,"
+  say "       2. customise $LOCK_REL:   codeLayout (where YOUR repos live), lanes,"
   say "                                      instance.name, and instance.agentName if you"
   say "                                      have named your agent"
-  say "       3. declare the machine:        identify.sh --declare loom.lock.json"
+  say "       3. declare the machine:        identify.sh --declare $LOCK_REL"
   say "       4. flip the marker:            \"instance\": { \"kind\": \"instance\", ... }"
   say "       5. commit and push to YOUR copy — that is what you re-install from"
   say ""
@@ -160,6 +178,22 @@ fi
 
 VENDOR_REL="$(jq -r '.vendorDir // "vendor"' "$LOCK")"
 VENDOR="$ROOT/$VENDOR_REL"
+# A machine's record lives in instances/<machine>/, and lock-verify reads the vendor cache
+# BESIDE the record it is given (lock-verify.sh: "each instance directory carries a committed
+# `vendor` symlink back to the repo-root cache"). Without the link it looks in
+# instances/<machine>/vendor/, finds nothing, and reports every pin missing -- a gate failing in
+# the wrong place, on a machine that is fine. So the link is made here if it is absent; commit it
+# with the record.
+LOCK_DIR="$(cd "$(dirname "$LOCK")" && pwd)"
+if [ "$LOCK_DIR" != "$ROOT" ] && [ ! -e "$LOCK_DIR/$VENDOR_REL" ] && [ ! -L "$LOCK_DIR/$VENDOR_REL" ]; then
+  VLINK_TO="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$VENDOR" "$LOCK_DIR")"
+  if [ "$DRY" -eq 1 ]; then
+    say "would  link ${LOCK_DIR#"$ROOT"/}/$VENDOR_REL -> $VLINK_TO"
+  else
+    ln -s "$VLINK_TO" "$LOCK_DIR/$VENDOR_REL" \
+      && say "linked ${LOCK_DIR#"$ROOT"/}/$VENDOR_REL -> $VLINK_TO  (lock-verify reads vendor/ beside the record; commit this link)"
+  fi
+fi
 T1_NAME="dark-factory"
 T1_URL="$(jq -r --arg n "$T1_NAME" '.upstreams[$n].url // empty' "$LOCK")"
 T1_REPO="$(jq -r --arg n "$T1_NAME" '.upstreams[$n].repo // empty' "$LOCK")"
@@ -385,7 +419,9 @@ elif [ -f "$REHYDRATE" ]; then
   # ONE live directory from either spelling and handed it to the org layer; if this step
   # then fell back to its own default, the two layers of a single install would write to
   # two different homes and each would report success.
-  ( cd "$ROOT" && LOOM_LIVE="$LIVE" bash "$REHYDRATE" $RFLAGS ) || say "WARN  rehydrate reported a problem — read its output above, it names each one"
+  # LOOM_LOCK is passed for the same reason: rehydrate installs whichever record it is handed,
+  # and a machine's record must not be verified while the root record's skills are installed.
+  ( cd "$ROOT" && LOOM_LOCK="$LOCK" LOOM_LIVE="$LIVE" bash "$REHYDRATE" $RFLAGS ) || say "WARN  rehydrate reported a problem — read its output above, it names each one"
 else
   say "WARN  no rehydrate.sh in the pinned engine — skills and hooks were NOT installed"
 fi

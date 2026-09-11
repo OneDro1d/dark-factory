@@ -188,6 +188,41 @@ done
 if grep -q 'DF_HUB_TOKEN' "$DOC"; then ok "names the token by variable, not by value"
 else bad "names the token by variable, not by value"; fi
 
+printf '\n== it is a runbook an agent can execute ==\n'
+
+# ⛔ ADDED 2026-09-11, when the page became the one file every kit carries and the one
+# instruction a person gives: "read START-HERE.md and execute it". The failure each line
+# guards is DELETION -- a step that silently drops out of the runbook drops out of every kit.
+
+if head -5 "$DOC" | grep -q 'Read START-HERE.md and execute it'; then
+  ok "the instruction to the human is in the first lines"
+else bad "the instruction to the human is in the first lines" "$(head -3 "$DOC")"; fi
+
+for want in 'gh repo create' '--private' 'kit-upstream' 'instances/' 'install.sh --lock=' \
+            'identify.sh --declare' 'validate.sh' 'KIT.md' '**HUMAN'; do
+  if grep -qF -- "$want" "$DOC"; then ok "names: $want"
+  else bad "names: $want" "the runbook lost a step every kit depends on"; fi
+done
+
+# No commit in the prose. The pins live in the records; a commit written here is stale the first
+# time a kit updates, and this file is copied into every kit. Measured 2026-09-11: three stale
+# pins survived in three kits' prose after every record was repinned. Shaped like a commit means
+# 7-40 hex characters holding at least one digit AND one letter, so ordinary words do not match.
+shas() {
+  python3 - "$1" <<'PYEOF'
+import io,re,sys
+t=io.open(sys.argv[1],encoding='utf-8').read()
+hits=[w for w in re.findall(r'\b[0-9a-f]{7,40}\b',t) if re.search(r'[0-9]',w) and re.search(r'[a-f]',w)]
+print(' '.join(sorted(set(hits))))
+PYEOF
+}
+BADS="$(shas "$DOC")"
+if [ -z "$BADS" ]; then ok "no commit is written into the runbook"
+else bad "no commit is written into the runbook" "$BADS"; fi
+cp "$DOC" "$TMP/sha.md"; printf '\nThe method is pinned at 7bd6c4a today.\n' >> "$TMP/sha.md"
+if [ -n "$(shas "$TMP/sha.md")" ]; then ok "the commit check fires on a pinned commit"
+else bad "the commit check fires on a pinned commit" "passed a short commit in prose"; fi
+
 printf '\n== every table row is still a row ==\n'
 
 # Written because this edit made exactly this mistake: a table cell long enough to wrap got

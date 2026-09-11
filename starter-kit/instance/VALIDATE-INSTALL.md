@@ -1,7 +1,9 @@
 # VALIDATE — prove the kit actually works, after installing it
 
 **Paste the block below into a fresh agent session on the machine you just installed.**
-It is the last step of the install, and it ships with every kit.
+It is the by-hand form of START-HERE.md step 6: `validate.sh` runs this same check in a fresh
+session and commits the report itself. `bootstrap.sh` copies this file into every kit it makes;
+a kit made any other way carries it inside `vendor/dark-factory/starter-kit/instance/`.
 
 ⚠️ **WHY THIS EXISTS, AND WHY IT IS NOT A CHECKLIST OF FILES.** This method's recurring defect is
 a component that is DECLARED, INSTALLED, and wired to nothing — every check that looks for a
