@@ -8,13 +8,17 @@ somebody installs to get a working agent for a particular kind of work.
 | you do | start from |
 |---|---|
 | write and ship code | `kits/dev`, which brings `kits/method-core` and `kits/agent-ops` with it |
-| work whose output is documents, walkthroughs or intake, not code | `kits/knowledge-worker`, which brings `kits/method-core` |
+| work whose output is documents, walkthroughs or intake, not code | `kits/knowledge-worker`, which brings `kits/method-core` and `kits/agent-ops` |
 | one narrower job | `kits/code-review`, `kits/frontend` or `kits/distributed-systems`, alone or with one of the above |
 
 To start, open Claude Code in a clone of this repo and tell it: **"Read
 `starter-kit/instance/START-HERE.md` and execute it."** It asks which kit, makes your own private
 repo from it, adds a record for the machine you are on, installs and validates. Every later
 machine is a clone of that private repo and the same sentence.
+
+Then run a mission. `/scope-init` makes a notepad for the objective; in it, `/dark-factory-build`
+with one sentence of what done looks like starts the loop, and `operator-todo.md` at the notepad
+root is the live page of what only a human can do. The kit's own `KIT.md` has the four steps.
 
 The kits here are generic and public. A team kit — one somebody set up for an organisation and
 shared with you — carries the same `START-HERE.md`, and the same sentence works in it.

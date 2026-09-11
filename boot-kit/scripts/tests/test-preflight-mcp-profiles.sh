@@ -297,6 +297,20 @@ case "$d_all" in
   *) ok "MJ5: no 'no MCP servers configured' finding" ;;
 esac
 
+echo "=== MN1: NO profile declared and NO servers anywhere -> UNKNOWN, not drift ==="
+# ⛔ Measured 2026-09-11 on the first real install of a starter-shape kit: no kit record declares
+# an MCP profile, and the runbook connects a hub at step 5, after the install's own proof. As
+# drift, this finding failed PROVE P4 on every first install over a machine exactly as its record
+# describes it.
+report_mcp2 '{}' "a" '{mcpServers:{}}' ''
+v="$(jq -r '.findings[]|select(.check=="mcp" and .target=="mcpServers")|.verdict' "$TMP/pf.json")"
+[ "$v" = "unknown" ] && ok "MN1: no declaration + no servers is unknown" || bad "MN1: no declaration + no servers is unknown" "verdict=[$v]"
+
+echo "=== MN2: a DECLARED hubs profile with no servers anywhere stays DRIFT (control) ==="
+report_mcp2 '{mcp:{profiles:{a:{kind:"hubs", servers:["hub-a"]}}}}' "a" '{mcpServers:{}}' ''
+v="$(jq -r '.findings[]|select(.check=="mcp" and .target=="mcpServers")|.verdict' "$TMP/pf.json")"
+[ "$v" = "drift" ] && ok "MN2: a declared hub with no servers is drift" || bad "MN2: a declared hub with no servers is drift" "verdict=[$v]"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"

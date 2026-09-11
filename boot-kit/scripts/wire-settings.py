@@ -66,6 +66,7 @@ import argparse
 import datetime
 import json
 import os
+import shlex
 import shutil
 import sys
 
@@ -91,7 +92,21 @@ def hook_path(command):
     """
     home = os.environ.get("HOME", "")
     c = command.replace("${HOME}", home).replace("$HOME", home)
-    return c.split()[0] if c.split() else ""
+    try:
+        parts = shlex.split(c)
+    except ValueError:
+        parts = c.split()
+    # ⛔ `bash "<path>"` / `python3 <path>`: the FILE is the interpreter's first argument. Taking
+    # the first word made the starter template's own df-instance-start.sh entry read as a hook
+    # called `bash`, which no record declares -- so it was skipped on every install and
+    # lock-verify L9 reported the hook inert. Measured 2026-09-11 on the first real install of a
+    # starter-shape kit.
+    if len(parts) > 1 and os.path.basename(parts[0]) in INTERPRETERS:
+        return parts[1]
+    return parts[0] if parts else ""
+
+
+INTERPRETERS = {"bash", "sh", "zsh", "python", "python3", "node"}
 
 
 def count_hooks(chains):

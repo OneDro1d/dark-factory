@@ -110,8 +110,12 @@ TPL="$SCRIPTS/../../starter-kit/instance/boot-kit/settings.template.json"
 if [ -f "$TPL" ]; then
   eq "E1 template uses the same matcher-group nesting" \
      "$(jq -r '.hooks.SessionStart[0].hooks[0].type' "$TPL" 2>/dev/null)" "command"
-  eq "E2 template key is PascalCase too" \
-     "$(jq -r '.hooks | keys[]' "$TPL" 2>/dev/null)" "SessionStart"
+  # Every event key PascalCase, SessionStart among them. (The template carried one key until
+  # 2026-09-11, when it began wiring every hook the generic kits declare.)
+  eq "E2 template keys are PascalCase too" \
+     "$(jq -r '[.hooks | keys[] | select(test("^[A-Z][A-Za-z]+$") | not)] | length' "$TPL" 2>/dev/null)" "0"
+  eq "E2b the template still wires SessionStart" \
+     "$(jq -r '.hooks | has("SessionStart")' "$TPL" 2>/dev/null)" "true"
 else
   bad "E1 settings.template.json is present" "not found at $TPL"
 fi

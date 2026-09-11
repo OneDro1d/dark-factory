@@ -281,6 +281,16 @@ if [ "$DRY" -eq 0 ]; then
   mkdir -p "$ENGINE_DST"
   cp -R "$ENGINE_SRC/." "$ENGINE_DST/" || die "could not copy the engine"
   rm -rf "$ENGINE_DST/__pycache__"
+  # ⛔ THE ENGINE'S OWN TEST SUITES ARE NOT THIS KIT'S. boot-kit/scripts/tests/ tests Tier 1 in
+  # Tier 1's layout (starter-kit/, kits/, skills/), and the Tier-1 runner copied beside them
+  # discovers every test-*.sh under the kit root. So prove.sh P5 ran Tier 1's suites inside a
+  # kit and failed 22 of 65 on layout alone -- measured 2026-09-11 on the first real install of
+  # a starter-shape kit; every earlier check was a dry run. A kit runs ITS OWN suites
+  # (boot-kit/tests/) with the instance runner, which this copy used to overwrite.
+  rm -rf "$ENGINE_DST/tests"
+  if [ -f "$T1/starter-kit/instance/boot-kit/scripts/run-tests.sh" ]; then
+    cp "$T1/starter-kit/instance/boot-kit/scripts/run-tests.sh" "$ENGINE_DST/run-tests.sh"
+  fi
   # Never ship the maintainer's own gate config into an instance: it is gitignored
   # upstream precisely because it is not generic, and a copied one silently answers a
   # question it was never asked about this instance.

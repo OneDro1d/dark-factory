@@ -42,7 +42,7 @@ nobody looks, because the notepad reports success either way.
   `<group>-<slug>` (kebab-case slug of the objective).
 - Derive the **group = prefix before the first hyphen**. This is the memory `wing` and
   the org-routing key. Confirm it with the operator before proceeding.
-- Read `../../plugin/notepad-template/org-routing.example.json` (or the operator's own
+- Read `../agent-notepad/plugin/notepad-template/org-routing.example.json` (or the operator's own
   `org-routing.json` if present) to map prefix → GitHub org. If the prefix isn't in the
   map, ask which org (or fall back to `default_org`) — do not guess silently.
 
@@ -184,7 +184,7 @@ intact (append a short "refreshed <date>" note at most).
 
 ### 8. Lay down the notepad template
 
-Copy any missing scaffold from `../../plugin/notepad-template/` into the notepad:
+Copy any missing scaffold from `../agent-notepad/plugin/notepad-template/` into the notepad:
 `CLAUDE.md` (orientation), `DIGEST.md`, `sessions/index.json`, `handoffs/`,
 and `.claude/settings.json` (which arms the PreToolUse commit and push gates).
 ⚠️ **`DIGEST.md` must NOT be gitignored, and the template no longer ignores it.** That rule

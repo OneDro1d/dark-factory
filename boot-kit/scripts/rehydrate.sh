@@ -406,6 +406,11 @@ while read -r h; do
   fi
   act "  copy $h <- $src"
   if [ "$DRY" -eq 0 ]; then
+    # A declared name may carry a subdirectory: the agent-notepad suite installs as
+    # `agent-notepad/hooks/stop.sh` and `agent-notepad/lib/notepad.sh`, and settings.json names
+    # it at that path. Without the parent the redirect fails, the hook is reported copied, and
+    # L9 then finds it wired and missing. A hand-written Tier-3 installer had already carried this fix.
+    mkdir -p "$(dirname "$LIVE/hooks/$h")"
     printf '%s\n' "$rendered" > "$LIVE/hooks/$h"
     chmod +x "$LIVE/hooks/$h"
   fi

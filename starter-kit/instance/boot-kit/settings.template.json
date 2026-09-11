@@ -1,11 +1,13 @@
 {
-  "$comment": "HARNESS SETTINGS TEMPLATE -- MERGE THIS, DO NOT COPY IT OVER YOUR OWN. Claude Code reads ~/.claude/settings.json (and a per-project .claude/settings.json). Both are shared with everything else you run, so replacing one wholesale silently removes other tools' hooks and permissions, and the loss shows up later as behaviour that used to happen and now does not. Merge the `hooks.SessionStart` ARRAY ENTRY below into whatever array is already there.",
+  "$comment": "HARNESS SETTINGS TEMPLATE -- MERGE THIS, DO NOT COPY IT OVER YOUR OWN. Claude Code reads ~/.claude/settings.json (and a per-project .claude/settings.json). Both are shared with everything else you run, so replacing one wholesale silently removes other tools' hooks and permissions, and the loss shows up later as behaviour that used to happen and now does not. The installer merges these entries for you (wire-settings.py): it adds only the hooks THIS machine's record declares, backs the file up first, and never removes or reorders anything.",
 
-  "$path": "The command below points at ~/.claude/hooks/, which is where the installer puts hooks -- NOT at the file inside this kit. Hooks are COPIED on install, never symlinked, because per-machine substitution happens during that copy. Two consequences worth holding: editing the kit's copy changes nothing until you re-run install.sh, and a change only takes effect in a NEW session, because hooks are read once at session start.",
+  "$path": "The commands below point at ~/.claude/hooks/, which is where the installer puts hooks -- NOT at the files inside this kit. Hooks are COPIED on install, never symlinked, because per-machine substitution happens during that copy. Two consequences worth holding: editing the kit's copy changes nothing until you re-run install.sh, and a change only takes effect in a NEW session, because hooks are read once at session start.",
 
   "$verifyFirst": "Before registering any hook, run it by hand and confirm it prints parseable JSON -- a hook that errors or prints prose is discarded silently, so a broken one is indistinguishable from one that had nothing to say:  printf '{\"cwd\":\"'\"$PWD\"'\"}' | bash ~/.claude/hooks/df-instance-start.sh | jq .",
 
   "$timeout": "The timeout is a floor on every session start. Keep hooks to file reads; anything that can block on a network or a lock belongs in a command you run, not in the path every session waits on.",
+
+  "$which": "One entry per hook any kit in kits/ declares, in the event and matcher its own header names. ADDED 2026-09-11: until then this template wired df-instance-start.sh alone, while kits/method-core and kits/agent-ops declared five more hooks and the notepad suite existed in no kit at all -- so a kit bootstrapped with --kit dev declared hooks nothing wired, and lock-verify L9 reported them inert. The agent-notepad entries use the nested names the suite is installed at (agent-notepad/hooks/...); its commit and push gates are wired per notepad, not here.",
 
   "hooks": {
     "SessionStart": [
@@ -15,6 +17,94 @@
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/df-instance-start.sh\"",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/orchestrator-autonomy-reminder.py"
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/agent-notepad/hooks/session-start.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/agent-notepad/hooks/user-prompt.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/check-compound-bash.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/df-dispatch-subagents-reminder.py",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/df-stage-gate.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/agent-notepad/hooks/pre-compact.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/agent-notepad/hooks/stop.sh"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/context-budget.py",
+            "timeout": 15
           }
         ]
       }

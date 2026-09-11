@@ -50,6 +50,11 @@ echo "LV_ARGS=[$*]"
 echo "=== RESULT: LOCKED (fixture stub) ==="
 EOF
   chmod +x "$d/t1/boot-kit/scripts"/*.sh
+  # the engine's OWN suites and runner, and the instance runner a kit must end up with instead
+  mkdir -p "$d/t1/boot-kit/scripts/tests" "$d/t1/starter-kit/instance/boot-kit/scripts"
+  printf '#!/bin/sh\nexit 0\n' > "$d/t1/boot-kit/scripts/tests/test-tier1-only.sh"
+  printf '#!/bin/sh\n# TIER-1 RUNNER\n' > "$d/t1/boot-kit/scripts/run-tests.sh"
+  printf '#!/bin/sh\n# INSTANCE RUNNER\n' > "$d/t1/starter-kit/instance/boot-kit/scripts/run-tests.sh"
   git -C "$d/t1" init -q
   git "${GITC[@]}" -C "$d/t1" add -A
   git "${GITC[@]}" -C "$d/t1" commit -q -m fixture
@@ -115,6 +120,15 @@ echo "=== I7: the flag wins over the environment ==="
 mk i7
 OUT7="$(run i7 LOOM_LOCK=loom.lock.json -- --lock=instances/m/loom.lock.json)"
 contains "I7 --lock= overrides LOOM_LOCK" "/inst/instances/m/loom.lock.json]" "$(printf '%s' "$OUT7" | grep 'RH_LOCK=')"
+
+echo "=== I8: the engine copy carries no Tier-1 suites, and keeps the kit's own runner ==="
+# ⛔ Measured 2026-09-11 on the first real install of a starter-shape kit: the engine copy shipped
+# Tier 1's boot-kit/scripts/tests/ and Tier 1's runner into the kit, so prove.sh P5 ran 65 Tier-1
+# suites inside a kit and failed 22 on layout alone.
+if [ -e "$WORK/i1/inst/boot-kit/scripts/tests" ]; then
+  bad "I8 no boot-kit/scripts/tests/ in the kit" "$(ls "$WORK/i1/inst/boot-kit/scripts/tests" 2>&1 | tr '\n' ' ')"
+else ok "I8 no boot-kit/scripts/tests/ in the kit"; fi
+contains "I8 the kit's runner is the INSTANCE runner" "INSTANCE RUNNER" "$(cat "$WORK/i1/inst/boot-kit/scripts/run-tests.sh" 2>/dev/null)"
 
 echo
 printf 'install instance record: %d ok, %d failed\n' "$PASS" "$FAIL"

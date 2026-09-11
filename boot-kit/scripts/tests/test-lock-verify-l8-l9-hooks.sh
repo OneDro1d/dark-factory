@@ -206,6 +206,15 @@ settings d12 settings.json '{"hooks": THIS IS NOT JSON'
 O="$(run d12 L9)"
 contains "D12 unparseable settings is DRIFT" "DRIFT" "$O"
 
+# D13 — an interpreter-prefixed command resolves to the FILE it runs, not to `bash`. The starter
+# template wires `bash "$HOME/.claude/hooks/df-instance-start.sh"`; read by first word, that is a
+# missing file called `bash` (measured 2026-09-11).
+mk d13 '{"skills":[],"skillSources":{},"hooks":["a.sh"],"hookSources":{"a.sh":"upstream:x/hooks/a.sh"}}'
+hook d13 a.sh
+settings d13 settings.json '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash \"'"$WORK"'/d13/live/hooks/a.sh\""}]}]}}'
+O="$(run d13 L9)"
+absent   "D13 bash \"<path>\" is not a ghost named bash" "DRIFT" "$O"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 # The runner reports a suite UNMEASURED (and fails it) without this line, and VACUOUS on 0.
