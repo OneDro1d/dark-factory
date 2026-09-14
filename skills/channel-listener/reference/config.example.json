@@ -1,0 +1,81 @@
+{
+  "_README": [
+    "TEMPLATE - every value below is an EXAMPLE. Do not copy ids into a real config.",
+    "`setup` resolves them live and writes ~/.claude/channel-listener/config.json.",
+    "The example project is a fictional 'Orion' so the shape is clear without implying",
+    "that any particular project is the one to watch.",
+    "Sibling state: state/<source>.json only - last_seen plus the last ~200 seen ids."
+  ],
+  "sources": [
+    {
+      "key": "teams-eng-updates",
+      "kind": "teams",
+      "_hub": "the resolved microsoft_* prefix for THIS install - resolve it, never assume",
+      "workspace_id": "<from microsoft_list_accounts>",
+      "team_id": "<from microsoft_list_teams>",
+      "channel_id": "<from microsoft_list_channels>",
+      "max_results": 3,
+      "_max_results_note": "Teams takes max_results; Slack takes limit. Small on purpose, and you PAGE rather than widen: one measured Slack read of 30 messages returned ~83k characters and errored outright rather than returning less."
+    },
+    {
+      "key": "slack-eng",
+      "kind": "slack",
+      "_hub": "the resolved slack_* prefix for THIS install",
+      "channel": "#engineering",
+      "channel_id": "<from slack_search_channels, WITH channel_types=public_channel,private_channel>",
+      "limit": 5
+    }
+  ],
+  "scope": {
+    "orion": {
+      "_note": "One block per project the operator named. Names as spoken AND as the system writes them. Read by a model judging relevance, not by a regex - so partial and fuzzy entries are useful here, not harmful.",
+      "aliases": [
+        "orion",
+        "orion platform",
+        "the ingest pipeline"
+      ],
+      "repos": [
+        "acme-orion-api",
+        "acme-orion-worker"
+      ],
+      "services": [
+        "orion-gateway",
+        "orion-ingest",
+        "orion-scheduler"
+      ],
+      "infra": [
+        "orion-prod",
+        "orion-staging",
+        "orion-events-queue"
+      ],
+      "tickets": "ORION-\\d+",
+      "people": [
+        "<whose posts about this project matter>"
+      ]
+    }
+  },
+  "identities": {
+    "_note": "Re-read the posting identity IMMEDIATELY BEFORE EACH POST, not once at setup - it drifts. Measured: a Slack session reported one person's id early in a session and a different person's later in the SAME session, with nothing announcing the change. 'self' = ids to treat as our own output.",
+    "teams": {
+      "self": [
+        "<account guid from microsoft_list_accounts>",
+        "<display name>"
+      ]
+    },
+    "slack": {
+      "self": [
+        "<the logged-in user id, read from the tool description this run>"
+      ],
+      "_selffilter": "NEVER put a colleague's id here. This list means 'ignore as my own output', so another person's id silently discards every message they post - for a listener watching their work, the worst failure this skill has."
+    }
+  },
+  "action_policy": "report-only",
+  "_action_policy_values": [
+    "report-only",
+    "act"
+  ],
+  "_action_policy_note": "The boundary is WRITES, not reads. report-only verifies freely (read tickets, logs, repos, cluster) and then reports and proposes; it just never writes. 'act' adds writes. Hard stops bind at both.",
+  "report_max_items": 8,
+  "_report_note": "Beyond this, give counts by topic and list the urgent ones plus the ones with a real action. A 60-item enumeration is unreadable anyway.",
+  "_sort_note": "last_seen keeps each platform's NATIVE value (Teams ISO-8601, Slack epoch string). Those two are not comparable, so when ordering items from both in one report, sort on a normalised UTC timestamp computed for the sort only - and never write it back as last_seen."
+}
