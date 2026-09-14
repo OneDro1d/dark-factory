@@ -293,6 +293,28 @@ this file and execute it. It lands at step 3, because the repo already exists.
   each machine.
 - **Never edit `vendor/`.** It is a cache the installer rebuilds, and edits there are lost.
 
+### Letting an upstream move by itself (`track`)
+
+Editing pins by hand is what the bullets above are, and a fork that never gets round to it never
+gets any of the fixes. So an upstream may name a ref to follow:
+
+```json
+"dark-factory": { "repo": "OneDro1d/dark-factory", "track": "stable", "commit": "<a real sha>" }
+```
+
+On each install the resolved commit is installed **and written back into `commit`**, and the move
+is printed with both shas. The record therefore always names a concrete commit, so `lock-verify`
+still checks the pin and its reachability exactly as before — and the version move becomes a
+commit in your own repo, which makes `git log -p` on the record the history of every move.
+
+- **Point it at a tag someone moves deliberately, not at a branch head.** Tracking `main` puts
+  every mid-merge state on your machines at their next install. A branch is allowed if you want
+  the edge.
+- **`bash install.sh --frozen`** ignores every `track` and installs exactly what the record
+  names. That is how you reproduce a machine, and how you hold one still.
+- **Leave `track` off** where you must be able to say precisely what shipped. It is opt-in per
+  upstream, not a mode the whole kit is in.
+
 ## Working in it
 
 Start sessions in this directory, or in a notepad beside it, not inside a code repo. Working

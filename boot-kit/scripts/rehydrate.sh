@@ -18,6 +18,8 @@
 #   bash rehydrate.sh                 fetch at pins, then install
 #   bash rehydrate.sh --offline       install from existing vendor/ only
 #   bash rehydrate.sh --dry-run       print the plan, change nothing
+#   bash rehydrate.sh --frozen        ignore every `track`; install exactly the recorded pins
+#                                     (LOOM_FROZEN=1 too). Use it to REPRODUCE a machine.
 #   bash rehydrate.sh --lock=instances/<machine>/loom.lock.json
 #                                     install THAT machine's record (LOOM_LOCK works too)
 #
@@ -51,16 +53,17 @@ set -uo pipefail
 # else the root file -- a path relative to the current directory, which is the kit root and
 # stays ROOT: vendor/ and `local:` sources resolve against the REPO, never the record's folder.
 LOCK="${LOOM_LOCK:-loom.lock.json}"
-OFFLINE=0; DRY=0
+OFFLINE=0; DRY=0; FROZEN="${LOOM_FROZEN:-0}"
 for a in "$@"; do
   case "$a" in
     --offline) OFFLINE=1 ;;
     --dry-run) DRY=1 ;;
+    --frozen)  FROZEN=1 ;;
     --lock=*) LOCK="${a#--lock=}"
               [ -n "$LOCK" ] || { echo "FATAL: --lock= needs a path" >&2; exit 2; } ;;
     # An unrecognised flag is an ERROR, not a no-op: a silently ignored `--lock <space> <path>`
     # installs the root record and reports success. (It was ignored until 2026-09-11.)
-    *) printf 'FATAL: unknown option: %s\n  valid: --offline --dry-run --lock=<path>\n' "$a" >&2
+    *) printf 'FATAL: unknown option: %s\n  valid: --offline --dry-run --frozen --lock=<path>\n' "$a" >&2
        [ "$a" = "--lock" ] && printf '  note:  --lock takes an = sign, not a space\n' >&2
        exit 2 ;;
   esac
@@ -160,6 +163,67 @@ while read -r name; do
     act "clone    $name ($repo)"
     if [ "$DRY" -eq 0 ]; then
       gh repo clone "$repo" "$dest" -- --quiet 2>/dev/null || say "  WARN clone failed for $name"
+    fi
+  fi
+
+  # ---- track: follow a moving ref, then RECORD the sha it resolved to ----------
+  # ⛔ THE PIN NEVER STOPS EXISTING. `track` does not make the pin optional; it automates
+  # MOVING it. The record always names a concrete sha, so lock-verify L3 (vendored tree sits
+  # at the pinned commit) and L6 (that commit is reachable from a remote branch) are
+  # untouched — both still compare against a real 40-char value, exactly as before.
+  #
+  # WHY IT WRITES BACK. A record that said only "latest" could not answer the one question
+  # the tier model exists to answer: what is actually on this machine? Resolving and writing
+  # keeps that answerable AND makes the version move a commit in the operator's own kit repo
+  # — the audit trail, for free, in the place they already look. `git log -p` on the record
+  # is the history of every move.
+  #
+  # ⚠️ POINT IT AT A TAG YOU MOVE DELIBERATELY, not at a branch head. Tracking `main` puts
+  # every mid-merge state on the fleet at its next install; a `stable` tag moves when someone
+  # decides it should. A branch is allowed because an estate may want the edge, but the
+  # default advice is the tag.
+  # ⚠️ AN ESTATE THAT MUST REPRODUCE A MACHINE SHOULD NOT TRACK AT ALL. --frozen reproduces
+  # exactly what a record names, which is why tracking is opt-in per upstream rather than
+  # a mode the whole kit is in.
+  track="$(jq -r --arg n "$name" '.upstreams[$n].track // empty' "$LOCK")"
+  if [ -n "$track" ] && [ "$FROZEN" -eq 1 ]; then
+    say "  frozen $name tracks '$track' — ignored; installing the recorded ${commit:0:8}"
+  elif [ -n "$track" ] && [ "$DRY" -eq 1 ]; then
+    say "  would  resolve $name '$track' on the remote and rewrite .upstreams[\"$name\"].commit"
+  elif [ -n "$track" ] && [ -d "$dest/.git" ]; then
+    # --tags matters: a plain `fetch origin` does not update tags, so a `stable` tag that
+    # moved upstream would resolve to the value this clone happened to cache.
+    if command -v gh >/dev/null 2>&1; then
+      GIT_TERMINAL_PROMPT=0 git -C "$dest" -c 'credential.https://github.com.helper=!gh auth git-credential' \
+        fetch --quiet --tags --force origin 2>/dev/null || true
+    else
+      GIT_TERMINAL_PROMPT=0 git -C "$dest" fetch --quiet --tags --force origin 2>/dev/null || true
+    fi
+    resolved=""
+    for _ref in "refs/tags/$track" "refs/remotes/origin/$track"; do
+      _got="$(git -C "$dest" rev-parse --verify --quiet "$_ref^{commit}" 2>/dev/null || true)"
+      [ -n "$_got" ] && { resolved="$_got"; break; }
+    done
+    if [ -z "$resolved" ]; then
+      # Never guess, and never fall through silently to a stale pin without saying so: a
+      # deleted or mistyped ref must look different from a ref that simply has not moved.
+      say "  WARN  $name tracks '$track' — no such tag or branch on the remote."
+      say "        Staying at the recorded ${commit:0:8}. Fix the track, or remove it."
+    elif [ "$resolved" = "$commit" ]; then
+      say "  track  $name '$track' -> ${commit:0:8} (unchanged)"
+    else
+      _tmp="$(mktemp)" || _tmp=""
+      if [ -n "$_tmp" ] && jq --arg n "$name" --arg c "$resolved" \
+           '.upstreams[$n].commit = $c' "$LOCK" > "$_tmp" && [ -s "$_tmp" ]; then
+        cat "$_tmp" > "$LOCK"; rm -f "$_tmp"
+        _n="$(git -C "$dest" rev-list --count "$commit..$resolved" 2>/dev/null || echo '?')"
+        say "  track  $name '$track': ${commit:0:8} -> ${resolved:0:8}  ($_n commit(s) newer)"
+        say "         .upstreams[\"$name\"].commit rewritten — commit the record to keep the trail"
+        commit="$resolved"
+      else
+        rm -f "$_tmp"
+        say "  WARN  $name could not write the resolved sha into $LOCK — installing ${commit:0:8}"
+      fi
     fi
   fi
 

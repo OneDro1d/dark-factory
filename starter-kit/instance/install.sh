@@ -7,6 +7,8 @@
 #   bash install.sh --offline    install from whatever is already vendored; touch no network
 #   bash install.sh --dry-run    print the plan, change nothing
 #   bash install.sh --no-prove   skip the prove.sh step (lock-verify.sh still runs)
+#   bash install.sh --frozen     ignore every `track`: install exactly the pins the record
+#                                names. This is how you REPRODUCE a machine (LOOM_FROZEN=1 too)
 #   bash install.sh --lock=instances/<machine>/loom.lock.json
 #                                install ONE MACHINE's record (LOOM_LOCK=<path> works too)
 #
@@ -38,11 +40,12 @@
 # lockfile. Collapsing that into success is how an instance ships half-configured.
 set -uo pipefail
 
-OFFLINE=0; DRY=0; PROVE=1; LOCK_ARG=""
+OFFLINE=0; DRY=0; PROVE=1; LOCK_ARG=""; FROZEN="${LOOM_FROZEN:-0}"
 for a in "$@"; do
   case "$a" in
     --offline) OFFLINE=1 ;;
     --dry-run) DRY=1 ;;
+    --frozen)  FROZEN=1 ;;
     --no-prove) PROVE=0 ;;
     --lock=*) LOCK_ARG="${a#--lock=}"
               [ -n "$LOCK_ARG" ] || { printf 'FATAL: --lock= needs a path\n' >&2; exit 1; } ;;
@@ -421,6 +424,11 @@ if [ "$DRY" -eq 1 ]; then
 elif [ -f "$REHYDRATE" ]; then
   RFLAGS=""
   [ "$OFFLINE" -eq 1 ] && RFLAGS="--offline"
+  # --frozen rides through the same way --offline does: an upstream that declares `track`
+  # follows that ref and rewrites its own pin, and --frozen is how you reproduce a machine
+  # exactly as its record already names it. Passing it here, rather than leaving callers to
+  # set LOOM_FROZEN, keeps the flag discoverable on the command a person actually runs.
+  [ "$FROZEN" -eq 1 ] && RFLAGS="$RFLAGS --frozen"
   # LOOM_LIVE is passed explicitly, not left to rehydrate's own default. Step 2a resolved
   # ONE live directory from either spelling and handed it to the org layer; if this step
   # then fell back to its own default, the two layers of a single install would write to
