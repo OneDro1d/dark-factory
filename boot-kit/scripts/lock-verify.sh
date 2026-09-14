@@ -350,12 +350,14 @@ l6_restore() {
 }
 trap l6_restore EXIT INT TERM
 
-# ⛔ MEASURED 2026-09-11, a kit's first install: a plain `git fetch` of a PRIVATE layer on a
-# machine where gh is logged in but git has no credential helper (`gh auth setup-git` never
-# run, and the runbook never asks for it) does not fail. It prompts for a password on the
-# terminal, and with stderr sent to /dev/null the install sat in L6 for ten minutes printing
-# nothing. So: offer gh's login as a helper after any the user has, and never prompt. A fetch
-# that still cannot authenticate now fails at once and reports UNVERIFIED, as intended.
+# A plain `git fetch` of a PRIVATE layer, on a machine where gh is logged in but git has no
+# credential helper (`gh auth setup-git` never run, and the runbook never asks for it), cannot
+# authenticate: L6 then reports the pin UNVERIFIED, or waits at a password prompt if there is
+# a terminal. So: offer gh's login as a helper after any the user has, and never prompt.
+# ⚠️ CORRECTED 2026-09-11. This comment first said a ten-minute silent hang in L6 was that
+# prompt. It was not: the hang was in a test harness with HOME moved, where macOS's built-in
+# `osxkeychain` helper blocked (measured: the fetch sat in `git credential-osxkeychain store`
+# with this fix already in place). A real HOME does not hit it.
 l6_fetch() {
   if command -v gh >/dev/null 2>&1; then
     GIT_TERMINAL_PROMPT=0 git -C "$1" -c 'credential.https://github.com.helper=!gh auth git-credential' \

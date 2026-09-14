@@ -146,9 +146,9 @@ while read -r name; do
   if [ -d "$dest/.git" ]; then
     act "fetch    $name ($repo)"
     if [ "$DRY" -eq 0 ]; then
-      # A plain fetch of a private repo, where git has no credential helper, waits at a
-      # password prompt nobody sees (measured 2026-09-11, lock-verify L6). gh already holds
-      # the login: offer it after any helper the user has, and never prompt.
+      # A plain fetch of a private repo, where git has no credential helper, cannot
+      # authenticate (see lock-verify L6). gh already holds the login: offer it after any
+      # helper the user has, and never prompt.
       if command -v gh >/dev/null 2>&1; then
         GIT_TERMINAL_PROMPT=0 git -C "$dest" -c 'credential.https://github.com.helper=!gh auth git-credential' \
           fetch --quiet origin 2>/dev/null || say "  WARN fetch failed for $name"
