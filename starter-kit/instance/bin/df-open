@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# df-open — open a Claude Code session with THIS kit's environment (live tree + machine record).
+#
+#   df-open [claude args]                    in the kit root
+#   df-open --notepad <dir> [claude args]    in an existing notepad (a directory with NOTES.md)
+#
+# Needed when the kit is installed side by side (LOOM_LIVE/CLAUDE_CONFIG_DIR not ~/.claude):
+# a plain `claude` would load the other install's skills and hooks.
+set -euo pipefail
+DF_PROG=df-open
+s="${BASH_SOURCE[0]}"; while [ -L "$s" ]; do d="$(cd -P "$(dirname "$s")" && pwd)"; s="$(readlink "$s")"; case "$s" in /*) ;; *) s="$d/$s" ;; esac; done
+HERE="$(cd -P "$(dirname "$s")" && pwd)"
+# shellcheck source=df-kit-env.sh
+. "$HERE/df-kit-env.sh"
+df_resolve_kit "$HERE"
+
+DIR="$DF_KIT"
+if [ "${1:-}" = "--notepad" ]; then
+  [ -n "${2:-}" ] || df_die "usage: df-open --notepad <dir> [claude args]"
+  DIR="$(cd "$2" 2>/dev/null && pwd)" || df_die "no such directory: $2"
+  shift 2
+  [ -f "$DIR/NOTES.md" ] || df_die "$DIR has no NOTES.md — not a notepad (make one with: df-start \"<goal>\")"
+fi
+cd "$DIR"
+df_export_env
+exec "$CLAUDE_BIN" "$@"

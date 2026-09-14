@@ -58,3 +58,27 @@ what it is for.
 
 A team kit that binds an estate names that estate's mission skill here instead of
 `/dark-factory-build`.
+
+### One command instead of steps 1 and 2
+
+`bash bin/link.sh` puts `df-start`, `df-open` and `df-bg` on your PATH. Then, from the repo you
+are working in:
+
+```sh
+df-start "<one sentence of what done looks like>"
+```
+
+It builds the notepad (the `/scope-init` answers, taken from your sentence), attaches this kit's
+hard stops from `<kit>/df-start.never`, finds the repo's end-to-end suites, and opens the mission
+skill on it. Useful options: `--from <file>` for a pasted bug report or alert · `--e2e` to make
+the suites required · `--bg` to run it in the background, then `df-bg attach <id>` to answer it ·
+`--no-launch` to build the notepad and stop.
+
+**If you hold more than one kit, give each its own names:** `bash bin/link.sh --prefix <estate>`
+links `<estate>-df-start` and friends. The names must differ — `link.sh` refuses to overwrite one
+another kit already took — and the prefix also selects the mission skill, so `acme-df-start`
+opens `/acme-dark-factory`.
+
+⚠️ **`--from` writes what you paste into the notepad.** Credential shapes are redacted where the
+kit installs a redactor, and the file is kept out of git, but a redactor matches shapes and a
+person's name has no shape. What you paste is yours to judge.
