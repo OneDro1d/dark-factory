@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# df-bg — run `claude <subcommand>` against THIS kit's live tree, where `df-start --bg` sessions live.
+#
+#   df-bg agents            list background sessions
+#   df-bg attach <id>       open one in this terminal (answer it, approve held messages)
+#   df-bg logs <id>         recent output
+#   df-bg stop <id>         stop it
+#
+# WHY: claude registers background jobs under CLAUDE_CONFIG_DIR. On a side-by-side install a
+# plain `claude logs <id>` looks in the OTHER config dir and answers "No job matching".
+set -euo pipefail
+DF_PROG=df-bg
+s="${BASH_SOURCE[0]}"; while [ -L "$s" ]; do d="$(cd -P "$(dirname "$s")" && pwd)"; s="$(readlink "$s")"; case "$s" in /*) ;; *) s="$d/$s" ;; esac; done
+HERE="$(cd -P "$(dirname "$s")" && pwd)"
+# shellcheck source=df-kit-env.sh
+. "$HERE/df-kit-env.sh"
+[ $# -gt 0 ] || { awk 'NR>1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$s"; exit 2; }
+df_resolve_kit "$HERE"
+df_export_env
+exec "$CLAUDE_BIN" "$@"
