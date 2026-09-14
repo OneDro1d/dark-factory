@@ -20,7 +20,7 @@
 #   --e2e              make each repo's end-to-end suites REQUIRED done-criteria. Default: they are
 #                      only listed, and run when you ask
 #   --skill NAME       mission skill to open. Default: $DF_MISSION_SKILL, else from the name this
-#                      was invoked as (catalyst-df-start → /catalyst-dark-factory), else
+#                      was invoked as (<prefix>-df-start → /<prefix>-dark-factory), else
 #                      /dark-factory-build
 #   --bg               start it as a background session. It still ASKS before anything needing
 #                      permission — answer with `<prefix>df-bg attach <id>`

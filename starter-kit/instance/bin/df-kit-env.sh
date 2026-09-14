@@ -18,9 +18,9 @@ df_die() { printf '%s: %s\n' "${DF_PROG:-df}" "$*" >&2; exit 2; }
 # exists, so whichever kit ran it second got nothing at all. A single `df-start` on PATH can
 # only ever point into one kit, and this estate's own laptop carries four.
 #
-# The prefix also chooses the mission skill, so the launcher needs no per-estate fork and no
-# config file: `catalyst-df-start` opens /catalyst-dark-factory, `optima-df-start` opens
-# /optima-dark-factory. Unprefixed `df-start` is the generic kit: /dark-factory-build.
+# The prefix also chooses the mission skill, so the launcher needs no per-organisation fork and
+# no config file: `<prefix>-df-start` opens `/<prefix>-dark-factory`. Unprefixed `df-start` is
+# the generic kit: /dark-factory-build.
 # Precedence, highest first: --skill · $DF_MISSION_SKILL · the invoked prefix · the generic default.
 df_invoked_prefix() {
   local n="${1##*/}"

@@ -2,7 +2,7 @@
 # link.sh — put df-start, df-open and df-bg on PATH (or take them off).
 #
 #   bash bin/link.sh                      link as df-start / df-open / df-bg
-#   bash bin/link.sh --prefix catalyst    link as catalyst-df-start / catalyst-df-open / …
+#   bash bin/link.sh --prefix acme        link as acme-df-start / acme-df-open / acme-df-bg
 #   bash bin/link.sh --unlink             remove ONLY links that point into this kit's bin/
 #   bash bin/link.sh --prefix X --unlink  the same, for that prefix
 #
@@ -28,7 +28,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --unlink) MODE=unlink; shift ;;
     --prefix)
-      [ -n "${2:-}" ] || { echo "link.sh: --prefix needs a name (catalyst, onedroid, optima…)" >&2; exit 2; }
+      [ -n "${2:-}" ] || { echo "link.sh: --prefix needs a short name — the one your mission skill uses" >&2; exit 2; }
       case "$2" in
         *[!a-z0-9-]*|-*|*-) echo "link.sh: --prefix must be lower-case letters, digits and inner hyphens: $2" >&2; exit 2 ;;
       esac

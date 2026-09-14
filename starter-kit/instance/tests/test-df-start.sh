@@ -185,18 +185,22 @@ check "--unlink removes its links and keeps the foreign file" '[ ! -e "$LOOM_BIN
 echo "== o) --from is redacted, kept OUT of git, and the human is told"
 # ⛔ --from is for pasting a bug report, an alert or a chat thread: raw output from a real system,
 # chosen by a human in a hurry. It used to be committed into the notepad repo verbatim. Deleting
-# the file later does not remove it from history, and on a health estate the first hard stop is
-# "no patient data in any file". So: redact credential shapes, never commit, and say so.
+# the file later does not remove it from history, and where an estate forbids regulated data in
+# any file this is the wrong default. So: redact credential shapes, never commit, and say so.
 mkdir -p "$T/live/hooks/agent-notepad/lib"
 cat > "$T/live/hooks/agent-notepad/lib/redact.sh" <<'EOF'
 redact_secrets() { sed -E 's/(ghp_)[A-Za-z0-9_]{10,}/[REDACTED]/g'; }
 EOF
-printf 'the api died\ntoken ghp_AAAAAAAAAAAAAAAAAAAAAA here\n' > "$T/paste.txt"
+# ⚠️ ASSEMBLED, never written out as a literal. A fixture that spells a credential-shaped string
+# in full trips this repo's own secret scanner at publish time — correctly, because a scanner
+# cannot know it is fake. Build it from parts so the file on disk holds no such string.
+FAKETOK="ghp_$(printf 'A%.0s' $(seq 1 22))"
+printf 'the api died\ntoken %s here\n' "$FAKETOK" > "$T/paste.txt"
 export STUB_OUT="$T/stub-o"
 "$DS" "Why did the API return 503" --repo "$R" --name from-redact --from "$T/paste.txt" >/dev/null 2>&1
 FNP="$DF_NOTEPADS/from-redact"
 check "FINDING.md is written" '[ -f "$FNP/FINDING.md" ]'
-check "the credential shape is redacted" 'grep -q "REDACTED" "$FNP/FINDING.md" && ! grep -q "ghp_AAAAAAAAAAAAAAAAAAAAAA" "$FNP/FINDING.md"'
+check "the credential shape is redacted" 'grep -q "REDACTED" "$FNP/FINDING.md" && ! grep -qF "$FAKETOK" "$FNP/FINDING.md"'
 check "the non-secret content survives" 'grep -q "the api died" "$FNP/FINDING.md"'
 check "FINDING.md is gitignored" 'grep -qxF "FINDING.md" "$FNP/.gitignore"'
 check "FINDING.md is NOT committed" '! git -C "$FNP" ls-files --error-unmatch FINDING.md >/dev/null 2>&1'
