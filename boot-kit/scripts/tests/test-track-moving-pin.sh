@@ -118,6 +118,33 @@ OUT="$(run h --dry-run)"
 check "H the record is untouched" '[ "$(pin h)" = "$C3" ]' "$(pin h)"
 check "H it says it would resolve and rewrite" 'printf "%s" "$OUT" | grep -q "would  resolve layer .stable."' "$OUT"
 
+echo "== J) an ANNOTATED tag — a different object type, and the one production actually uses"
+# ⛔ EVERY CASE ABOVE USES `git tag -f`, WHICH MAKES A LIGHTWEIGHT TAG: a ref pointing straight
+# at a commit. An annotated tag is a separate OBJECT and the ref points at THAT — so a naive
+# `rev-parse refs/tags/stable` yields the TAG OBJECT's sha, not a commit. It is 40 hex chars,
+# it looks exactly like a commit sitting in a lockfile, and nothing downstream would check out.
+#
+# The resolution peels with `^{commit}` and is correct. But the suite proving `track` had no
+# case for it, while the Tier-1 `stable` tag a fork actually follows is ANNOTATED by design —
+# it carries the tagger and the reason, because that is where the human review step moved to
+# once `track` removed it from the install. Feature proven on the happy path, untested on the
+# path in production: the exact shape this repo keeps relearning.
+"$GIT" "${GC[@]}" -C "$UP" tag -a -f annotated -m "a deliberate, attributable tag" "$C2" >/dev/null 2>&1
+"$GIT" -C "$UP" push -q --force --tags "$BARE" 2>/dev/null
+# The fixture must really BE annotated, or this case silently re-runs case B and proves nothing.
+TAGTYPE="$("$GIT" -C "$BARE" cat-file -t annotated 2>/dev/null)"
+check "J the fixture tag really is an annotated OBJECT" '[ "$TAGTYPE" = "tag" ]' "type=$TAGTYPE"
+NAIVE="$("$GIT" -C "$BARE" rev-parse refs/tags/annotated 2>/dev/null)"
+check "J a naive rev-parse does NOT yield the commit — the peel is load-bearing" \
+  '[ "$NAIVE" != "$C2" ]' "naive=$NAIVE C2=$C2"
+
+inst j "$C3" annotated
+OUT="$(run j)"
+check "J the record names the COMMIT, not the tag object" '[ "$(pin j)" = "$C2" ]' "$(pin j) wanted $C2"
+check "J the tree sits at that commit" '[ "$(head_ j)" = "$C2" ]'
+check "J the vendored tree is a real checkout of it" \
+  '[ "$("$GIT" -C "$T/j/vendor/layer" rev-parse HEAD)" = "$C2" ]'
+
 echo "== I) --offline never reaches the network, so track cannot move a pin"
 inst i "$C3" stable
 OUT="$(run i --offline)"
