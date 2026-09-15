@@ -35,3 +35,19 @@ skills/df-context-store/substrate-template/substrate-denylist.conf
 # themselves landmarks, and the first draft of that file was rejected by publish-gate P1/P3
 # for carrying three of them. Same rule again: the real list stays local.
 boot-kit/scripts/tier1-generic.local.conf
+
+# df-ui-verify writes LIVE CREDENTIALS beside the skill, and its SKILL.md already tells the
+# reader they are gitignored — three times, calling them landmarks and a credential. They
+# were not. `.env.local` carries CLERK_SECRET_KEY plus the frontend-API slug, user id and
+# origin; `.run/` carries session.jwt and storageState.json, which are live session
+# credentials. This repo is PUBLIC, so in any checkout that had run the skill a `git add -A`
+# would have committed them, and `git status` would not have shown them coming.
+#
+# Nothing ever was committed — `git log --all` over both paths is empty. This closes a trap,
+# it does not clean up a breach, and no rotation is indicated.
+#
+# ⚠️ A doc saying a path is ignored does not ignore it. If a skill writes a secret, the
+# ignore rule belongs HERE, in the same change as the skill.
+.env.local
+**/.env.local
+**/.run/
