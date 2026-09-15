@@ -49,6 +49,18 @@ Two ways to consume `storageState.json`:
 
 For multi-route coverage under MCP, the working pattern is a **small Node builder that inlines `storageState` into a generated `drive.js`**, loaded with `filename=`, which does `context.addCookies` + `addInitScript` localStorage + `goto`. Drive the SPA by **clicks** rather than full `page.goto` reloads so the Clerk SDK stays warm. Those builders are app-shaped — write them where the app lives.
 
+⚠️ **Both of those steps write LIVE SESSION COOKIES into the target repo.** `inject-session.js` and the generated `drive.js` inline `storageState` — `__session`, `__clerk_db_jwt`, `__client_uat` — into JavaScript, inside a repo this kit does not own and whose `.gitignore` it cannot reach. That directly contradicts the rule three paragraphs up: *they belong in no committed file — not a doc, not a fixture, not a test.*
+
+**Before writing either file, exclude them in the TARGET repo — locally, not in its `.gitignore`:**
+
+```sh
+printf '%s\n' '.playwright-mcp/' 'drive.js' '.run/' >> <target-repo>/.git/info/exclude
+```
+
+`.git/info/exclude` ignores without touching a tracked file, needs no commit and no review in a repo you are only borrowing, and cannot be lost by someone reverting an edit they did not make. Editing the target's tracked `.gitignore` instead puts a change into somebody else's review queue for the sake of your test run, and is easy to forget on the way out.
+
+⚠️ **Check the target's visibility first** (`gh repo view --json isPrivate`). A private target makes this a chore. A public one makes it the same trap with a worse ending — and an unignored secret you know about is a chore, while an unignored secret the docs promise is handled is a trap.
+
 **Per-scenario evidence** (one PO scenario → one dir under `.run/evidence/<slug>/`): `screenshot.png`, `snapshot.txt` (DOM/a11y), `network.json` (`[{url,status,correlationId?}]`), `console.txt`. `network.json` is the spine. Extract `correlationId`s and **hand them to df-qa** for the deep backend-trace lookup — this skill does not query the trace store itself.
 
 **Verdict** (`scripts/verdict.sh <scenario_dir>`): **PASS** (expected render + all calls 2xx + clean console) · **CONDITIONAL** (renders, only known-harmless noise like `clerk-telemetry.com` 400s) · **FAIL** (wrong render, a call ≥400, or a blocking console error). **No PASS without evidence** — an empty `network.json` is a FAIL. Route a FAIL to its lane: render → frontend, API ≥400 → backend/Infra, missing scenario → PO.
