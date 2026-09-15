@@ -313,6 +313,48 @@ because absence has no shared path.
   **Enumerate before you stop.** Each deferral is individually plausible; the pattern is only
   visible when they are listed beside each other. Instances that ship
   `hooks/mission-completeness-gate.py` get this prompt automatically at Stop.
+- 🔴 **Calling it done when it is only STAGED.** *"Merged"*, *"pushed"*, *"shipped"*, *"it's
+  in the upstream now"*, *"the PR is green"* describe **where the code is**, not that anyone
+  can use it. They are the most convincing wrong answers available, because each is true and
+  each is the last step the agent personally took.
+
+  ⚠️ **The test is the operator's, not yours: name what THEY could run, and run it.** Measured
+  2026-09-14: a skill was written, reviewed, trimmed, merged into the generic tier and
+  reported done — and **no lockfile declared it**, so it was installed nowhere and could not
+  be invoked by the person who asked for it. Every check that asked "did it land?" passed.
+  None asked "can anybody reach it?"
+
+  This is the *stopping-short* failure above wearing the opposite costume. There the work is
+  handed back with a true sentence; here it is handed over with one. **Done is observable by
+  someone other than you.**
+- 🔴 **Re-asking a question the operator already answered.** Before an item goes on their
+  queue, search for a prior ruling: the memory store, the queue page's own git history, the
+  notepad, the mission record. Measured the same day: a decision was raised as open when the
+  operator had answered it ten days earlier, *and the recommendation attached to it
+  contradicted their answer.*
+
+  ⚠️ An answered question re-asked spends attention twice and teaches the operator that the
+  queue is noise — which is how the *next*, real question gets skimmed. A queue page earns its
+  authority by only ever holding things that are genuinely still open.
+- 🔴 **Diverging — ending with more open questions than you started with.** The loop's job is
+  to CONVERGE on closing the item, not to survey it. Research that does not narrow toward a
+  decision is not progress, however true its findings.
+
+  ⚠️ **Prefer done over perfect — and be precise about what that licenses.** It licenses
+  cutting SCOPE: drop the nice-to-have, close the item, open a separate one for the
+  improvement. It never licenses cutting EVIDENCE.
+
+  ⛔ **"Done" is a PROMISE-THEORY word, and that is the operator's ruling, not a nuance**
+  (2026-09-15): *done in the sense of proven-by-evidence done, not declared done.* A promise
+  is kept only when evidence shows it was — so "done" is a claim you make about your own work
+  and it carries exactly the weight of any other promiser's self-report, which is **none**.
+  This is the standard `df-adversary-gate` already applies to a sub-agent's return, turned
+  around and pointed at yourself: *trust the evidence less than the promise, and never accept
+  a self-printed PASSED.*
+
+  So the two rules never actually collide. **Cut scope freely; the evidence bar does not
+  move.** Where "prefer done" seems to argue for skipping a check, it is not this principle
+  talking — a false green defers a larger cost to a worse moment.
 - **Asking too vaguely to be actionable.** "Should I proceed?" without context is not an
   ask, it is a poke. The format above exists for that reason.
 - **Treating "blocked" as terminal.** When the reply arrives, resume from exactly where the

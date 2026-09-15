@@ -72,6 +72,18 @@ For EACH item, name the OPERATOR-ONLY blocker:
 
 ⚠️ IF YOU CANNOT NAME ONE, THE ITEM WAS YOURS. Do it now, before you stop.
 
+⛔ NOW CHALLENGE WHAT YOU CALLED DONE — the list above only covers what you KNOW you left.
+For each thing you are reporting as finished, name the test THE OPERATOR could run.
+  "merged" · "pushed" · "shipped" · "it's in Tier 1" · "the PR is green" are NOT done-tests.
+  They say where the code is, not that anybody can use it. If nobody can reach it, it is
+  not done — it is staged. Shipping a skill nobody installs is the shape to watch for.
+  ⛔ DONE IS PROVEN-BY-EVIDENCE, NEVER DECLARED. Your own "it works" is a self-report, and a
+  self-report is not an assessment — the same bar you hold a sub-agent's return to.
+
+⛔ AND IF YOU ARE HANDING BACK A DECISION: did you SEARCH for one already made? Memory, this
+page's own git history, the notepad, the mission record. Re-asking an answered question
+spends the operator's attention twice and teaches them the queue is noise.
+
 ⚠️ These are NOT blockers, they are true statements wearing a blocker's clothes:
   "it's a separate repo / its own PR"   "it's a deliberate decision"   "it's pre-existing"
   "it's a false positive"               "that's a bigger change"       "out of scope"
@@ -87,7 +99,40 @@ and stop. That is a complete report, not an unfinished one."""
 BRIEF = """⛔ Completeness gate (already run this session). If anything is still
 deferred, name its OPERATOR-ONLY blocker — a decision, an irreversible act, a credential, a
 merge you are blocked from, a real dead end. Anything without one is yours: do it now.
+Anything you are calling DONE: name the test the operator could run — "merged" is not one.
 If the list is unchanged and every item has a named blocker, say so in one line and stop."""
+
+
+def open_item_count(start=None):
+    """Count open items on the nearest operator-todo.md, walking up from cwd.
+
+    The two prose tests above are questions the model answers about itself. This one is a
+    MEASUREMENT, and it exists because the failure it catches is invisible to self-report:
+    a session that ends with MORE open items than it started, and none closed, has diverged
+    into surveying instead of converging on done. Each new item is individually defensible;
+    the pattern is only visible as a count.
+
+    Returns None when there is no such file — a session outside a notepad, a worker, a
+    scratch dir. Absent is not zero, and a wrong number here would be worse than no number.
+    Never raises: this is an enhancement to a Stop hook, and a Stop hook that errors blocks
+    the turn.
+    """
+    try:
+        d = os.path.abspath(start or os.getcwd())
+        for _ in range(12):                      # bounded: never walk to / on a deep path
+            p = os.path.join(d, "operator-todo.md")
+            if os.path.isfile(p):
+                with open(p, encoding="utf-8", errors="replace") as f:
+                    # Only unchecked items. A checked one is done and awaiting deletion;
+                    # counting it would make closing an item look like no progress.
+                    return sum(1 for ln in f if ln.lstrip().startswith("- [ ]"))
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+    except Exception:
+        pass
+    return None
 
 
 def already_fired(session_id):
@@ -164,6 +209,18 @@ def main():
         return
 
     text = BRIEF if already_fired(sid) else GATE
+
+    # Appended to BOTH texts, because the count is the one part that can CHANGE between
+    # firings — the prose is the same reminder twice, the number may not be.
+    n = open_item_count()
+    if n is not None:
+        text += (
+            "\n\n⛔ operator-todo.md currently has %d open item(s). If that went UP this "
+            "session and you closed none, you diverged: you surveyed instead of finishing. "
+            "Adding an item is only progress when it names an operator-only blocker."
+            % n
+        )
+
     try:
         print(json.dumps({
             "systemMessage": text,

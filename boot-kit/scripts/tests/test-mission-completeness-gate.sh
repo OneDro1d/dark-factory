@@ -189,6 +189,105 @@ H2="$(printf '{"session_id":"hermetic-reentry-%s","stop_hook_active":true}' "$$"
 if [ -z "$H2" ]; then ok "H: re-entry still releases despite the same poisoned ambient environment"
 else bad "H: re-entry still releases despite the same poisoned ambient environment" "emitted: $H2"; fi
 
+echo "=== I: the CONVERGE half — done-tests, prior answers, and the open-item count ==="
+# The gate's original question is "what did you NOT finish". These three cover the failures
+# that question cannot see: work handed OVER as done that nobody can reach, a decision handed
+# BACK that was already answered, and a session that ends by surveying rather than closing.
+# All three were measured on 2026-09-14, in the session that added them.
+I1="$(printf '{"session_id":"converge-%s"}' "$$" | scrub_dispatch_env python3 "$HOOK" 2>/dev/null)"
+
+case "$I1" in
+  *"CHALLENGE WHAT YOU CALLED DONE"*) ok "I: challenges what was called done, not only what was deferred" ;;
+  *) bad "I: challenges what was called done, not only what was deferred" "absent from the gate text" ;;
+esac
+
+# The exact false done-tests, quoted, so an edit that softens them fails here rather than
+# passing quietly — same rule the excuse list above follows.
+#
+# ⚠️ DECODE THE JSON FIRST. The hook emits its text inside a JSON string, so a quoted phrase
+# arrives on the wire as \"merged\" and a case pattern for "merged" matches nothing: three
+# assertions went red against a gate that contained every phrase they were looking for. That
+# is measuring the ENCODING instead of the message. Decoding also tests the string the model
+# is actually handed, which is the thing that has to be right.
+I1_TEXT="$(printf '%s' "$I1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["systemMessage"])' 2>/dev/null)"
+if [ -n "$I1_TEXT" ]; then ok "I: the gate text decodes out of the JSON envelope"
+else bad "I: the gate text decodes out of the JSON envelope" "could not read systemMessage"; fi
+
+for phrase in merged pushed shipped; do
+  case "$I1_TEXT" in
+    *"\"$phrase\""*) ok "I: names '$phrase' as a non-done-test" ;;
+    *) bad "I: names '$phrase' as a non-done-test" "the phrase is not rebutted in the gate text" ;;
+  esac
+done
+
+case "$I1" in
+  *"SEARCH for one already made"*) ok "I: demands a search for a prior ruling before handing a decision back" ;;
+  *) bad "I: demands a search for a prior ruling before handing a decision back" "absent" ;;
+esac
+
+# ── the MEASURED half: the open-item count ────────────────────────────────────────────────
+# Absent is not zero. A session outside a notepad must get NO count rather than a wrong one,
+# so the line is omitted entirely when there is no operator-todo.md above cwd.
+NOTODO="$TMPDIR/no-todo"; mkdir -p "$NOTODO"
+I2="$( cd "$NOTODO" && printf '{"session_id":"count-absent-%s"}' "$$" \
+        | scrub_dispatch_env python3 "$HOOK" 2>/dev/null )"
+case "$I2" in
+  *"open item(s)"*) bad "I: no count when there is no operator-todo.md" "emitted a count anyway" ;;
+  *) ok "I: no count when there is no operator-todo.md above cwd" ;;
+esac
+
+# With a page present the count must be exact, and must count ONLY unchecked items: a checked
+# one is done and awaiting deletion, so counting it would make closing an item look like no
+# progress at all.
+TODO="$TMPDIR/withtodo"; mkdir -p "$TODO/nested/deeper"
+{ printf '# Operator TODO\n\n'
+  printf -- '- [ ] one — open\n'
+  printf -- '- [x] two — done, awaiting deletion\n'
+  printf -- '- [ ] three — open\n'
+  printf 'not an item at all\n'
+} > "$TODO/operator-todo.md"
+I3="$( cd "$TODO" && printf '{"session_id":"count-two-%s"}' "$$" \
+        | scrub_dispatch_env python3 "$HOOK" 2>/dev/null )"
+case "$I3" in
+  *"has 2 open item(s)"*) ok "I: counts only unchecked items (2 of 3)" ;;
+  *) bad "I: counts only unchecked items (2 of 3)" "expected 'has 2 open item(s)'" ;;
+esac
+
+# It must walk UP, the same way the notepad itself is resolved — a session usually runs in a
+# subdirectory, not at the notepad root.
+I4="$( cd "$TODO/nested/deeper" && printf '{"session_id":"count-walkup-%s"}' "$$" \
+        | scrub_dispatch_env python3 "$HOOK" 2>/dev/null )"
+case "$I4" in
+  *"has 2 open item(s)"*) ok "I: finds the page by walking up from a nested cwd" ;;
+  *) bad "I: finds the page by walking up from a nested cwd" "did not resolve the page" ;;
+esac
+
+# The count rides on the BRIEF form too. The prose is identical on a repeat firing; the number
+# is the one part that can have changed since, so suppressing it there would drop the only
+# fresh signal the later firings carry.
+SID="brief-count-$$"
+printf '{"session_id":"%s"}' "$SID" | ( cd "$TODO" && scrub_dispatch_env python3 "$HOOK" ) >/dev/null 2>&1
+I5="$( cd "$TODO" && printf '{"session_id":"%s"}' "$SID" \
+        | scrub_dispatch_env python3 "$HOOK" 2>/dev/null )"
+case "$I5" in
+  *"already run this session"*) ok "I: second firing is the brief form" ;;
+  *) bad "I: second firing is the brief form" "expected the brief text" ;;
+esac
+case "$I5" in
+  *"has 2 open item(s)"*) ok "I: the brief form still carries the count" ;;
+  *) bad "I: the brief form still carries the count" "the count was dropped on repeat" ;;
+esac
+
+# Never at the cost of the turn: an unreadable page must degrade to no count, not to a crash.
+BADTODO="$TMPDIR/badtodo"; mkdir -p "$BADTODO"
+printf '\x80\x81 not utf-8 \xff\n- [ ] one\n' > "$BADTODO/operator-todo.md"
+if ( cd "$BADTODO" && printf '{"session_id":"badpage-%s"}' "$$" \
+       | scrub_dispatch_env python3 "$HOOK" >/dev/null 2>&1 ); then
+  ok "I: a non-UTF-8 page still exits 0 — the turn is never blocked by the count"
+else
+  bad "I: a non-UTF-8 page still exits 0" "non-zero exit would block the turn"
+fi
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"
