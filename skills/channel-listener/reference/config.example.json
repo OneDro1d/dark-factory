@@ -24,8 +24,50 @@
       "channel": "#engineering",
       "channel_id": "<from slack_search_channels, WITH channel_types=public_channel,private_channel>",
       "limit": 5
+    },
+    {
+      "key": "repo-orion-api",
+      "kind": "repo",
+      "_hub": "the estate whose credentials can see THIS repo - one source, one estate, never inferred",
+      "repo": "acme/acme-orion-api",
+      "branches": [
+        "main"
+      ],
+      "watch": [
+        "commits",
+        "pulls"
+      ],
+      "_branches_note": "Default is the default branch ONLY. Watching every branch turns one merge into 40 items and buries the one commit that mattered.",
+      "_cursor_note": "TWO cursors, kept apart: commits by committedDate, pulls by updatedAt. They advance independently and collapsing them loses whichever moves slower.",
+      "_dedup_note": "A PR is long-lived and MUTABLE - it moves on every comment, label and transition. Dedup on <id>@<updatedAt>, never the bare id: the bare id reports a PR once and then never again, swallowing the merge you cared about. A commit is immutable, so its sha alone is enough.",
+      "max_results": 20
+    },
+    {
+      "key": "confluence-orion-space",
+      "kind": "confluence",
+      "_hub": "that estate's confluence_* prefix",
+      "space_key": "<the KEY, not the display title - titles get renamed, keys do not>",
+      "_cursor_note": "page version.when (ISO-8601). Record version.number too: a typo fix and a rewritten runbook both bump it, and the report must say CREATED or UPDATED because only one of them usually needs an action.",
+      "max_results": 20
+    },
+    {
+      "key": "tracker-orion-board",
+      "kind": "tracker",
+      "_hub": "that estate's tracker prefix",
+      "_workspace_note": "RESOLVE THE WORKSPACE/SITE ID LIVE EVERY RUN - never store it here. These are ephemeral: an estate's workspaces were recreated once and every hardcoded copy broke on the same day, in the boot doctrine and three notepads at once.",
+      "board": "<board id, OR omit and use project/person>",
+      "project": "ORION",
+      "person": {
+        "_note": "OPTIONAL - 'tickets related to this person'. ACCOUNT ID COMES FROM THE TRACKER'S OWN USER DIRECTORY, chosen by the operator from a list you printed. NEVER from a call you pass the identity to: such lookups have been measured IGNORING the id argument and returning the caller, so two of them 'confirm' each other and the report then silently covers the wrong human.",
+        "account_id": "<picked by the operator from a directory search>",
+        "display_name": "<shown at setup so the operator can confirm it is who they meant>",
+        "relation": "assignee|reporter|mentioned"
+      },
+      "_cursor_note": "issue updated (ISO-8601). Push it into the QUERY - `updated >= \"<cursor>\"` plus the board/person clause - and let the server filter. Pulling a whole board and filtering client-side turns one call into thirty.",
+      "max_results": 25
     }
   ],
+  "_sources_note": "A source is anything with an ordered stream and a cursor. Adding a kind means adding a row to the Source kinds table in SKILL.md - the check loop itself does not change. Non-chat kinds are HIGH VOLUME and their items are LARGE (a diff, a page, an issue body): keep ids, subjects and URLs, never the body, and expect report_max_items to actually bite - when it does, say how many were dropped and on what ordering.",
   "scope": {
     "orion": {
       "_note": "One block per project the operator named. Names as spoken AND as the system writes them. Read by a model judging relevance, not by a regex - so partial and fuzzy entries are useful here, not harmful.",
