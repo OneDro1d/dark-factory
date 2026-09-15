@@ -32,9 +32,17 @@ bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/df-ui-verify}/scripts/clerk-aut
 |---|---|
 | `CLERK_SECRET_KEY` | `sk_test_*` (dev). Drives instance detection. Never logged beyond its prefix. |
 | `CLERK_FRONTEND_API` | Frontend API host, e.g. `https://<slug>.clerk.accounts.dev`. |
-| `CLERK_USER_ID` | `user_…` to impersonate. (Or set `CLERK_USER_EMAIL` and the script resolves it.) |
+| `CLERK_USER_ID` | `user_…` to impersonate. (Or set `CLERK_USER_EMAIL` and the script resolves it — and **refuses** unless exactly one user's own record carries that email. See below.) |
 | `APP_ORIGIN` | App origin — must be in Clerk **Allowed Origins**. Sent as `Origin` header. |
 | `APP_BASE_URL` | Where the UI is served (navigate target). |
+
+⚠️ **You are signing in as whoever `CLERK_USER_ID` names — make sure it is who you think.**
+Before 2026-09-15 the email lookup sent `email_address[]=`, which Clerk's Backend API ignores,
+and took the first user of the reply — the newest account on the instance. Two sessions signed
+in as a real colleague that way. The kernel now refuses anything but a single exact match. If
+you set `CLERK_USER_ID` directly, check it the same way first: `GET /v1/users/<id>` and read the
+email on the record. A demo account of your own is the right identity for screenshots; a
+colleague's is never it.
 
 ⚠️ **Every one of these is a landmark.** The secret key is a credential; the frontend-API slug, the user id and the origin together identify the instance, the person and the deployment. They live in `.env.local`, which is gitignored, and they belong in no committed file — not a doc, not a fixture, not a test. The test suite here uses placeholder hosts for exactly this reason.
 
