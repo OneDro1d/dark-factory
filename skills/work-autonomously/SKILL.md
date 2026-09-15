@@ -342,9 +342,19 @@ because absence has no shared path.
 
   ⚠️ **Prefer done over perfect — and be precise about what that licenses.** It licenses
   cutting SCOPE: drop the nice-to-have, close the item, open a separate one for the
-  improvement. It never licenses cutting EVIDENCE. *Done means verified done, not declared
-  done* — a false green defers a larger cost to a worse moment, and that rule outranks this
-  one wherever they meet.
+  improvement. It never licenses cutting EVIDENCE.
+
+  ⛔ **"Done" is a PROMISE-THEORY word, and that is the operator's ruling, not a nuance**
+  (2026-09-15): *done in the sense of proven-by-evidence done, not declared done.* A promise
+  is kept only when evidence shows it was — so "done" is a claim you make about your own work
+  and it carries exactly the weight of any other promiser's self-report, which is **none**.
+  This is the standard `df-adversary-gate` already applies to a sub-agent's return, turned
+  around and pointed at yourself: *trust the evidence less than the promise, and never accept
+  a self-printed PASSED.*
+
+  So the two rules never actually collide. **Cut scope freely; the evidence bar does not
+  move.** Where "prefer done" seems to argue for skipping a check, it is not this principle
+  talking — a false green defers a larger cost to a worse moment.
 - **Asking too vaguely to be actionable.** "Should I proceed?" without context is not an
   ask, it is a poke. The format above exists for that reason.
 - **Treating "blocked" as terminal.** When the reply arrives, resume from exactly where the

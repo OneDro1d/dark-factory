@@ -77,6 +77,8 @@ For each thing you are reporting as finished, name the test THE OPERATOR could r
   "merged" · "pushed" · "shipped" · "it's in Tier 1" · "the PR is green" are NOT done-tests.
   They say where the code is, not that anybody can use it. If nobody can reach it, it is
   not done — it is staged. Shipping a skill nobody installs is the shape to watch for.
+  ⛔ DONE IS PROVEN-BY-EVIDENCE, NEVER DECLARED. Your own "it works" is a self-report, and a
+  self-report is not an assessment — the same bar you hold a sub-agent's return to.
 
 ⛔ AND IF YOU ARE HANDING BACK A DECISION: did you SEARCH for one already made? Memory, this
 page's own git history, the notepad, the mission record. Re-asking an answered question
