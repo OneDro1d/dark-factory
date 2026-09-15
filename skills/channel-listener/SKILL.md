@@ -1,6 +1,6 @@
 ---
 name: channel-listener
-description: Read the Teams and/or Slack channels you name, and report only the posts relevant to a project you name. You invoke it; it reads what is new since last time, checks each claim, and proposes what to do. Triggers on "check my channels", "what did I miss", "watch #channel", "channel listener", "anything about <project> in Teams/Slack".
+description: Read the sources you name — Teams/Slack channels, a code repo's commits and pull requests, a Confluence space, a tracker board or one person's tickets — and report only what is relevant to a project you name. You invoke it; it reads what is new since last time, checks each claim, and proposes what to do. Triggers on "check my channels", "what did I miss", "what happened in <repo>", "anything new in <space>", "what is on the board", "catch me up", "channel listener".
 ---
 
 # channel-listener
@@ -23,9 +23,40 @@ live, never by copying.
 
 | | |
 |---|---|
-| `setup` | Ask which channels and which project. Write the config. Seed the watermarks to now. |
+| `setup` | Ask which sources and which project. Write the config. Seed the watermarks to now. |
 | `check` | The default. Read what is new, judge it, report it. |
 | `forget` | Delete the config and state. There is nothing else to stop. |
+
+## Source kinds
+
+A source is anything with an ordered stream of items and a cursor. The loop under *Check* is the
+same for all of them — read past the cursor, judge relevance, verify the claim, report, advance.
+Only these three columns differ, and **only this table needs to change to add a kind.**
+
+| `kind` | an *item* is | cursor (`last_seen`), in the source's OWN native type |
+|---|---|---|
+| `teams` | a channel post | `createdDateTime`, ISO-8601 |
+| `slack` | a channel message | `ts`, epoch seconds as a **string** |
+| `repo` | a commit on a watched branch, or a PR opened / merged / closed / review-requested | commit `committedDate` ISO-8601; PRs `updatedAt` ISO-8601 — **two cursors, kept separately** |
+| `confluence` | a page created or updated in the space | page `version.when`, ISO-8601 |
+| `tracker` | an issue created or transitioned, on a board or matching a person filter | issue `updated`, ISO-8601 |
+
+⚠️ **A repo, a space and a board are NOT low-volume like a chat channel.** One merge can be 40
+commits; a sprint transition moves 30 issues at once. Two consequences, and neither is optional:
+the relevance filter does more work here than it does on chat, and **`report_max_items` will
+actually bite** — when it does, say how many were dropped and on what ordering, rather than
+silently reporting the first N.
+
+⚠️ **A commit, a page diff and an issue body are ALL far larger than a chat message.** The
+two-memory rule under *Check* is not a nicety here, it is the only thing keeping a repo source
+from filling the context window with a diff nobody asked to read. Keep the subject line, the
+ids, the URL — **never the diff, never the page body.**
+
+⚠️ **One source, one estate — and the estate is read from the config, never inferred.** A repo,
+a Confluence space and a tracker board each belong to exactly one estate, and the hub that can
+read them is that estate's. Declare `hub` per source. **Do not reach across:** a source in one
+estate must not be read through another estate's hub even when the tool happens to resolve,
+because "it resolved" is not the same as "this session may see it".
 
 ## Setup
 
@@ -39,13 +70,31 @@ other. If nothing resolves, ask; never guess.
 answer seems obvious — a wrong channel is silent, and a listener watching the wrong place looks
 exactly like a quiet week.
 
-1. **Which channels?** Enumerate everything they could pick and show it numbered. For Teams list
-   every team, then the channels in each, and show `team / channel` — channel names repeat across
-   teams and a bare name is ambiguous. For Slack, include private channels explicitly; the
-   default is public-only, so without that a channel they use daily reports as not existing.
-   Let them answer with numbers or names, resolve each to an id from the list you just printed,
-   and **read the resolved set back before writing**. If a name is not in the enumeration, say so
-   and show near matches — never resolve by guessing.
+1. **Which sources?** Enumerate everything they could pick and show it numbered. Let them answer
+   with numbers or names, resolve each to an id from the list you just printed, and **read the
+   resolved set back before writing**. If a name is not in the enumeration, say so and show near
+   matches — never resolve by guessing.
+
+   - **Teams** — list every team, then the channels in each, and show `team / channel`. Channel
+     names repeat across teams and a bare name is ambiguous.
+   - **Slack** — include private channels explicitly; the default is public-only, so without that
+     a channel they use daily reports as not existing.
+   - **Repo** — resolve `owner/repo` against the account that can actually see it, and ask
+     **which branches** (default: the default branch only) and whether they want commits, PRs or
+     both. ⚠️ A 404 here means the wrong identity far more often than a missing repo.
+   - **Confluence** — list spaces and store the space KEY, not its display title: titles are
+     renamed and keys are not.
+   - **Tracker** — ask for a board, a project, or a person. ⚠️ **Resolve the workspace/site id
+     LIVE at every run, never from the config**: these are ephemeral and have been recreated
+     under this estate, which broke every hardcoded copy at once.
+
+   ⛔ **For a person filter, get the account id from the tracker's OWN directory, and never from
+   a call you pass the identity to.** Ask for the person, search the tracker's user directory,
+   show the matches with enough to disambiguate, and let the operator pick. This estate has been
+   burned by lookups that **ignore the id argument and return the caller** — two such calls
+   "confirm" each other, a correct attribution gets corrected into a wrong one, and the report
+   then silently covers the wrong human. Prefer the record that DECLARES the identity; a call
+   that does not error is not a call that was right.
 2. **Which project?** What it is called in conversation, and what it is called in the system:
    repos, services, ticket-key pattern, namespaces, the people whose posts about it matter.
    This is what makes a message relevant, and it is theirs to define.
@@ -69,13 +118,35 @@ sort only; never write that normalised value back as `last_seen`.
 ⚠️ **Dedup by message id, not timestamp.** Edit timestamps change, so a timestamp-only watermark
 replays edited messages forever.
 
+⚠️ **The same rule, sharper, on the non-chat kinds.** A PR and an issue are *long-lived mutable*
+objects: they move on every comment, label and transition, so an `updatedAt` cursor alone
+re-reports the same PR forever. Dedup on **`<id>@<updatedAt>`**, not on the bare id — the bare id
+would report a PR once and then never again, silently swallowing the merge you actually cared
+about. A commit is immutable, so its sha alone is enough. **A repo source keeps TWO cursors**,
+one for commits and one for PRs; they advance independently and collapsing them loses whichever
+moves slower.
+
+⚠️ **Confluence: a page is not new because its version number rose.** A typo fix and a rewritten
+runbook both increment it. Record `version.number` alongside the timestamp and say *created* or
+*updated* in the report — they mean different things to the reader and only one of them usually
+needs an action.
+
 ## Check
 
 For each source:
 
-1. **Read messages newer than `last_seen`.** Slack has a server-side `oldest`; Teams needs
+1. **Read items newer than `last_seen`.** Slack has a server-side `oldest`; Teams needs
    client-side filtering. **The read-size key differs: Slack takes `limit`, Teams takes
    `max_results`** — same meaning, neither tool accepts the other's name.
+
+   **Push the cursor into the QUERY on the kinds that support it, and know which those are.**
+   A repo lists commits `since=<cursor>` and PRs sorted by `updated` descending — stop paging at
+   the first item older than the cursor. A tracker takes it in the query language itself
+   (`updated >= "<cursor>"`, plus the board or the person clause) — **let the server filter**,
+   because pulling a whole board and filtering client-side is how a check that should cost one
+   call costs thirty. Confluence sorts by last-modified; page until you pass the cursor.
+   ⚠️ Where a kind has **no** server-side cursor, say so in the report rather than quietly
+   reading a fixed window and calling it complete.
 
    **Start small and page.** If the oldest message returned is still newer than `last_seen`,
    there is more beyond the window: page (Slack `cursor`) until the oldest predates it. **Do not
@@ -112,8 +183,19 @@ For each source:
    do with today's work is still their project's message. **Use the task to order and explain,
    never to drop.**
 
+   ⚠️ **On a repo, a space or a board the relevance filter is doing MOST of the work.** Chat is
+   already roughly scoped by which channel someone posted in; a repo is not. A dependency bump
+   and the commit that changes the thing the operator is standing on arrive through the same
+   stream and look alike at a glance. Read what the item DID, not what it is called — a commit
+   subject and a PR title are both self-descriptions, and a green CI badge says a pipeline ran,
+   not that the change is what it claims.
+
 5. **Check each claim before reporting it.** A chat message is a claim about the world, not the
-   world. Where a check is cheap and read-only, take it: read the ticket it names, look at the
+   world. So is a commit subject, a PR description, a page's summary and an issue's status
+   field — **"Done" on a board is a claim that work happened, not evidence that it did.** Where
+   a check is cheap and read-only, take it: read the linked ticket, confirm the PR actually
+   merged rather than just being titled as if it had, open the page and see whether the section
+   it claims to add is there. Where a check is cheap and read-only, take it: read the ticket it names, look at the
    pod it says is failing, confirm the deploy it announces landed. Report both what was said and
    what you found, and say plainly when they disagree. If a check is impossible — no access, the
    ticket is in a project you cannot see — mark it **unverified** and name what blocked it,
