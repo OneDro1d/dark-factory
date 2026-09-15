@@ -88,6 +88,32 @@ skill (that plants SERVICE-MAP / DATA-FLOW / FINDINGS / DECISIONS + the commit g
 operator declines, note it — a missing store just yields a SessionStart warning, not a hard
 failure.
 
+**Check the repo's VISIBILITY before you emit, and say it in the offer:**
+
+```
+gh repo view <owner>/<name> --json isPrivate,visibility
+```
+
+⚠️ **A context store is written for insiders, and a public repo has none.** The substrate's
+whole value is cross-repo orientation — *this* lives here, *that* lives in the platform repo,
+the deploy path is over there. Every one of those sentences is an internal reference, so
+emitting one into a public repo **leaks by construction, not by accident**: the more useful
+the SERVICE-MAP, the more internal detail it states. This gate has always asked *whether* to
+bootstrap and never *where the output will be visible*.
+
+Public target → still fine to bootstrap, but the emitted store carries **no** private repo
+names, internal hosts, cluster or namespace names, image tags, ticket-board IDs or filesystem
+paths. Write "the private platform repo's own context store" and stop there. Then **scan what
+you emitted before you commit it** — `grep -rniE` over the new `.claude/` for home paths and
+the estate's own nouns. Caught exactly this way on 2026-09-15 in a public docs repo, where the
+first draft named a private repo by owner/name in two files.
+
+⚠️ **And if it does reach a public remote, a fix commit does not retract the push.** The
+superseded commit stays reachable (GitHub pins PR commits at `refs/pull/<n>/head`, which
+survives a branch delete and a force-push). Collapse the branch to a single clean commit
+before it is merged, so the merge method cannot carry the pre-fix tree onto the default
+branch — and tell the operator what residual remains, rather than deciding by silence.
+
 ### 6a. Offer a docs-map per repo (CONSENT, per repo)
 
 The push gate (§7.7) blocks an agent `git -C <repo> push` when the push changes a declared
