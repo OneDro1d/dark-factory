@@ -181,6 +181,47 @@ test_push_foreign_refspec_abstains() {
   rm -rf "$(dirname "$repo")"
 }
 
+# ── (g2) NAMING THE CHECKED-OUT BRANCH IS NOT A FOREIGN PUSH ────────────────
+# `git push origin main` while ON main is the most common push anyone types, and it pushes
+# exactly the commits the gate judges. The previous parser treated every source other than the
+# literal word `HEAD` as foreign and abstained — so the ordinary form was never judged at all.
+# Measured 2026-09-16 on a real repo: `push origin main` returned {} while the bare `push` of
+# the same range blocked on three rules, two of them genuine drift.
+test_push_refspec_naming_current_branch_is_judged() {
+  local repo; repo="$(_mkrepo)"
+  _map "$repo" block
+  mkdir -p "$repo/services"; printf 'svc\n' > "$repo/services/a.go"
+  git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm svc >/dev/null 2>&1
+  local form
+  for form in "origin main" "origin main:main" "origin +main" "origin refs/heads/main"; do
+    run_hook "$GATE" "$(printf '{"tool_name":"Bash","tool_input":{"command":"git -C %s push %s"},"cwd":"%s"}' "$repo" "$form" "$repo")"
+    assert_contains "$OUT" "Push blocked by agent-notepad" "push $form while on main is judged, not abstained"
+  done
+  # …the twin: on main, a DIFFERENT source ref is still out of scope.
+  run_hook "$GATE" "$(printf '{"tool_name":"Bash","tool_input":{"command":"git -C %s push origin other-branch"},"cwd":"%s"}' "$repo" "$repo")"
+  assert_eq "{}" "$OUT" "push origin other-branch while on main still abstains"
+  rm -rf "$(dirname "$repo")"
+}
+
+# The push that CREATES a branch names it: `git push -u origin feat/new`. Under the old parser
+# that was foreign too, so the new-branch fallback in (h) was only ever reachable through a bare
+# `git push`, which git itself refuses on a branch with no upstream.
+test_push_first_push_of_new_branch_is_judged() {
+  local repo; repo="$(_mkrepo)"
+  _map "$repo" block
+  git -C "$repo" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main >/dev/null 2>&1
+  git -C "$repo" checkout -q -b feat/new
+  mkdir -p "$repo/services"; printf 'svc\n' > "$repo/services/a.go"
+  git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm svc >/dev/null 2>&1
+  run_hook "$GATE" "$(printf '{"tool_name":"Bash","tool_input":{"command":"git -C %s push -u origin feat/new"},"cwd":"%s"}' "$repo" "$repo")"
+  assert_contains "$OUT" "Push blocked by agent-notepad" "push -u origin feat/new (creating the branch) is judged"
+  # twin: a detached HEAD has no branch name to match, so a named source stays foreign.
+  git -C "$repo" checkout -q --detach
+  run_hook "$GATE" "$(printf '{"tool_name":"Bash","tool_input":{"command":"git -C %s push origin feat/new"},"cwd":"%s"}' "$repo" "$repo")"
+  assert_eq "{}" "$OUT" "detached HEAD: a named source cannot be HEAD's branch → abstain"
+  rm -rf "$(dirname "$repo")"
+}
+
 # ── (h) a branch with no upstream is judged, not skipped ────────────────────
 # The push that CREATES a branch is the one a naive `@{u}` implementation would abstain on —
 # and it is the push that carries the whole feature.
