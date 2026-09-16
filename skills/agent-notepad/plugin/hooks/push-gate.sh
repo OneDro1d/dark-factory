@@ -48,6 +48,15 @@
 # refspec for some other ref (`git push origin some-branch:main`) is out of scope and abstains
 # — it is not judging HEAD, and pretending otherwise would report on the wrong commits.
 #
+# ⛔ "SOME OTHER REF" MEANS OTHER THAN THE CHECKED-OUT BRANCH — not "anything but the word HEAD".
+# The first version abstained on every named source, so `git push origin main` while ON main —
+# the most common push there is — was never judged, and neither was `git push -u origin feat/x`,
+# the push that creates a branch. Measured 2026-09-16: on a real repo, `push origin main`
+# returned {} while the bare `push` of the identical range blocked on three rules, two of them
+# genuine doc drift. A source equal to the current branch (`main`, `main:main`, `+main`,
+# `refs/heads/main`) is HEAD's own commits and is judged. A detached HEAD has no branch to match,
+# so any named source stays foreign.
+#
 # Config (env, all optional):
 #   AGENT_NOTEPAD_PUSH_GATE=off      disable entirely
 #   AGENT_NOTEPAD_DOCS_MAP=<name>    filename under <repo>/.claude/ (default docs-map.json)
@@ -114,15 +123,16 @@ while i < n:
         if sub == "push":
             rest = toks[subidx + 1:]
             nov = "1" if "--no-verify" in rest else "0"
-            # Positional args after `push` are <remote> [<refspec>…]. A refspec that names a
-            # source ref other than HEAD is out of scope — see the header.
+            # Positional args after `push` are <remote> [<refspec>…]. Report every named SOURCE
+            # ref; whether one is foreign needs the checked-out branch, which is only known once
+            # the repo is resolved — see the header. Ref names cannot contain spaces.
             pos = [t for t in rest if not t.startswith("-")]
-            foreign = "0"
+            srcs = []
             for t in pos[1:]:
                 src = t.split(":", 1)[0].lstrip("+")
-                if src and src != "HEAD":
-                    foreign = "1"
-            print("PUSH\t%s\t%s\t%s" % (cpath, nov, foreign)); sys.exit(0)
+                if src:
+                    srcs.append(src)
+            print("PUSH\t%s\t%s\t%s" % (cpath, nov, " ".join(srcs))); sys.exit(0)
     i += 1
 print("NOTPUSH")
 PY
@@ -132,12 +142,11 @@ case "$parsed" in
   NOTPUSH|"") allow ;;
 esac
 
-IFS=$'\t' read -r _kind cpath noverify foreign <<EOF
+IFS=$'\t' read -r _kind cpath noverify srcs <<EOF
 $parsed
 EOF
 
 [ "${noverify:-0}" = "1" ] && allow
-[ "${foreign:-0}" = "1" ] && allow
 
 # ── resolve the target repo ─────────────────────────────────────────────────────────────────
 repo="$cpath"
@@ -146,6 +155,23 @@ repo="$cpath"
 git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || allow
 root="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)"
 [ -n "$root" ] && repo="$root"
+
+# ── is every named source HEAD's own branch? if not, out of scope ───────────────────────────
+# Empty on a detached HEAD, so a named source can never match it there. Globbing is off for the
+# split: a wildcard refspec like `refs/heads/*` must stay a string, not expand against the cwd.
+head_branch="$(git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null)"
+set -f
+for src in ${srcs:-}; do
+  case "$src" in
+    HEAD) ;;
+    *)
+      if [ -z "$head_branch" ] || { [ "$src" != "$head_branch" ] && [ "$src" != "refs/heads/$head_branch" ]; }; then
+        allow
+      fi
+      ;;
+  esac
+done
+set +f
 
 MAP_NAME="${AGENT_NOTEPAD_DOCS_MAP:-docs-map.json}"
 MAP="$repo/.claude/$MAP_NAME"
