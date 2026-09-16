@@ -40,12 +40,30 @@ detect_instance() {
   esac
 }
 
-# resolve_user_id <email> -> echoes user_… (Clerk Backend API). Empty on miss.
+# resolve_user_id <email> -> echoes user_… (Clerk Backend API). Empty, non-zero, on anything
+# but exactly one user whose OWN record carries <email>.
+#
+# ⚠️ This used to send `email_address[]=<email>` and take `.[0].id`. Clerk's Backend API
+# ignores that spelling and answers with EVERY user on the instance, newest first — so
+# `.[0]` was simply whoever signed up last, and the kernel minted a session as a real
+# stranger with nothing to say so (measured 2026-09-15, twice, by two sessions). The
+# working filter is `email_address=`. And a filter is still only a lookup: the identity is
+# established from the returned record's email, never from the fact the call succeeded.
 resolve_user_id() {
-  local email="$1"
-  curl -sS -G "https://api.clerk.com/v1/users" \
-    --data-urlencode "email_address[]=$email" \
-    -H "Authorization: Bearer $CLERK_SECRET_KEY" | jq -r '.[0].id // empty'
+  local email="$1" want resp total matches
+  want="$(printf '%s' "$email" | tr '[:upper:]' '[:lower:]')"
+  resp="$(curl -sS -G "https://api.clerk.com/v1/users" \
+    --data-urlencode "email_address=$email" \
+    -H "Authorization: Bearer $CLERK_SECRET_KEY")"
+  total="$(printf '%s' "$resp" | jq 'if type=="array" then length else -1 end')"
+  matches="$(printf '%s' "$resp" | jq --arg e "$want" \
+    '[.[]? | select([.email_addresses[]?.email_address | ascii_downcase] | index($e))] | length')"
+  if [ "$total" != "1" ] || [ "$matches" != "1" ]; then
+    echo "resolve_user_id: refusing — lookup returned $total user(s), $matches carrying $email" >&2
+    return 1
+  fi
+  printf '%s' "$resp" | jq -r --arg e "$want" \
+    '.[] | select([.email_addresses[]?.email_address | ascii_downcase] | index($e)) | .id'
 }
 
 # dev_handshake -> sets DB_JWT TESTING_TOKEN SESSION_ID SESSION_JWT.

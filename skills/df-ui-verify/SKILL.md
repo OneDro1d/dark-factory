@@ -32,9 +32,17 @@ bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/df-ui-verify}/scripts/clerk-aut
 |---|---|
 | `CLERK_SECRET_KEY` | `sk_test_*` (dev). Drives instance detection. Never logged beyond its prefix. |
 | `CLERK_FRONTEND_API` | Frontend API host, e.g. `https://<slug>.clerk.accounts.dev`. |
-| `CLERK_USER_ID` | `user_…` to impersonate. (Or set `CLERK_USER_EMAIL` and the script resolves it.) |
+| `CLERK_USER_ID` | `user_…` to impersonate. (Or set `CLERK_USER_EMAIL` and the script resolves it — and **refuses** unless exactly one user's own record carries that email. See below.) |
 | `APP_ORIGIN` | App origin — must be in Clerk **Allowed Origins**. Sent as `Origin` header. |
 | `APP_BASE_URL` | Where the UI is served (navigate target). |
+
+⚠️ **You are signing in as whoever `CLERK_USER_ID` names — make sure it is who you think.**
+Before 2026-09-15 the email lookup sent `email_address[]=`, which Clerk's Backend API ignores,
+and took the first user of the reply — the newest account on the instance. Two sessions signed
+in as a real colleague that way. The kernel now refuses anything but a single exact match. If
+you set `CLERK_USER_ID` directly, check it the same way first: `GET /v1/users/<id>` and read the
+email on the record. A demo account of your own is the right identity for screenshots; a
+colleague's is never it.
 
 ⚠️ **Every one of these is a landmark.** The secret key is a credential; the frontend-API slug, the user id and the origin together identify the instance, the person and the deployment. They live in `.env.local`, which is gitignored, and they belong in no committed file — not a doc, not a fixture, not a test. The test suite here uses placeholder hosts for exactly this reason.
 
@@ -48,6 +56,22 @@ Two ways to consume `storageState.json`:
 - **Native (`npx playwright test`).** Set `storageState: '.run/storageState.json'` in config (cookies present at context creation — the robust path if running-page injection trips Clerk's continuity guard). Pin `@playwright/mcp@0.0.41`; bundled Chromium avoids the system-Chrome singleton conflict.
 
 For multi-route coverage under MCP, the working pattern is a **small Node builder that inlines `storageState` into a generated `drive.js`**, loaded with `filename=`, which does `context.addCookies` + `addInitScript` localStorage + `goto`. Drive the SPA by **clicks** rather than full `page.goto` reloads so the Clerk SDK stays warm. Those builders are app-shaped — write them where the app lives.
+
+⚠️ **Both of those steps write LIVE SESSION COOKIES into the target repo.** `inject-session.js` and the generated `drive.js` inline `storageState` — `__session`, `__clerk_db_jwt`, `__client_uat` — into JavaScript, inside a repo this kit does not own and whose `.gitignore` it cannot reach. That directly contradicts the rule three paragraphs up: *they belong in no committed file — not a doc, not a fixture, not a test.*
+
+**This is structural, not a slip.** The MCP sandbox blocks `require`/`import`/`fs` and loads scripts only from inside the working repo root, so the state *must* be inlined and the file *must* live in the target repo. Writing a credential into a git repo is not a mistake on this path — it is the path. That is why the exclude below is mandatory rather than tidy, and why it has to happen before the write rather than after.
+
+**Before writing either file, exclude them in the TARGET repo — locally, not in its `.gitignore`:**
+
+```sh
+printf '%s\n' '.playwright-mcp/' 'drive.js' '.run/' >> <target-repo>/.git/info/exclude
+```
+
+`.git/info/exclude` ignores without touching a tracked file, needs no commit and no review in a repo you are only borrowing, and cannot be lost by someone reverting an edit they did not make. Editing the target's tracked `.gitignore` instead puts a change into somebody else's review queue for the sake of your test run, and is easy to forget on the way out.
+
+⚠️ **Check the target's visibility first** (`gh repo view --json isPrivate`). A private target makes this a chore. A public one makes it the same trap with a worse ending — and an unignored secret you know about is a chore, while an unignored secret the docs promise is handled is a trap.
+
+**When you are done, revoke what you minted.** Deleting the files is not the remediation — the session exists on Clerk independently of the file that carried it, and `__clerk_db_jwt` does not expire on its own. Judge the exposure by the **file's** lifetime, not the token's: `POST https://api.clerk.com/v1/sessions/<sid>/revoke` (the `sid` is a claim in `.run/session.jwt`), with `User-Agent: curl/8.7.1` or Cloudflare answers 1010. Revoke every session minted during the run, not only the one still on disk. Measured 2026-09-15: a session minted six days earlier was still `active` with the short-lived JWT beside it long expired.
 
 **Per-scenario evidence** (one PO scenario → one dir under `.run/evidence/<slug>/`): `screenshot.png`, `snapshot.txt` (DOM/a11y), `network.json` (`[{url,status,correlationId?}]`), `console.txt`. `network.json` is the spine. Extract `correlationId`s and **hand them to df-qa** for the deep backend-trace lookup — this skill does not query the trace store itself.
 
