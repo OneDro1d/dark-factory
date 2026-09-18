@@ -18,8 +18,17 @@
 #
 # ⚠️ Never add an endpoint, a token or a hub name to this file. It lives in a PUBLIC repo.
 # The hooks promoted here were checked for all three before the move.
-# Stop hook: nudge to save session summary if meaningful work happened.
-
-cat <<'EOF'
-{"systemMessage":"If this session did meaningful work, write a session summary to Engram loom-sessions (kind=session). Skip for quick Q&A."}
-EOF
+#
+# ⛔ NOW A NO-OP, DELIBERATELY (2026-09-18). It used to emit a systemMessage after EVERY reply:
+# "If this session did meaningful work, write a session summary to Engram". MEASURED that day on
+# Claude Code 2.1.276 (a Stop hook emitting one output shape per run): a Stop `systemMessage` is
+# shown to the operator and NEVER reaches the model. So the nudge could not do its job, and it put
+# a line on the operator's screen after every single reply. Making it reach the model
+# (additionalContext) would force a whole extra turn per reply, which is the cost this change removes.
+# The nudge now lives where the model CAN act on it without a forced turn: the context-budget
+# checkpoint (hooks/context-budget.py, REASON_CHECKPOINT step 3), which fires once per climb.
+#
+# ⚠️ The FILE stays, emitting {}, because instance lockfiles declare and wire it. Deleting it would
+# turn a harmless no-op into a missing-hook drift on every machine. Undeclare it first.
+cat >/dev/null 2>&1 || true   # drain the event
+printf '{}\n'

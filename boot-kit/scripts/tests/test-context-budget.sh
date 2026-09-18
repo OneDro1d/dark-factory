@@ -41,11 +41,15 @@ transcript() {
     "$model" "$occ" >> "$f"
 }
 # gate <session> <transcript> [extra env...] -> the gate's stdout
+# ⚠️ Every event carries a cwd INSIDE the temp dir. The gate reads autoCompactWindow from project
+# settings by walking up from the session's cwd; without one it walked up from the real shell cwd
+# to the real ~/.claude/settings.json and read this machine's value (measured: case B went red).
+mkdir -p "$W/plain"
 gate() {
   local s="$1" t="$2"; shift 2
-  printf '{"session_id":"%s","transcript_path":"%s","stop_hook_active":false}' "$s" "$t" \
+  printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","stop_hook_active":false}' "$s" "$t" "$W/plain" \
     | env -u DF_CONTEXT_THRESHOLD -u DF_CONTEXT_WINDOW -u DF_CONTEXT_GATE -u DF_CONTEXT_GATE_MODE \
-          HOME="$W/home" "$@" python3 "$GATE"
+          -u CLAUDE_CODE_AUTO_COMPACT_WINDOW HOME="$W/home" "$@" python3 "$GATE"
 }
 blocked() { printf '%s' "$1" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("decision")=="block" else 1)'; }
 reason()  { printf '%s' "$1" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("reason",""))'; }
@@ -103,6 +107,35 @@ OUT="$(printf '{"session_id":"sF3","transcript_path":"%s","stop_hook_active":tru
 [ "$OUT" = "{}" ] && ok "F: stop_hook_active never blocks twice in a row" || bad "F: stop_hook_active allows" "$OUT"
 OUT="$(printf 'not json' | HOME="$W/home" python3 "$GATE")"; RC=$?
 [ "$RC" -eq 0 ] && [ "$OUT" = "{}" ] && ok "F: malformed stdin allows, exit 0" || bad "F: malformed stdin" "rc=$RC out=$OUT"
+
+echo "=== G: the AUTO-COMPACT window, not the model window, is what the gate scales to ==="
+# ⛔ 2026-09-18: `autoCompactWindow: 300000` makes a 1M-window session compact at ~300k. Scaled
+# to the model window the gate would wait for 920k and never fire before compaction.
+mkdir -p "$W/home/.claude"
+printf '{"autoCompactWindow": 300000}\n' > "$W/home/.claude/settings.json"
+gatecwd() { local s="$1" t="$2" c="$3"; shift 3
+  printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","stop_hook_active":false}' "$s" "$t" "$c" \
+    | env -u DF_CONTEXT_THRESHOLD -u DF_CONTEXT_WINDOW -u DF_CONTEXT_GATE -u DF_CONTEXT_GATE_MODE \
+          -u CLAUDE_CODE_AUTO_COMPACT_WINDOW HOME="$W/home" "$@" python3 "$GATE"; }
+mkdir -p "$W/plain"
+transcript "$W/g1.jsonl" claude-opus-5 250000
+OUT="$(gatecwd sG1 "$W/g1.jsonl" "$W/plain")"
+blocked "$OUT" && ok "G: user autoCompactWindow 300k: 250k (83%) blocks on a 1M model" || bad "G: 250k of a 300k window blocks" "$OUT"
+case "$(reason "$OUT")" in *"compaction at 300000"*) ok "G: the reason names the compaction window and its source";;
+  *) bad "G: names the compaction window" "$(reason "$OUT")";; esac
+transcript "$W/g2.jsonl" claude-opus-5 200000
+OUT="$(gatecwd sG2 "$W/g2.jsonl" "$W/plain")"
+blocked "$OUT" && bad "G: 200k (66%) of a 300k window stays quiet" "blocked" || ok "G: 200k (66%) of a 300k window stays quiet"
+# per-notepad override: a project settings file beats the user one, as in the harness
+mkdir -p "$W/notepad/.claude" "$W/notepad/sub"
+printf '{"autoCompactWindow": 600000}\n' > "$W/notepad/.claude/settings.json"
+OUT="$(gatecwd sG3 "$W/g1.jsonl" "$W/notepad/sub")"
+blocked "$OUT" && bad "G: a notepad's own autoCompactWindow (600k) overrides the user 300k" "blocked at 250k" \
+               || ok "G: a notepad's own autoCompactWindow (600k) overrides the user 300k"
+# the env var outranks every settings file
+OUT="$(gatecwd sG4 "$W/g2.jsonl" "$W/notepad/sub" CLAUDE_CODE_AUTO_COMPACT_WINDOW=220000)"
+blocked "$OUT" && ok "G: CLAUDE_CODE_AUTO_COMPACT_WINDOW outranks the settings files" || bad "G: env outranks settings" "$OUT"
+rm -f "$W/home/.claude/settings.json"
 
 echo
 echo "passed $PASS  failed $FAIL"

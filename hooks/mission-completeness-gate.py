@@ -153,13 +153,115 @@ def already_fired(session_id):
         return False
 
 
+# ---- WHEN TO FIRE AT ALL: the cost of this hook is a whole model turn ----------------------------
+# ⛔ MEASURED 2026-09-18 (Claude Code 2.1.276, a throwaway project whose Stop hook emits one output
+# shape per run): `hookSpecificOutput.additionalContext` on Stop DOES make the model take another
+# turn (two API requests where the control made one), exactly like `decision: block`. A
+# `systemMessage` alone does not, and the model never sees it. So EVERY firing of this gate costs a
+# full re-read of the context. Fleet-wide that day: 1,355 forced turns, ~807M cache-read tokens
+# (~$390), mostly "nothing has changed" answered after a reply that did no work at all.
+#
+# The gate's purpose is unchanged: nudging REAL deferred work. What changes is WHEN it pays for that:
+#   * a turn that made NO tool calls did no work, so it cannot have deferred any → emit nothing;
+#   * the FULL gate still fires once per session, on the first turn that did work;
+#   * after that, the brief reminder fires only when the turn did work AND either its final text
+#     shows deferral language, or the operator page grew since the session's first firing.
+# ⚠️ FAILS TOWARD PROMPTING: if the transcript cannot be read, the hook cannot tell whether the
+# turn did work, and it fires as before. Absent evidence of "text-only" is not evidence of it.
+TAIL_BYTES = 4 * 1024 * 1024
+DEFERRAL = re.compile(
+    r"\b(next step|follow[- ]?up|left for|remaining|still (?:open|outstanding|pending|to do)|"
+    r"not (?:yet )?(?:done|finished)|deferred|out of scope|separate (?:pr|change|ticket)|"
+    r"later|todo|to do next|recommend(?:ed)? next|worth a separate|not in this pr)\b",
+    re.IGNORECASE)
+
+
+def _is_real_prompt(rec):
+    """A user entry that is a genuine prompt, not a tool result coming back."""
+    if rec.get("type") != "user":
+        return False
+    c = (rec.get("message") or {}).get("content")
+    if isinstance(c, str):
+        return True
+    if isinstance(c, list):
+        return any(isinstance(b, dict) and b.get("type") == "text" for b in c) and \
+            not all(isinstance(b, dict) and b.get("type") == "tool_result" for b in c)
+    return False
+
+
+def last_turn(transcript):
+    """(did_work, final_text) for the turn that just ended, or (None, "") if unreadable.
+
+    Reads only the tail of the transcript (they reach 100+ MB) and walks back to the last genuine
+    prompt. did_work = any assistant tool_use after it; final_text = its last assistant text.
+    """
+    try:
+        size = os.path.getsize(transcript)
+        with open(transcript, "rb") as f:
+            f.seek(max(0, size - TAIL_BYTES))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+        recs = []
+        for ln in lines:
+            try:
+                recs.append(json.loads(ln))
+            except Exception:
+                continue
+        start = None
+        for i in range(len(recs) - 1, -1, -1):
+            if _is_real_prompt(recs[i]):
+                start = i
+                break
+        if start is None:
+            return None, ""
+        did_work, text = False, ""
+        for r in recs[start + 1:]:
+            if r.get("type") != "assistant":
+                continue
+            for b in (r.get("message") or {}).get("content") or []:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "tool_use":
+                    did_work = True
+                elif b.get("type") == "text" and b.get("text"):
+                    text = b["text"]
+        return did_work, text
+    except Exception:
+        return None, ""
+
+
+def _baseline_path(session_id):
+    d = os.path.join(tempfile.gettempdir(), "claude-completeness-gate")
+    return os.path.join(d, re.sub(r"[^A-Za-z0-9_.-]", "_", session_id) + ".todo")
+
+
+def todo_grew(session_id, n):
+    """True if the open-item count is above what it was at this session's first firing.
+    Records the baseline on first sight. Never raises."""
+    if n is None or not session_id:
+        return False
+    try:
+        p = _baseline_path(session_id)
+        if not os.path.exists(p):
+            with open(p, "w") as f:
+                f.write(str(n))
+            return False
+        with open(p) as f:
+            return n > int(f.read().strip() or n)
+    except Exception:
+        return False
+
+
 def main():
     sid = ""
     stop_hook_active = False
+    transcript = ""
+    final_text = ""
     try:
         event = json.load(sys.stdin) or {}
         sid = event.get("session_id") or ""
         stop_hook_active = bool(event.get("stop_hook_active"))
+        transcript = event.get("transcript_path") or ""
+        final_text = event.get("last_assistant_message") or ""
     except Exception:
         pass  # a malformed event must not block the turn
 
@@ -208,11 +310,29 @@ def main():
     if stop_hook_active:
         return
 
-    text = BRIEF if already_fired(sid) else GATE
+    # ⛔ NO WORK, NO FIRING. Decided from the transcript when it can be read; see the block above.
+    did_work, tail_text = (None, "")
+    if transcript and os.path.isfile(transcript):
+        did_work, tail_text = last_turn(transcript)
+    if did_work is False:
+        print("{}")
+        return
+    final_text = final_text or tail_text
+
+    n = open_item_count()
+    if already_fired(sid):
+        # After the session's first firing: only when there is something the brief form can act on.
+        # did_work is True here, or None (unreadable transcript → fail toward prompting).
+        if did_work is True and not DEFERRAL.search(final_text or "") and not todo_grew(sid, n):
+            print("{}")
+            return
+        text = BRIEF
+    else:
+        text = GATE
+        todo_grew(sid, n)  # record this session's baseline count
 
     # Appended to BOTH texts, because the count is the one part that can CHANGE between
     # firings — the prose is the same reminder twice, the number may not be.
-    n = open_item_count()
     if n is not None:
         text += (
             "\n\n⛔ operator-todo.md currently has %d open item(s). If that went UP this "
