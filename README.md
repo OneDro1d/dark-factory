@@ -85,7 +85,7 @@ Corollaries the skills enforce:
 | Hook | Event | Does |
 |---|---|---|
 | `df-stage-gate.py` | PreToolUse | Blocks writing a stage document unless that stage's skill actually ran |
-| `context-budget.py` | Stop | Forces a handoff before the context window is spent, deriving the window from observed evidence rather than a model lookup table |
+| `context-budget.py` | Stop, SessionStart | At SessionStart (startup, resume) records the auto-compact window the session runs under. At Stop, forces a checkpoint before the context window is spent, deriving the window from observed evidence rather than a model lookup table |
 | `df-dispatch-subagents-reminder.py` | PreToolUse | Injects the dispatch contract whenever sub-agents fan out |
 | `check-compound-bash.sh` | PreToolUse | Rejects compound/substituted shell — explicit over implicit |
 

@@ -70,6 +70,10 @@ Consequence: an unrecognised model can now cost at most ONE spurious block --
 the first time it crosses the conservative default. After that the floor is
 learned and persisted, and every later session with that model starts correct.
 
+Wiring: Stop (the gate), and SessionStart with matcher startup|resume (records the auto-compact
+window this session started with; see record_session_window). Without the SessionStart wiring
+the gate reads settings at each Stop, which is wrong for a session started before they changed.
+
 Config:
   DF_CONTEXT_GATE=off             disable entirely
   DF_CONTEXT_GATE_MODE=restart    the pre-2026-09-18 text: hand off, ask the operator to /clear
@@ -221,7 +225,10 @@ def default_threshold(window):
 
 
 def scan_transcript(transcript_path):
-    """Return (last_usage, last_real_model, max_occupancy_seen, compactions).
+    """Return (last_usage, last_real_model, max_occupancy_seen, compactions, epoch_max).
+
+    epoch_max = the largest occupancy since the last compaction. A session that held more than an
+    auto-compact window without compacting was not running under that window.
 
     compactions = the number of `compact_boundary` system records: the compaction EPOCH. The
     gate fires once per epoch, so it re-arms after each compaction and never repeats inside one.
@@ -234,6 +241,7 @@ def scan_transcript(transcript_path):
     usage = None
     model = None
     max_occ = 0
+    epoch_max = 0
     compactions = 0
     with open(transcript_path, errors="replace") as fh:
         for line in fh:
@@ -242,6 +250,7 @@ def scan_transcript(transcript_path):
                     rec = json.loads(line)
                     if rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
                         compactions += 1
+                        epoch_max = 0
                 except ValueError:
                     pass
                 continue
@@ -265,7 +274,9 @@ def scan_transcript(transcript_path):
             occ = occupancy(u)
             if occ > max_occ:
                 max_occ = occ
-    return usage, model, max_occ, compactions
+            if occ > epoch_max:
+                epoch_max = occ
+    return usage, model, max_occ, compactions, epoch_max
 
 
 def _acw_value(v):
@@ -309,6 +320,56 @@ def auto_compact_window(cwd):
     return None, ""
 
 
+def _session_key(event):
+    return str(event.get("session_id") or "nosession").replace("/", "_")
+
+
+def _record_path(event):
+    return os.path.join(STATE_DIR, "%s.window.json" % _session_key(event))
+
+
+def record_session_window(event):
+    """SessionStart: record the auto-compact window THIS session runs under. Never blocks.
+
+    ⛔ ADDED 2026-09-18. The harness reads autoCompactWindow once, when the process starts; a
+    settings change reaches only sessions started after it (measured: a session started before the
+    change still compacted at 967k). Read from disk at each Stop, the new value was applied to old
+    sessions too, and one at ~350k was told "116% of the window". So the value is taken at the two
+    moments the harness itself reads settings -- a new process (startup) and a resumed one (resume)
+    -- and kept for the session. compact and clear run in the same process with the same settings,
+    so they keep the record that is already there and never write one.
+    """
+    if event.get("source") not in ("startup", "resume"):
+        return
+    try:
+        acw, src = auto_compact_window(event.get("cwd"))
+        os.makedirs(STATE_DIR, exist_ok=True)
+        path = _record_path(event)
+        with open(path + ".tmp", "w") as fh:
+            json.dump({"autoCompactWindow": acw, "source": src or "none configured",
+                       "event": event.get("source")}, fh)
+        os.replace(path + ".tmp", path)
+    except Exception:
+        pass
+
+
+def session_auto_compact_window(event):
+    """(tokens or None, source) for this session: the SessionStart record first, else settings.
+
+    A record of None means no auto-compact window was configured when the session started, so the
+    model window applies, whatever the settings say now. No record (the session started before this
+    code was installed) falls back to reading settings now, which is right unless they changed.
+    """
+    try:
+        with open(_record_path(event)) as fh:
+            rec = json.load(fh)
+        acw = rec.get("autoCompactWindow")
+        return (_acw_value(acw) if acw is not None else None), \
+            "recorded at session %s: %s" % (rec.get("event", "start"), rec.get("source", "?"))
+    except Exception:
+        return auto_compact_window(event.get("cwd"))
+
+
 def resolve_window(model, max_occ):
     """(window, human-readable source). Evidence outranks the lookup table."""
     override = os.environ.get("DF_CONTEXT_WINDOW")
@@ -336,6 +397,10 @@ def main():
     except Exception:
         allow()
 
+    if event.get("hook_event_name") == "SessionStart":
+        record_session_window(event)
+        allow()
+
     # A Stop hook that already blocked is re-entered with this flag set.
     # Never block twice in a row -- that is an infinite loop, not a policy.
     if event.get("stop_hook_active"):
@@ -346,7 +411,7 @@ def main():
         allow()
 
     try:
-        usage, model, max_occ, compactions = scan_transcript(transcript)
+        usage, model, max_occ, compactions, epoch_max = scan_transcript(transcript)
     except Exception:
         allow()
     if not usage:
@@ -360,9 +425,14 @@ def main():
         if window <= 0:
             allow()
         # Compaction fires at the AUTO-COMPACT window when one is set below the model window, so
-        # that is the window this gate must scale to (see auto_compact_window).
+        # that is the window this gate must scale to (see auto_compact_window) -- the value THIS
+        # session started with (see record_session_window). A session that already held more than
+        # that window since its last compaction is not running under it, so the value is disproven
+        # and ignored: the same evidence rule as the observed floor.
         if not os.environ.get("DF_CONTEXT_WINDOW"):
-            acw, acw_src = auto_compact_window(event.get("cwd"))
+            acw, acw_src = session_auto_compact_window(event)
+            if acw and epoch_max > acw:
+                acw = None
             if acw and acw < window:
                 source = "%s; compaction at %d (%s)" % (source, acw, acw_src)
                 window = acw

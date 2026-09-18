@@ -45,6 +45,16 @@
             "command": "__HOME__/.claude/hooks/agent-notepad/hooks/session-start.sh --part notes"
           }
         ]
+      },
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/context-budget.py",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
