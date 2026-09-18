@@ -59,6 +59,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 
 GATE = """⛔ BEFORE YOU STOP — the completeness gate.
 
@@ -229,9 +230,13 @@ def last_turn(transcript):
         return None, ""
 
 
-def _baseline_path(session_id):
+def _state_path(session_id, ext):
     d = os.path.join(tempfile.gettempdir(), "claude-completeness-gate")
-    return os.path.join(d, re.sub(r"[^A-Za-z0-9_.-]", "_", session_id) + ".todo")
+    return os.path.join(d, re.sub(r"[^A-Za-z0-9_.-]", "_", session_id) + ext)
+
+
+def _baseline_path(session_id):
+    return _state_path(session_id, ".todo")
 
 
 def todo_grew(session_id, n):
@@ -249,6 +254,40 @@ def todo_grew(session_id, n):
             return n > int(f.read().strip() or n)
     except Exception:
         return False
+
+
+# ---- THROTTLE: at most one brief reminder per BRIEF_INTERVAL_S per session -----------------------
+# ⛔ MEASURED 2026-09-18 (gate recount after the "no work, no firing" change above): fleet forced
+# turns fell 2.8 → 0.5 per 100 replies, but ONE session went UP, 1.1 → 1.7. Its replies were status
+# lines naming the blocker ("waiting on the merge"), which the DEFERRAL regex matches — so the brief
+# form fired on every working turn and asked for the list the reply had just given. Rewording the
+# regex would be gamed by wording; a time budget cannot be. This is CFEngine's `ifelapsed`: a
+# promise already checked is not re-checked until the interval has passed.
+# ⚠️ The throttle applies ONLY to the brief form. The full gate still fires on a session's first
+# working turn, whatever the clock says.
+# ⚠️ FAILS TOWARD PROMPTING, like everything else here: if the stamp cannot be read or written, the
+# reminder fires.
+BRIEF_INTERVAL_S = 30 * 60
+
+
+def brief_due(session_id, now=None):
+    """True if no brief reminder fired for this session in the last BRIEF_INTERVAL_S; records the
+    firing when it is due. Never raises; any error → True."""
+    if not session_id:
+        return True
+    try:
+        now = time.time() if now is None else now
+        p = _state_path(session_id, ".brief")
+        if os.path.exists(p):
+            with open(p) as f:
+                last = float(f.read().strip() or 0)
+            if 0 <= now - last < BRIEF_INTERVAL_S:
+                return False
+        with open(p, "w") as f:
+            f.write(str(now))
+        return True
+    except Exception:
+        return True
 
 
 def main():
@@ -324,6 +363,9 @@ def main():
         # After the session's first firing: only when there is something the brief form can act on.
         # did_work is True here, or None (unreadable transcript → fail toward prompting).
         if did_work is True and not DEFERRAL.search(final_text or "") and not todo_grew(sid, n):
+            print("{}")
+            return
+        if not brief_due(sid):
             print("{}")
             return
         text = BRIEF

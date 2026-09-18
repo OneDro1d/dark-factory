@@ -342,6 +342,47 @@ J7="$(fire "noread-$$" "$TX/does-not-exist.jsonl")"
 case "$J7" in *"OPERATOR-ONLY"*) ok "J: an unreadable transcript still fires (absent evidence is not text-only)";;
   *) bad "J: unreadable transcript fires" "$J7";; esac
 
+echo "=== K: THROTTLE — at most one brief reminder per 30 minutes per session ==="
+# ⛔ MEASURED 2026-09-18: after J's change the fleet fell 2.8 → 0.5 forced turns per 100 replies,
+# but one session ROSE 1.1 → 1.7 — its status replies named the blocker ("waiting on the merge"),
+# which the deferral regex matches, so every working turn drew the brief form. ifelapsed-style fix.
+KS="throttle-$$"
+fire "$KS" "$TX/work1.jsonl" >/dev/null                                  # full gate
+K1="$(fire "$KS" "$TX/work3.jsonl")"
+case "$K1" in *"already run this session"*) ok "K: the first deferring turn after the gate gets the brief";;
+  *) bad "K: first brief fires" "$K1";; esac
+K2="$(fire "$KS" "$TX/work3.jsonl")"
+[ "$K2" = "{}" ] && ok "K: a second deferring turn inside 30 minutes forces NO turn" \
+                 || bad "K: brief throttled inside the window" "$(printf '%s' "$K2" | head -c 120)"
+# the page growing does NOT bypass the budget: the approved rule is one brief per 30 min, full stop
+PK="throttle-page-$$"; mkdir -p "$TMPDIR/pk"; printf -- '- [ ] one\n' > "$TMPDIR/pk/operator-todo.md"
+( cd "$TMPDIR/pk" && fire "$PK" "$TX/work1.jsonl" >/dev/null )
+( cd "$TMPDIR/pk" && fire "$PK" "$TX/work3.jsonl" >/dev/null )
+printf -- '- [ ] one\n- [ ] two\n' > "$TMPDIR/pk/operator-todo.md"
+K3="$( cd "$TMPDIR/pk" && fire "$PK" "$TX/work2.jsonl" )"
+[ "$K3" = "{}" ] && ok "K: page growth inside the window is throttled too" || bad "K: page growth throttled" "$K3"
+# after the interval it is due again: backdate the stamp 31 minutes
+STAMP="$TMPDIR/claude-completeness-gate/$KS.brief"
+if [ -f "$STAMP" ]; then ok "K: the throttle stamp is keyed by session under TMPDIR"
+else bad "K: throttle stamp location" "no $STAMP"; fi
+python3 -c 'import sys,time; open(sys.argv[1],"w").write(str(time.time()-31*60))' "$STAMP"
+K4="$(fire "$KS" "$TX/work3.jsonl")"
+case "$K4" in *"already run this session"*) ok "K: after 30 minutes the brief is due again";;
+  *) bad "K: brief due after the interval" "$K4";; esac
+# another session has its own budget
+K5="$( fire "throttle-other-$$" "$TX/work1.jsonl" >/dev/null; fire "throttle-other-$$" "$TX/work3.jsonl" )"
+case "$K5" in *"already run this session"*) ok "K: the budget is per session";;
+  *) bad "K: per-session budget" "$K5";; esac
+# fail toward prompting: an unreadable stamp means the brief fires
+printf 'garbage' > "$STAMP"
+K6="$(fire "$KS" "$TX/work3.jsonl")"
+case "$K6" in *"already run this session"*) ok "K: a corrupt stamp fails toward prompting";;
+  *) bad "K: corrupt stamp fires" "$K6";; esac
+# the full gate is never throttled: a new session's first working turn always gets it
+K7="$(fire "throttle-fresh-$$" "$TX/work3.jsonl")"
+case "$K7" in *"OPERATOR-ONLY blocker"*) ok "K: the full gate ignores the throttle";;
+  *) bad "K: full gate unthrottled" "$K7";; esac
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"
