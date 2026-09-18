@@ -31,6 +31,15 @@ A sub-agent is an **autonomous promiser**: it cannot be coerced, it lives in its
 1. **State the promise precisely** — the exact deliverable AND the **unforgeable evidence** it must return. Not "do X and tell me it's done", but "return the file path, the test exit code, the page ID, the commit SHA, the quoted result". Evidence the agent can fabricate (its own "I did it") is worthless.
 2. **Blind synthesis for build tasks** — give it the **spec**, not the acceptance/holdout cases it will be judged against; otherwise it optimises for the cases, not the spec (anti-Goodhart). Hold the acceptance evidence on the dispatcher side.
 3. **Bound it** — scope, budget/turn caps (parallel pull loops can run away), and a clear definition of done.
+   **Every promise gets a time bound, and a default when you name none: 30 minutes of wall clock,
+   or the turn cap your harness exposes if that is the only lever.** Hitting it is a named
+   outcome, **NOT KEPT: timeout** (`df-adversary-gate`), not a silent hang and not a failure of
+   the spec. A scope-only bound ("only these paths") limits *where* a promiser may act and never
+   *how long*, so it does not satisfy this step on its own. CFEngine carries the same default on
+   every promise, `expireafter`: *"a timeout to use when a promise verification may involve an
+   operation that could wait indefinitely. Default time is 120 minutes"* ([controlling frequency](https://docs.cfengine.com/docs/3.24/examples/tutorials/writing-and-serving-policy/controlling-frequency/)).
+   Ours is shorter because a sub-agent that has not converged in 30 minutes is usually
+   mis-specified, not slow.
 4. **Pin context, not just the prompt** — the agent is context + tools + runtime; specify the tools/files it needs so its result is reproducible.
 
 ## The dispatch brief — a template you can paste
@@ -47,7 +56,22 @@ UNFORGEABLE EVIDENCE to return (your self-report alone is worthless):
 - file list with one-line purposes
 - the exact new/changed lines of <the load-bearing pieces>, quoted verbatim
 Bounds: only <paths>; no commits; no deploy or cluster access; match existing style.
+TIME BOUND: <N> minutes (default 30). Stop at the bound and return what you have,
+marked incomplete — that is reported as a timeout, not a failure.
+HANDLE: <short-id>                     (optional — only in multi-stage fan-outs)
+DEPENDS ON: <handle>, <handle>          (optional — do not start until each is KEPT or REPAIRED)
 ```
+
+**`HANDLE` / `DEPENDS ON` are for pipelines, not for every brief.** When one promise can only
+start after another has been *verified* — a repin after the merge it pins, a kit engine copy
+after the repin that moves it — name each promise and let the later one declare what it waits
+for. The dispatcher holds it until each named handle has a KEPT or REPAIRED verdict, never a
+self-report. This is CFEngine's `handle` / `depends_on` pair: *"A list of promise handles for
+promises that must have an outcome of KEPT or REPAIRED in order for the promise to be
+actuated"* ([promise types](https://docs.cfengine.com/docs/3.21/reference-promise-types.html)).
+The dependency it catches is the one that lives only in the dispatcher's head — observed
+2026-09-18, a kit repin merged without the engine regeneration that depended on it, and a
+second PR had to follow.
 
 **The dispatcher commits.** Sub-agents return work; the verified, attributable commit is the dispatcher's act, never the sub-agent's. This is not bookkeeping — it is what forces step 6 to actually happen before the work enters history.
 
@@ -57,7 +81,7 @@ Bounds: only <paths>; no commits; no deploy or cluster access; match existing st
 7. **Parallel dispatch** — each agent's result is verified independently; one agent never vouches for another. A failed/`null` result is dropped, not assumed-good.
 
 8. **The adversary gate fires on EVERY load-bearing conclusion** — anything you would act on or report to the operator, not merely what precedes an irreversible action. Dispatch is an **epistemic** check, not only context hygiene: a fresh promiser carries none of your priors, and that independence is the only reliable catch for your own confirmation bias. (`df-adversary-gate`)
-9. **A blocked or skipped check is NOT a pass.** If a sub-agent returns a conclusion without the evidence you demanded — the scan was denied, the test never ran, the command failed — the result is **UNVERIFIED**, not negative. Re-check it yourself. Never let a self-report stand in for the evidence you asked for.
+9. **A blocked or skipped check is NOT a pass.** If a sub-agent returns a conclusion without the evidence you demanded — the scan was denied, the test never ran, the command failed — the result is **UNVERIFIED**, not negative. Re-check it yourself. Never let a self-report stand in for the evidence you asked for. Record the verdict with its reason — **failed / denied / timeout / unverified** (`df-adversary-gate`, "The verdict") — because each one calls for a different next move.
 
 ## The one-line discipline
 > A sub-agent declares a promise and presents evidence; your only job as dispatcher is to (a) make the evidence unforgeable and pre-specified, and (b) verify the evidence proves the promise. Never accept the self-report.
@@ -65,6 +89,6 @@ Bounds: only <paths>; no commits; no deploy or cluster access; match existing st
 ## Quick checklist
 - [ ] Promise + the exact unforgeable evidence to return, both stated in the prompt
 - [ ] Build task? acceptance/holdout cases withheld
-- [ ] Scope + budget bounded
+- [ ] Scope + budget bounded, and a time bound (default 30 min) whose breach reads as timeout
 - [ ] On return: evidence verified (not self-report); unverified → re-dispatch or check independently
 - [ ] Tier chosen by judgment × verifiability, and resolved to a real model from the environment
