@@ -93,6 +93,31 @@ Three failure modes, each observed:
 If the work itself must survive the session, that is the unattended shape, and the supervisor
 is the answer.
 
+### Re-check a kept promise only when it could have changed
+
+This rule covers every tick, reminder and gate, not only this one. **A promise already verified
+kept is not re-checked until its state could have changed or a minimum interval has passed**,
+whichever you can measure. Re-checking it anyway produces the same answer and costs a full turn.
+CFEngine puts a lock on every promise for exactly this reason: `ifelapsed`, *"The minimum time
+(in minutes) which should have passed since the last time that promise was verified. It will not
+be executed again until this amount of time has elapsed"*, and the lock is per promise, not
+global (*"These locks do not prevent the whole of cf-agent from running, only atomic promise
+checks on the same objects"*,
+[controlling frequency](https://docs.cfengine.com/docs/3.24/examples/tutorials/writing-and-serving-policy/controlling-frequency/)).
+
+- **Prefer a state signal to a clock.** Did the turn do any work, did the queue file change, did
+  the count on the operator's page move? A reminder keyed to a change fires when it matters; a
+  timer fires on schedule whether or not anything happened.
+- **Fall back to an interval only when there is no signal.** Then choose one on purpose, and
+  never zero: an interval of zero is a re-check on every turn.
+- **When you write a new gate or tick, state its re-check condition in its first comment.**
+  "Fires after every turn" should read as the bug it is.
+
+⚠️ Measured 2026-09-18: a Stop-hook completeness gate re-checked the same promise after every
+reply, which is effectively an interval of zero. It forced 1,355 extra turns in one day, mostly
+concluding that nothing had changed. The fix (T1 #201) keys it on a state signal: the gate stays
+silent after a turn that made no tool calls.
+
 ## Maturity — be honest about what is wired
 
 - **Shipped & usable now (this package):** the autonomous loop itself — A/B/C autonomy gate, evidence gating, Promise-Theory sub-agent verification, stage docs + tickets. Runs via `dark-factory-build` + Workflow, **unsigned**, on any project today.

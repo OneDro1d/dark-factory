@@ -51,7 +51,35 @@ catches the rest. Do not let a filled-in block end the conversation.
 1. Restate the **promise** and the **pre-declared evidence standard** (acceptance criteria fixed with the task, not negotiated now).
 2. Demand the unforgeable evidence; if it's a self-report or self-produced artifact, mark **unverified**.
 3. Prefer a **mechanism** over a judgment. If the verifier is itself an agent, its verdict is also a best-effort promise — use **independence + diversity** (an adversarial panel), never one agent vouching for another.
-4. Verdict: Pass / Conditional / Fail, with the evidence cited.
+4. Verdict: an **outcome**, and for NOT KEPT a **reason**, each with the evidence cited — see below.
+
+## The verdict — say WHY a promise was not kept, because the why picks the next move
+
+"Fail" alone throws away the one fact the dispatcher needs next. CFEngine, which has run
+promise-keeping agents at fleet scale for decades, splits every outcome the same way, and warns
+that *"a promise is not simply 'OK' or 'not OK'"* ([masterfiles `results` body](https://docs.cfengine.com/docs/3.23/reference-masterfiles-policy-framework-lib-common.html)).
+
+| Outcome | Means | Label | Next move |
+|---|---|---|---|
+| **KEPT** | the state already held; no work was needed | Pass | nothing to review — say so, and do not invent a diff to look at |
+| **REPAIRED** | the work made it hold | Pass | review the change, which is what the evidence shows |
+| **NOT KEPT: failed** | the promiser tried and the evidence disproves the promise | Fail | the spec or the approach is wrong — fix that, then re-dispatch |
+| **NOT KEPT: denied** | the promiser was refused: a permission, a spend limit, a gate, a missing credential | Fail | not a quality problem — re-tier, grant, or escalate the refusal; re-running the same brief fails the same way |
+| **NOT KEPT: timeout** | it hit its time or turn bound (`df-dispatch-subagents`, step 3) | Fail | re-dispatch narrower, or with a larger bound if the size was the misjudgment |
+| **NOT KEPT: unverified** | a conclusion arrived without the evidence demanded | Fail | verify it yourself or re-dispatch with a tighter evidence ask — never read as negative |
+
+**Partly kept is Conditional.** A promise with several parts can keep some and not others; name
+the outcome of each part rather than averaging them. The label inflation rule below still
+applies: a note with a "but" in it makes the label Conditional.
+
+⚠️ The labels are unchanged on purpose — the stage gates and `df-ui-verify`'s verdict script
+emit Pass / Conditional / Fail, and those stay valid. The outcome and reason are what a verdict
+now adds, not a rename.
+
+⚠️ **denied ≠ failed, and the difference costs real money.** Observed 2026-09-18: a retrieval
+sub-agent died on the account's monthly spend limit. Read as *failed*, the obvious move is to
+tighten the brief and re-run it — on the same tier, into the same limit. Read as *denied*, the
+move is a cheaper tier, which is what worked.
 
 ## Gate the verdict itself, not only the work
 
