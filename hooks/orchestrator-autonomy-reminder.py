@@ -45,8 +45,9 @@ written in a file. Answer two questions: *what is the best decision here, and do
 need the human to make it?*
 
 Deciding whether to spend the operator's attention IS the high-value judgment, because
-attention is the only non-replenishable input. The tokens are worth it at that gate and
-nowhere else — outside this trigger, right-size the model normally.
+attention is the only non-replenishable input, so the tokens are worth it at that gate.
+Outside it, right-size by your lane's model-tiering table, which is the one home for which
+work earns which tier (it may reserve the top tier for genuinely hard work too).
 
 A question whose answer is obtainable — memory, the codebase, the internet, the docs — was
 never the operator's. Resolve it, decide, and log what you decided.

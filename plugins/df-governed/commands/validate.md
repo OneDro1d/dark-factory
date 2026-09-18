@@ -20,6 +20,22 @@ Work the tasks below in order. Record each as **PASS**, **FAIL**, or **UNKNOWN**
 means you could not probe it, not that it passed. Quote commands and output **verbatim**;
 never paraphrase a denial or an error. **Fix nothing until the end.**
 
+⛔ **NEVER PRINT A SECRET — and a whole-environment dump IS printing one.** This session's
+transcript is written to disk and kept. On a Coder workspace the pod env carries live hub PATs
+and the agent token, and `~/.mcp.json` can hold literal bearers. MEASURED on the homelab box
+(2026-09-11 and twice on 2026-09-18): three validate runs each opened with a bare `env`, and
+one ran `claude mcp get onedroid`. Every one of those runs copied a live token into its
+transcript. So:
+- Do **not** run `env`, `printenv` with no argument, `set`, `export -p`, `declare -x`,
+  `claude mcp get …`, or `cat`/`jq` on `~/.mcp.json`, `~/.claude.json` or any rendered MCP config.
+- Read **one named, non-secret variable** at a time, e.g. `printenv LOOM_LOCK` or
+  `printenv CLAUDE_CODE_ENTRYPOINT`. To learn whether a secret is SET, test it without echoing
+  it: `[ -n "${SYNAPSE_ONEDROID_PAT:-}" ] && echo set`.
+- For MCP, `claude mcp list` (names and status) is enough. To show a config's shape, print
+  its keys and URLs, never a header value.
+If you print a secret by mistake, say so in the report's Notes for the operator: name the
+variable and the transcript path, and never the value.
+
 ---
 
 ## Part 1 — the parts of `VALIDATE-INSTALL.md` that still apply from inside this notepad
