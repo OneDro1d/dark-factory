@@ -153,6 +153,10 @@ if [ -f "$SCRIPTS/mcp-profile-config.py" ]; then
     # worker can tell; this one cannot.
     log "FATAL profile '$PROFILE': its required hub references an unset env var (named above)."
     log "FATAL Export it in the environment that starts df-mission, then start again."
+    # The EXIT trap is set further down: clean up by hand, or the pidfile reads as stale
+    # and an empty temp dir is left behind (HoP review of #198).
+    rm -f "$PIDFILE"
+    rm -rf "$MCPDIR"
     exit 6
   else
     # ⚠️ LOUD, NEVER SILENT. Running on with no MCP is a legitimate choice for a mission that
