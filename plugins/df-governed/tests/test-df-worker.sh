@@ -604,6 +604,25 @@ DD1_OTHER1="$(printf '%s\n' "$ARGVDD1" | grep -Fxc -- 'mcp__hub_b__*')"
 [ "$DD1_OTHER1" = "1" ] && ok "DD1d a non-duplicated plan entry still appears exactly once" \
   || bad "DD1d a non-duplicated plan entry still appears exactly once" "count=$DD1_OTHER1"
 
+echo ""
+# ── case HF: the profile's required hub cannot authenticate (mcp-profile-config exit 6) ──
+# Measured 2026-09-18: a worker whose only hub read an unset ${VAR} got no tools and reported a
+# FABRICATED success. The launcher must refuse, and say the fix is the ENVIRONMENT (not the
+# lockfile, which the generic refusal would send the operator to).
+STUB_HF="$WORK/stub-hub-fatal.py"
+cat > "$STUB_HF" <<'PY'
+#!/usr/bin/env python3
+import sys
+print("mcp-profile-config: REFUSING — required hub(s) 'x' would fail auth: unset env var(s) HF_VAR", file=sys.stderr)
+sys.exit(6)
+PY
+OUTHF="$(run_dry env WORKER_MCP_PROFILE=tp MCP_PROFILE_CONFIG="$STUB_HF" "$WORKER" dev 12345 "p" --dry-run 2>&1)"; RCHF=$?
+if [ "$RCHF" -ne 0 ]; then ok "HF1 exit 6 from the tool refuses the launch"; else bad "HF1 refuses" "rc=0"; fi
+contains "HF2 the refusal says the required hub cannot authenticate" "required hub cannot authenticate" "$OUTHF"
+contains "HF3 the refusal points at the environment"                  "Export the var"                   "$OUTHF"
+contains "HF4 the tool's own line naming the var still shows"         "HF_VAR"                           "$OUTHF"
+noline   "HF5 no argv is printed for a refused launch"                "---- argv ----"                   "$OUTHF"
+
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
 [ "$FAIL" -eq 0 ]
