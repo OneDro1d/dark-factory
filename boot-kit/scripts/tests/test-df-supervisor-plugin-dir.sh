@@ -129,6 +129,22 @@ contains "S9 the loop warns that iterations are ungoverned" "UNGOVERNED" "$OUT4"
 if [ -s "$K4/.df/missions/M-TEST/supervisor.log" ]; then ok "S10 the warning is in the supervisor log"
 else bad "S10 the warning is in the supervisor log" "log empty"; fi
 
+# ── case 5: mcp-profile-config exits 6 (the profile's required hub is dead) ──────────────
+# The supervisor must STOP (a worker with no working hub reports fabricated success) and
+# leave nothing behind: no pidfile, no temp dir (HoP review of #198).
+K5="$WORK/kit5"; mk_kit "$K5" plugin
+printf '#!/usr/bin/env python3\nimport sys\nprint("mcp-profile-config: REFUSING — required hub(s) x: unset env var(s) S_VAR", file=sys.stderr)\nsys.exit(6)\n' \
+  > "$K5/boot-kit/scripts/mcp-profile-config.py"
+mkdir -p "$WORK/tmp5"
+: > "$WORK/argv.txt"
+OUT5="$(TMPDIR="$WORK/tmp5" run_sup "$K5")"; RC5=$?
+if [ "$RC5" -eq 6 ]; then ok "S11 exit 6 from mcp-profile-config stops the supervisor (rc 6)"
+else bad "S11 exit 6 stops the supervisor" "rc=$RC5: $OUT5"; fi
+if [ -s "$WORK/argv.txt" ]; then bad "S12 no iteration is launched" "claude ran"; else ok "S12 no iteration is launched"; fi
+contains "S13 the log says FATAL" "FATAL profile" "$OUT5"
+if [ -e "$K5/.df/missions/M-TEST/pid" ]; then bad "S14 no pidfile is left behind" "pid exists"; else ok "S14 no pidfile is left behind"; fi
+if [ -z "$(ls -A "$WORK/tmp5")" ]; then ok "S15 no temp dir is left behind"; else bad "S15 no temp dir is left behind" "$(ls -A "$WORK/tmp5")"; fi
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
