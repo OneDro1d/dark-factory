@@ -13,6 +13,9 @@
 #   F  DF_CONTEXT_THRESHOLD still overrides; stop_hook_active and DF_CONTEXT_GATE=off allow
 # Hermetic: HOME points at a temp dir, so the learned-window and marker state never touch ~.
 #
+# Engram is the memory store the checkpoint text names (case A). What it is and how to reach it
+# is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
+#
 # Run: bash boot-kit/scripts/tests/test-context-budget.sh      Exit 0 = all pass.
 set -uo pipefail
 
