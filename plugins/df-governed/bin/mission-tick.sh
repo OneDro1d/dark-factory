@@ -51,6 +51,18 @@ newest_session_mtime() {   # args: notepad, owner id. prints an epoch-seconds mt
 tick_once() {
   local notepad f id iso now mt mins owner me sm age_h stale
   notepad="$(find_notepad)" || return 0
+
+  # A notepad can opt out of this monitor entirely by placing a marker file at
+  # .df/mission-tick.off (contents ignored — presence is the whole signal, generic on
+  # purpose: no persona/estate/host it means anything about). Say so on STDERR only and
+  # return, never exit: every STDOUT line from this Monitor is a wake-up event for the
+  # session, so an opted-out notepad must produce zero stdout, and exiting the loop could
+  # itself surface as a completion notification.
+  if [ -f "$notepad/.df/mission-tick.off" ]; then
+    printf 'mission-tick: opted out by %s/.df/mission-tick.off\n' "$notepad" >&2
+    return 0
+  fi
+
   now="$(date +%s)"
   for f in "$notepad"/.df/missions/*/state; do
     [ -f "$f" ] || continue

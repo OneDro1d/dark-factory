@@ -15,6 +15,15 @@ installer links on PATH directly, and a second copy of it under a plugin would b
 failure this repo keeps finding. The list above is the truth; the invariant tests, not this
 prose, are what hold it.
 
+A notepad opts out of `mission-tick.sh` entirely by placing a marker file at
+`.df/mission-tick.off` (contents are ignored — presence is the whole signal). On finding it,
+the script says so once on STDERR (`mission-tick: opted out by <notepad>/.df/mission-tick.off`)
+and returns from that tick — it does not `exit`, so the loop keeps running silently on the next
+sleep interval. It never writes STDOUT for an opted-out notepad, because every STDOUT line from
+this Monitor is a wake-up event for the session that armed it. The marker is generic: it names
+no persona, estate, person, host, or machine, and means only "this notepad does not want
+mission ticks."
+
 This directory must never become a copy of the engine directory itself: on the machine this
 plugin's design was measured against, the engine's own `boot-kit/scripts/` holds eleven other
 files, including `verify-kit.sh` and `sync-check.sh`, plus the maintainer's real, gitignored
