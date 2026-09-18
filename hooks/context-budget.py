@@ -170,7 +170,8 @@ Do these now, then carry on with the work you were doing:
   2. Update NOTES.md (goal, last decisions, next action at the TOP -- the top is what is restored)
      and commit both in the same commit. If a mission is running, update its map/ticket too.
   3. Save anything cross-session-valuable to the memory store (Engram) -- decisions, patterns,
-     gotchas -- routed by the domain of the content.
+     gotchas, and a session summary (kind=session) if the session did meaningful work -- routed
+     by the domain of the content.
   4. Keep working. Do NOT stop, do NOT ask the operator to /clear or restart: after compaction the
      SessionStart(compact) restore re-injects the handoff and NOTES.md, and running Monitor
      tasks and CronCreate jobs survive compaction.
@@ -267,6 +268,47 @@ def scan_transcript(transcript_path):
     return usage, model, max_occ, compactions
 
 
+def _acw_value(v):
+    """autoCompactWindow / CLAUDE_CODE_AUTO_COMPACT_WINDOW: a plain integer, clamped like the harness."""
+    try:
+        n = int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+    return max(100000, min(1000000, n))
+
+
+def auto_compact_window(cwd):
+    """(tokens, source) of the configured AUTO-COMPACT window, or (None, "").
+
+    ⛔ ADDED 2026-09-18. With `autoCompactWindow: 300000` a 1M-window session compacts at ~300k,
+    so a threshold scaled to the MODEL window (92% of 1M = 920k) is never reached and the
+    checkpoint never fires before compaction. The window the gate must scale to is the one
+    compaction uses. Precedence is the harness's own: the env var, then managed, project-local,
+    project and user settings (docs: settings-reference#autocompactwindow, env-vars).
+    """
+    env = os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+    if env and _acw_value(env):
+        return _acw_value(env), "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+    candidates = ["/etc/claude-code/managed-settings.json"]
+    d = os.path.abspath(cwd or os.getcwd())
+    for _ in range(12):                       # project settings: walk up from the session's cwd
+        candidates += [os.path.join(d, ".claude", "settings.local.json"),
+                       os.path.join(d, ".claude", "settings.json")]
+        if os.path.dirname(d) == d:
+            break
+        d = os.path.dirname(d)
+    candidates.append(os.path.join(os.path.expanduser("~"), ".claude", "settings.json"))
+    for p in candidates:
+        try:
+            with open(p) as fh:
+                v = (json.load(fh) or {}).get("autoCompactWindow")
+            if v is not None and _acw_value(v):
+                return _acw_value(v), "autoCompactWindow in %s" % p
+        except Exception:
+            continue
+    return None, ""
+
+
 def resolve_window(model, max_occ):
     """(window, human-readable source). Evidence outranks the lookup table."""
     override = os.environ.get("DF_CONTEXT_WINDOW")
@@ -317,6 +359,13 @@ def main():
         window, source = resolve_window(model, max_occ)
         if window <= 0:
             allow()
+        # Compaction fires at the AUTO-COMPACT window when one is set below the model window, so
+        # that is the window this gate must scale to (see auto_compact_window).
+        if not os.environ.get("DF_CONTEXT_WINDOW"):
+            acw, acw_src = auto_compact_window(event.get("cwd"))
+            if acw and acw < window:
+                source = "%s; compaction at %d (%s)" % (source, acw, acw_src)
+                window = acw
         env_threshold = os.environ.get("DF_CONTEXT_THRESHOLD")
         threshold = float(env_threshold) if env_threshold else default_threshold(window)
     except ValueError:

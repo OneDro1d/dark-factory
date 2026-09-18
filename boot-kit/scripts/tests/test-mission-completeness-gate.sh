@@ -288,6 +288,60 @@ else
   bad "I: a non-UTF-8 page still exits 0" "non-zero exit would block the turn"
 fi
 
+echo "=== J: COST — never force a turn after a turn that did no work ==="
+# ⛔ MEASURED 2026-09-18 (2.1.276): additionalContext on Stop makes the model take another turn,
+# like decision:block. Fleet-wide that day this gate forced 1,355 turns (~807M cache-read tokens,
+# ~$390), mostly "nothing has changed" after a reply that made no tool calls. These cases pin
+# the quiet path, and that the nudge still reaches a turn with real deferred work.
+TX="$TMPDIR/tx"; mkdir -p "$TX"
+# transcripts: a real prompt, then the assistant's turn
+mk_text_only() { printf '%s\n' \
+  '{"type":"user","message":{"role":"user","content":"status?"}}' \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"Nothing has changed; all blocked on the operator."}]}}' > "$1"; }
+mk_work() { # <file> <final text>
+  printf '%s\n' \
+  '{"type":"user","message":{"role":"user","content":"fix it"}}' \
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/x"}}]}}' \
+  '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}' > "$1"
+  printf '{"type":"assistant","message":{"content":[{"type":"text","text":"%s"}]}}\n' "$2" >> "$1"; }
+fire() { printf '{"session_id":"%s","transcript_path":"%s"}' "$1" "$2" | scrub_dispatch_env python3 "$HOOK" 2>/dev/null; }
+
+mk_text_only "$TX/text.jsonl"
+J1="$(fire "cost-$$" "$TX/text.jsonl")"
+[ "$J1" = "{}" ] && ok "J: a text-only turn forces NO turn, even the session's first" \
+                 || bad "J: a text-only turn forces NO turn" "emitted: $(printf '%s' "$J1" | head -c 120)"
+
+mk_work "$TX/work1.jsonl" "Done: edited the file and the test passes."
+J2="$(fire "cost-$$" "$TX/work1.jsonl")"
+case "$J2" in *"OPERATOR-ONLY blocker"*) ok "J: the first turn that DID work gets the full gate";;
+  *) bad "J: the first working turn gets the full gate" "$J2";; esac
+
+mk_work "$TX/work2.jsonl" "Edited the second file and the suite is green."
+J3="$(fire "cost-$$" "$TX/work2.jsonl")"
+[ "$J3" = "{}" ] && ok "J: a later working turn with no deferral and no new todo forces NO turn" \
+                 || bad "J: later working turn without deferral stays quiet" "$(printf '%s' "$J3" | head -c 120)"
+
+mk_work "$TX/work3.jsonl" "Fixed the parser. Next step: the migration is left for a separate PR."
+J4="$(fire "cost-$$" "$TX/work3.jsonl")"
+case "$J4" in *"already run this session"*) ok "J: a working turn that DEFERS work still gets the reminder";;
+  *) bad "J: deferral still nudged" "$J4";; esac
+
+J5="$(fire "cost-$$" "$TX/text.jsonl")"
+[ "$J5" = "{}" ] && ok "J: a text-only turn after firings stays quiet" || bad "J: text-only after firings" "$J5"
+
+# the operator page growing is the MEASURED signal, and it outranks the wording of the reply
+PG="$TMPDIR/pg"; mkdir -p "$PG"; printf -- '- [ ] one\n' > "$PG/operator-todo.md"
+( cd "$PG" && fire "grow-$$" "$TX/work1.jsonl" >/dev/null )            # first firing: baseline 1
+printf -- '- [ ] one\n- [ ] two\n' > "$PG/operator-todo.md"
+J6="$( cd "$PG" && fire "grow-$$" "$TX/work2.jsonl" )"
+case "$J6" in *"2 open item(s)"*) ok "J: a working turn that GREW the operator page is nudged, whatever it says";;
+  *) bad "J: page growth nudges" "$J6";; esac
+
+# fail toward prompting: an unreadable transcript cannot prove the turn was text-only
+J7="$(fire "noread-$$" "$TX/does-not-exist.jsonl")"
+case "$J7" in *"OPERATOR-ONLY"*) ok "J: an unreadable transcript still fires (absent evidence is not text-only)";;
+  *) bad "J: unreadable transcript fires" "$J7";; esac
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"
