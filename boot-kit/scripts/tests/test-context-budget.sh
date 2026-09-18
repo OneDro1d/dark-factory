@@ -137,6 +137,51 @@ OUT="$(gatecwd sG4 "$W/g2.jsonl" "$W/notepad/sub" CLAUDE_CODE_AUTO_COMPACT_WINDO
 blocked "$OUT" && ok "G: CLAUDE_CODE_AUTO_COMPACT_WINDOW outranks the settings files" || bad "G: env outranks settings" "$OUT"
 rm -f "$W/home/.claude/settings.json"
 
+echo "=== H: the window a session STARTED with, not the one on disk now ==="
+# ⛔ 2026-09-18: the harness reads autoCompactWindow once, at process start. Sessions started before
+# the settings changed to 300k still compact at ~967k, and a gate reading settings at each Stop told
+# one at ~350k "116% of the window". SessionStart(startup|resume) now records the value per session.
+start() { local s="$1" src="$2"
+  printf '{"hook_event_name":"SessionStart","session_id":"%s","source":"%s","cwd":"%s"}' "$s" "$src" "$W/plain" \
+    | env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW HOME="$W/home" python3 "$GATE"; }
+# H1: started with no autoCompactWindow (1M model window, compacts at ~967k); settings now say 300k
+OUT="$(start sH1 startup)"
+[ "$OUT" = "{}" ] && ok "H: SessionStart prints {} (never blocks)" || bad "H: SessionStart prints {}" "$OUT"
+[ -f "$W/home/.claude/state/context-budget/sH1.window.json" ] && ok "H: SessionStart records the window" \
+  || bad "H: SessionStart records the window" "no record"
+printf '{"autoCompactWindow": 300000}\n' > "$W/home/.claude/settings.json"
+transcript "$W/h1.jsonl" claude-opus-5 280000
+OUT="$(gate sH1 "$W/h1.jsonl")"
+blocked "$OUT" && bad "H: started at 1M, settings now 300k: 280k (93% of 300k) stays quiet" "$(reason "$OUT")" \
+               || ok "H: started at 1M, settings now 300k: 280k (93% of 300k) stays quiet"
+transcript "$W/h1b.jsonl" claude-opus-5 350000
+OUT="$(gate sH1b "$W/h1b.jsonl")"
+blocked "$OUT" && bad "H: no record, 350k held under a 300k setting: the setting is disproven, no fire" "$(reason "$OUT")" \
+               || ok "H: no record, 350k held under a 300k setting: the setting is disproven, no fire"
+# H2: a fresh session started under 300k fires as today
+OUT="$(start sH2 startup)"
+transcript "$W/h2.jsonl" claude-opus-5 250000
+OUT="$(gate sH2 "$W/h2.jsonl")"
+blocked "$OUT" && ok "H: fresh session at 300k: 250k blocks as today" || bad "H: fresh session at 300k blocks" "$OUT"
+case "$(reason "$OUT")" in *"recorded at session startup"*) ok "H: the reason names the recorded source";;
+  *) bad "H: names the recorded source" "$(reason "$OUT")";; esac
+# H3: compact and clear keep the record; a later settings change does not reach the session
+OUT="$(start sH3 startup)"
+printf '{"autoCompactWindow": 600000}\n' > "$W/home/.claude/settings.json"
+OUT="$(start sH3 compact)"
+transcript "$W/h3.jsonl" claude-opus-5 250000
+OUT="$(gate sH3 "$W/h3.jsonl")"
+blocked "$OUT" && ok "H: settings moved to 600k after start, compact did not overwrite: 250k still blocks" \
+               || bad "H: the record survives compact and a settings change" "$OUT"
+# H4: resume re-reads settings, as the harness does
+OUT="$(start sH4 startup)"
+printf '{"autoCompactWindow": 300000}\n' > "$W/home/.claude/settings.json"
+OUT="$(start sH4 resume)"
+transcript "$W/h4.jsonl" claude-opus-5 250000
+OUT="$(gate sH4 "$W/h4.jsonl")"
+blocked "$OUT" && ok "H: resume re-records: 600k at start, 300k at resume, 250k blocks" || bad "H: resume re-records" "$OUT"
+rm -f "$W/home/.claude/settings.json"
+
 echo
 echo "passed $PASS  failed $FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"
