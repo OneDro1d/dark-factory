@@ -434,6 +434,10 @@ MCP_STDOUT="$(python3 "$MCP_TOOL" --profile "$PROFILE" --out "$MCP_CFG" \
         ${LOOM_LOCK_FOR_MCP:+--lock "$LOOM_LOCK_FOR_MCP"})"
 MCP_RC=$?
 MCP_REFUSAL="no MCP config for profile '$PROFILE' — REFUSING to launch. A worker with no tracker cannot report that it has none, so this failure would be silent by construction. Declare mcp.profiles.$PROFILE in the instance lockfile, or run df-preflight --profile $PROFILE which proposes it."
+# Exit 6: the profile's required hub (or every hub) references an env var that is unset here.
+# Measured 2026-09-18: such a worker got no tools and reported a FABRICATED success. The fix is
+# the launching environment, not the lockfile, so say that instead of the generic refusal.
+[ "$MCP_RC" -eq 6 ] && die "profile '$PROFILE': its required hub cannot authenticate — an env var it references is unset in THIS environment (named above). REFUSING to launch: a worker with no working hub reports fabricated results. Export the var where workers are launched."
 [ "$MCP_RC" -eq 0 ] || die "$MCP_REFUSAL"
 
 MCP_PLAN_LINE="$(printf '%s\n' "$MCP_STDOUT" | grep -m1 '^PLAN ')"

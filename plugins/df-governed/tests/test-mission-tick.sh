@@ -106,6 +106,16 @@ touch -t "$(date -v-2H +%Y%m%d%H%M 2>/dev/null || date -d '2 hours ago' +%Y%m%d%
 OUT="$(cd "$NP" && DF_TICK_ONCE=1 CLAUDE_CODE_SESSION_ID=sess-me DF_OWNER_STALE_HOURS=1 bash "$SCRIPT" 2>&1)"
 contains "K: fires once the owner's last write exceeds the TTL" "owner may be gone" "$OUT"
 
+echo "=== L: .df/mission-tick.off — opts the notepad out, zero stdout ==="
+NP="$T/np-l"; mknotepad "$NP"; mkstate "$NP" "M-TEST-0001" "RUNNING"
+OUT="$(cd "$NP" && DF_TICK_ONCE=1 bash "$SCRIPT" 2>&1)"
+contains "L (control): fires normally with no opt-out marker" "mission-tick:" "$OUT"
+mkdir -p "$NP/.df"
+: > "$NP/.df/mission-tick.off"
+OUT_STDOUT="$(cd "$NP" && DF_TICK_ONCE=1 bash "$SCRIPT" 2>/dev/null)"
+if [ -z "$OUT_STDOUT" ]; then ok "L: zero stdout lines once opted out"
+else bad "L: zero stdout lines once opted out" "got: $OUT_STDOUT"; fi
+
 echo "=== E: static read-only assertion — no write outside comments ==="
 # Strip full comment lines (first non-space char is #) before scanning for a write:
 # a shell redirection ('>' not preceded by '<' and not '>&' — a duplicated file descriptor,

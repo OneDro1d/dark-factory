@@ -141,8 +141,19 @@ if [ -f "$SCRIPTS/mcp-profile-config.py" ]; then
   # rather than letting the script guess wrong two directories away from the answer.
   _lockarg=()
   [ -n "${LOOM_LOCK:-}" ] && _lockarg=(--lock "$LOOM_LOCK")
-  if python3 "$SCRIPTS/mcp-profile-config.py" --profile "$PROFILE" --out "$MCP_CFG" "${_lockarg[@]}"; then
+  python3 "$SCRIPTS/mcp-profile-config.py" --profile "$PROFILE" --out "$MCP_CFG" "${_lockarg[@]}"
+  _mcp_rc=$?
+  if [ "$_mcp_rc" -eq 0 ]; then
     MCP_OK=1
+  elif [ "$_mcp_rc" -eq 6 ]; then
+    # ⛔ FATAL, unlike every other refusal here. The profile's required hub references an env
+    # var this supervisor's environment does not have, so EVERY iteration it launches would
+    # reach no hub -- and measured 2026-09-18, a worker in that state reports a fabricated
+    # success rather than a failure. Running "with no MCP" is only a safe degradation when the
+    # worker can tell; this one cannot.
+    log "FATAL profile '$PROFILE': its required hub references an unset env var (named above)."
+    log "FATAL Export it in the environment that starts df-mission, then start again."
+    exit 6
   else
     # ⚠️ LOUD, NEVER SILENT. Running on with no MCP is a legitimate choice for a mission that
     # needs none; leaving the operator to discover it from an empty tracker is not.

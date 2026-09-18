@@ -546,6 +546,19 @@ is_not_an_entry() { # <basename> -> 0 if this is debris rather than a hook/skill
 }
 NOT_AN_ENTRY_DESC=".bak* / .retired-* / .orig / .rej / dotfiles / __pycache__"
 
+# `$LIVE/skills/synced` is Claude Code's OWN harness-managed bucket for account-skill sync —
+# a REAL directory (never a symlink) of zero-byte `.bucket-<uuid>_<uuid>` markers and
+# uuid-named subdirectories that the CLI creates and repopulates itself. Not this kit's,
+# not a user's skill, nothing to declare and nothing to touch. L10 (skills only; hooks have
+# no such tree) must recognise it BY SHAPE, not by name alone, or a user's own skill that
+# happens to be called "synced" — or a symlink of that name — would go unjudged too.
+is_harness_synced_dir() { # <full path> <basename> -> 0 if Claude Code's own sync bucket
+  [ "$2" = "synced" ] || return 1
+  [ -L "$1" ] && return 1
+  [ -d "$1" ] || return 1
+  find "$1" -maxdepth 1 -name '.bucket-*' -print -quit 2>/dev/null | grep -q .
+}
+
 # ---- L8: hooks on the machine that this lock does not declare ---------------
 # THE HOOK DIRECTORY HAD NO L2. L2 asks "is every vendored dir declared?" and catches
 # unprovenanced CONTENT. Nothing asked the same question of $LIVE/hooks, so a hook could be
@@ -788,6 +801,7 @@ else
   # excluded, or the pass count means nothing.
   L10SKIP=0
   L10SEEN=0
+  L10HARNESS=0
   L10ORPHAN=""
   L10FOREIGN=""
   L10OPAQUE=""
@@ -810,6 +824,7 @@ else
     [ -n "$f" ] || continue
     b="$(basename "$f")"
     if is_not_an_entry "$b"; then L10SKIP=$((L10SKIP + 1)); continue; fi
+    if is_harness_synced_dir "$LIVE/skills/$b" "$b"; then L10HARNESS=$((L10HARNESS + 1)); continue; fi
     L10SEEN=$((L10SEEN + 1))
     # ⚠️ HERE-STRINGS, NOT PIPES. This script runs under `set -o pipefail`, and `grep -q` exits
     # on its first match — if `printf` is still writing when it does, printf takes SIGPIPE, the
@@ -871,6 +886,7 @@ else
     pass "L10 all $L10SEEN skill entry/entries are declared in this lock"
   fi
   [ "$L10SKIP" -gt 0 ] && note "L10 skipped $L10SKIP non-skill file(s) ($NOT_AN_ENTRY_DESC)"
+  [ "$L10HARNESS" -gt 0 ] && note "L10 skipped $L10HARNESS harness-managed dir(s): \$LIVE/skills/synced is Claude Code's own account-skill sync bucket, not this kit's"
 fi
 
 echo ""

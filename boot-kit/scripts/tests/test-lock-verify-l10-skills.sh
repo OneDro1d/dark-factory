@@ -90,6 +90,15 @@ localskill() { mkdir -p "$WORK/$1/local-skills/$2"; printf 'x\n' > "$WORK/$1/loc
 link() { ln -sfn "$3" "$WORK/$1/live/skills/$2"; }
 # realdir <case> <name> — hand-copied content, no symlink, no provenance
 realdir() { mkdir -p "$WORK/$1/live/skills/$2"; printf 'x\n' > "$WORK/$1/live/skills/$2/SKILL.md"; }
+# syncedbucket <case> <name> — Claude Code's OWN harness-managed sync bucket: a real
+# directory (never a symlink) holding a zero-byte `.bucket-<id>_<id>` marker and an
+# id-named subdirectory, the shape the CLI itself creates under skills/synced. The real ids
+# are UUIDs; these are deliberately NOT UUID-shaped, because the publish gate's P4 class
+# (private infrastructure identifiers) matches any UUID and fails the tree on it.
+syncedbucket() {
+  mkdir -p "$WORK/$1/live/skills/$2/account-a_skillset-b"
+  : > "$WORK/$1/live/skills/$2/.bucket-account-a_skillset-b"
+}
 
 # run <case> — echo just the [L10] block
 run() {
@@ -208,6 +217,33 @@ O="$(run d4)"
 contains "D4 orphan class present"                      "resolves INTO"          "$O"
 contains "D4 foreign class present"                     "resolving OUTSIDE"      "$O"
 contains "D4 opaque class present"                      "not a symlink"          "$O"
+
+echo "=== L10-E: skills/synced — Claude Code's OWN harness bucket, not ours to flag ==="
+
+# E1 — the marker present: L10 must skip it, and say so in a note, not go silent about it.
+mk e1 "$NONE"
+syncedbucket e1 synced
+O="$(run e1)"
+contains "E1 harness-managed synced clears the block"    "PASS"              "$O"
+absent   "E1 harness-managed synced is not DRIFT"        "DRIFT"             "$O"
+contains "E1 the skip is disclosed, not silent"          "harness-managed"   "$O"
+
+# E2 — same name, no marker: an ordinary hand-copied "synced" (a user's own skill, or a
+# half-finished sync) must still be judged OPAQUE, exactly like any other real directory.
+mk e2 "$NONE"
+realdir e2 synced
+O="$(run e2)"
+contains "E2 unmarked synced is still reported"          "synced"            "$O"
+contains "E2 unmarked synced is still OPAQUE"            "not a symlink"     "$O"
+contains "E2 unmarked synced is still DRIFT"             "DRIFT"             "$O"
+
+# E3 — same name, a SYMLINK resolving outside this instance: the name alone must never
+# exempt it — only the shape (real dir + marker) does, and a symlink is never that shape.
+mk e3 "$NONE"
+link e3 synced "$WORK/other-instance/vendor/pkg/skills/foreign-skill"
+O="$(run e3)"
+contains "E3 symlinked synced is still reported"         "synced"            "$O"
+contains "E3 symlinked synced is still classified"       "resolving OUTSIDE" "$O"
 
 echo ""
 printf 'L10 skills-direction: %d ok, %d failed\n' "$PASS" "$FAIL"
