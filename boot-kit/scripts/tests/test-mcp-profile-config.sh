@@ -28,6 +28,12 @@ absent()   { case "$3" in *"$2"*) bad "$1" "'$2' unexpectedly present" ;; *) ok 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mcpcfg.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
+# ⚠️ HERMETIC: --mcp-json defaults to $LOOM_MCP_JSON or ~/.mcp.json, the MACHINE's real hub
+# file. Measured 2026-09-18 on a Coder workspace whose ~/.mcp.json holds live hubs: M7, F4 and
+# F5 failed because this suite silently unioned them in (and wrote real tokens to $WORK). Every
+# case that wants a second source passes --mcp-json or sets LOOM_MCP_JSON itself.
+export LOOM_MCP_JSON="$WORK/no-such-mcp.json"
+
 CFG="$WORK/claude.json"
 cat > "$CFG" <<'JSON'
 {
@@ -498,9 +504,71 @@ LOCK_MJ_ONE="$WORK/mj-one.lock.json"
 printf '{"mcp": {"profiles": {"onedroid": {"kind": "hubs", "servers": ["mj-a"]}}}}\n' > "$LOCK_MJ_ONE"
 MJ5OUT="$(unset MJ_TEST_UNSET; python3 "$GATE" --profile onedroid --config "$MJCFG_EMPTY" \
           --mcp-json "$MJ_MCPJSON_VARS" --lock "$LOCK_MJ_ONE" --out "$WORK/mj5.json" 2>&1)"; MJ5RC=$?
-if [ "$MJ5RC" -eq 0 ]; then ok "MJ5 still exits 0 (warns, does not refuse)"; else bad "MJ5 exits 0" "rc=$MJ5RC: $MJ5OUT"; fi
+# mj-a is the profile's only (so required) hub: since 2026-09-18 that REFUSES, exit 6 -- see R*.
+if [ "$MJ5RC" -eq 6 ]; then ok "MJ5 exits 6 (the profile's only hub is dead)"; else bad "MJ5 exits 6" "rc=$MJ5RC: $MJ5OUT"; fi
 contains "MJ5 the unset var from --mcp-json is named" "MJ_TEST_UNSET" "$MJ5OUT"
 contains "MJ5 the hub it belongs to is named"         "mj-a"          "$MJ5OUT"
+
+echo ""
+echo "=== R: an unset var on the profile's REQUIRED hub is FATAL (exit 6) ==="
+# ⛔ MEASURED 2026-09-18 (homelab Coder): a df-worker whose only hub read an unset
+# ${SYNAPSE_..._PAT} got no tools, wrote its calls as text and reported a FABRICATED success.
+RCFG="$WORK/r-config.json"
+cat > "$RCFG" <<'JSON'
+{"mcpServers": {
+  "r-main":  {"headers": {"Authorization": "Bearer ${R_MAIN_TOKEN}"}},
+  "r-extra": {"headers": {"Authorization": "Bearer ${R_EXTRA_TOKEN}"}},
+  "r-lit":   {"headers": {"Authorization": "Bearer RLITERALSECRET"}},
+  "zz":      {"headers": {"Authorization": "Bearer ${ZZ_TOKEN}"}},
+  "zz-b":    {"headers": {"Authorization": "Bearer ZZLITERAL"}},
+  "yy-a":    {"headers": {"Authorization": "Bearer ${YY_A}"}},
+  "yy-b":    {"headers": {"Authorization": "Bearer ${YY_B}"}}
+}}
+JSON
+rlock() { printf '{"mcp": {"profiles": {"rp": %s}}}\n' "$1" > "$WORK/r.lock.json"; }
+rrun() {  # $1 out-name; env is the caller's
+  python3 "$GATE" --profile rp --config "$RCFG" --lock "$WORK/r.lock.json" --out "$WORK/$1" 2>&1
+}
+
+rlock '{"kind": "hubs", "servers": ["r-main", "r-extra"]}'
+R1="$(unset R_MAIN_TOKEN; R_EXTRA_TOKEN=x rrun r1.json)"; R1RC=$?
+if [ "$R1RC" -eq 6 ]; then ok "R1 first declared hub dead -> exit 6"; else bad "R1 exit 6" "rc=$R1RC: $R1"; fi
+if [ -f "$WORK/r1.json" ]; then bad "R1 nothing is written" "written"; else ok "R1 nothing is written"; fi
+contains "R1 the refusal names the var"      "R_MAIN_TOKEN" "$R1"
+contains "R1 the refusal names the hub"      "'r-main'"     "$R1"
+contains "R1 the refusal is marked REFUSING" "REFUSING"     "$R1"
+
+R2="$(R_MAIN_TOKEN=x R_EXTRA_TOKEN=y rrun r2.json)"; R2RC=$?
+if [ "$R2RC" -eq 0 ]; then ok "R2 every var set -> exit 0"; else bad "R2 exit 0" "rc=$R2RC: $R2"; fi
+
+R3="$(unset R_EXTRA_TOKEN; R_MAIN_TOKEN=x rrun r3.json)"; R3RC=$?
+if [ "$R3RC" -eq 0 ]; then ok "R3 only an optional hub dead -> still exit 0"; else bad "R3 exit 0" "rc=$R3RC: $R3"; fi
+contains "R3 and it WARNs, naming the optional hub" "WARN optional hub 'r-extra'" "$R3"
+
+rlock '{"kind": "hubs", "servers": ["r-main", "r-extra"], "required": ["r-extra"]}'
+R4="$(unset R_EXTRA_TOKEN; R_MAIN_TOKEN=x rrun r4.json)"; R4RC=$?
+if [ "$R4RC" -eq 6 ]; then ok "R4 explicit required: [r-extra] dead -> exit 6"; else bad "R4 exit 6" "rc=$R4RC: $R4"; fi
+R5="$(unset R_MAIN_TOKEN; R_EXTRA_TOKEN=x rrun r5.json)"; R5RC=$?
+if [ "$R5RC" -eq 0 ]; then ok "R5 explicit required overrides first-declared (r-main optional) -> exit 0"; else bad "R5 exit 0" "rc=$R5RC: $R5"; fi
+
+rlock '{"kind": "hubs", "servers": ["r-main", "r-lit"], "required": []}'
+R6="$(unset R_MAIN_TOKEN; rrun r6.json)"; R6RC=$?
+if [ "$R6RC" -eq 0 ]; then ok "R6 required: [] with one live hub -> exit 0"; else bad "R6 exit 0" "rc=$R6RC: $R6"; fi
+absent "R6 a literal token never reaches output" "RLITERALSECRET" "$R6"
+
+rlock '{"kind": "hubs", "servers": ["r-main", "r-extra"], "required": []}'
+R7="$(unset R_MAIN_TOKEN R_EXTRA_TOKEN; rrun r7.json)"; R7RC=$?
+if [ "$R7RC" -eq 6 ]; then ok "R7 every hub dead -> exit 6 even with required: []"; else bad "R7 exit 6" "rc=$R7RC: $R7"; fi
+contains "R7 the refusal says every hub" "every hub" "$R7"
+
+# The prefix fallback (no mcp.profiles entry): the hub named exactly after the profile is required.
+P1="$(unset ZZ_TOKEN; python3 "$GATE" --profile zz --config "$RCFG" --out "$WORK/p1.json" 2>&1)"; P1RC=$?
+if [ "$P1RC" -eq 6 ]; then ok "P1 prefix rule: the hub named like the profile is dead -> exit 6"; else bad "P1 exit 6" "rc=$P1RC: $P1"; fi
+absent "P1 a literal token never reaches output" "ZZLITERAL" "$P1"
+P2="$(unset YY_A; YY_B=x python3 "$GATE" --profile yy --config "$RCFG" --out "$WORK/p2.json" 2>&1)"; P2RC=$?
+if [ "$P2RC" -eq 0 ]; then ok "P2 prefix rule, no hub named like the profile, one alive -> exit 0"; else bad "P2 exit 0" "rc=$P2RC: $P2"; fi
+P3="$(unset YY_A YY_B; python3 "$GATE" --profile yy --config "$RCFG" --out "$WORK/p3.json" 2>&1)"; P3RC=$?
+if [ "$P3RC" -eq 6 ]; then ok "P3 prefix rule, every hub dead -> exit 6"; else bad "P3 exit 6" "rc=$P3RC: $P3"; fi
 
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"

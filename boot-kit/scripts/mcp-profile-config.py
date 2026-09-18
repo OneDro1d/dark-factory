@@ -35,8 +35,11 @@ which one a machine has is not knowable from here.
 ⚠️ AND IT CHECKS THE ENVIRONMENT. A supervisor launched from a stripped environment spawns
 children that boot cleanly, fail every hub call, and keep looping — the documented failure this
 estate has already paid for. Every `${VAR}` referenced is checked against os.environ and a
-missing one is REPORTED on stderr. Reported, not fatal: one dead hub should not stop a mission
-that may not need it, but nobody should have to guess afterwards.
+missing one is REPORTED on stderr. For an OPTIONAL hub it stays a report: one dead hub should
+not stop a mission that may not need it, but nobody should have to guess afterwards. For the
+profile's REQUIRED hub -- `required` in its mcp.profiles entry, else its first declared server,
+else (prefix rule) the hub named exactly after the profile -- or when EVERY hub is dead, it is
+FATAL, exit 6: see write_config() for the fabricated-success run that changed this.
 
 ⚠️ B24: THE NAME-PREFIX RULE IS A GUESS; A LOCKFILE ENTRY IS A FACT. Which servers in
 ~/.claude.json actually belong to a given estate is a MACHINE fact — recorded, when it is
@@ -71,7 +74,7 @@ Usage: mcp-profile-config.py --profile <name> --out <file>
            [--config ~/.claude.json] [--mcp-json ~/.mcp.json] [--lock <instance-lockfile>]
        mcp-profile-config.py --session-deny <out> [--lock <instance-lockfile>] [--kit-root <dir>]
 Exit 0 with either a written file OR a printed PLAN line, or non-zero with neither and a
-reason on stderr.
+reason on stderr (6 = a required hub, or every hub, references an unset env var).
 
 ⚠️ SD: --session-deny IS A DIFFERENT QUESTION FROM A WORKER PLAN. A worker plan (above) scopes
 ONE profile's launch. --session-deny answers "what must a hand-rolled, INTERACTIVE session on
@@ -302,12 +305,36 @@ def env_refs(obj):
     return found
 
 
-def write_config(keep, out_path, profile, empty_detail):
-    """Shared tail: env-var warnings, the git-worktree refusal, then the atomic 0600 write.
+def required_hubs(keep, profile, prof_entry):
+    """Which of the kept hubs this profile CANNOT run without.
+
+    A `hubs` record may say so explicitly (`"required": [...]`); otherwise its FIRST declared
+    server is the profile's primary hub. On the name-prefix fallback, the hub named exactly
+    after the profile is the primary, when there is one. Anything else is optional."""
+    if prof_entry is not None:
+        req = prof_entry.get("required")
+        if req is None:
+            req = (prof_entry.get("servers") or [])[:1]
+        return [n for n in req if n in keep]
+    return [profile] if profile in keep else []
+
+
+def write_config(keep, out_path, profile, empty_detail, required=()):
+    """Shared tail: env-var check, the git-worktree refusal, then the atomic 0600 write.
 
     Used by BOTH the mcp.profiles-declared `hubs` path and the fallback prefix-rule path --
     one place that knows how to safely materialise a set of servers, so the secret-handling
     rules (never printed, 0600, refused inside a git tree) cannot drift between the two.
+
+    ⛔ AN UNSET VAR ON A REQUIRED HUB IS FATAL (exit 6), since 2026-09-18. It used to be a
+    WARN for every hub. MEASURED 2026-09-18 on the homelab Coder: a df-worker for a profile
+    whose only hub read `Bearer ${SYNAPSE_..._PAT}` with that var UNSET booted cleanly, got no
+    tools (the hub refused auth), wrote its tool calls out as TEXT, and reported a FABRICATED
+    success ("OK onedroid-hub") -- a result indistinguishable from a real one. With the var set,
+    the same launch made the real call. "One dead hub should not stop a mission that may not
+    need it" still holds for OPTIONAL hubs, which keep the WARN. A required hub, or every hub
+    being dead, means no mission this profile runs can do its work, so nothing is launched and
+    the var NAMES (never values) are printed.
     """
     if not keep:
         # ⚠️ REFUSE rather than write an empty config. An empty {"mcpServers":{}} with
@@ -322,9 +349,21 @@ def write_config(keep, out_path, profile, empty_detail):
         gone = sorted(v for v in env_refs(s) if not os.environ.get(v))
         if gone:
             missing[n] = gone
+    dead_required = sorted(n for n in required if n in missing)
+    all_dead = len(missing) == len(keep)
+    if dead_required or all_dead:
+        why = ("required hub(s) %s" % ", ".join(repr(n) for n in dead_required)) if dead_required \
+            else "every hub for this profile"
+        print("mcp-profile-config: REFUSING — %s would fail auth: unset env var(s) %s. A worker "
+              "with no working hub gets no tools and cannot say so (measured: it reports a "
+              "fabricated success). Export the var(s) in the environment that launches workers, "
+              "or mark the hub optional with `required` in mcp.profiles.%s."
+              % (why, ", ".join(sorted({v for n in (dead_required or keep) for v in missing.get(n, [])})),
+                 profile), file=sys.stderr)
+        return 6
     for n, gone in sorted(missing.items()):
-        print("mcp-profile-config: WARN hub %r references unset env var(s): %s — it will be "
-              "configured but every call will fail auth" % (n, ", ".join(gone)),
+        print("mcp-profile-config: WARN optional hub %r references unset env var(s): %s — it "
+              "will be configured but every call will fail auth" % (n, ", ".join(gone)),
               file=sys.stderr)
 
     # ⛔ REFUSE to write a secret-bearing file into anything git tracks. See the module
@@ -540,7 +579,8 @@ def main():
                 return 2
             keep = {n: pool[n] for n in want}
             return write_config(keep, a.out, a.profile,
-                                "mcp.profiles.%s (hubs) declares no servers" % a.profile)
+                                "mcp.profiles.%s (hubs) declares no servers" % a.profile,
+                                required_hubs(keep, a.profile, prof_entry))
         if kind == "connector":
             name = want[0] if want else None
             if not name:
@@ -603,7 +643,8 @@ def main():
     keep = {n: s for n, s in pool.items() if n.startswith(a.profile)}
     return write_config(keep, a.out, a.profile,
                          "no hub in %s or %s starts with %r (have: %s)"
-                         % (a.config, a.mcp_json, a.profile, ", ".join(sorted(pool))))
+                         % (a.config, a.mcp_json, a.profile, ", ".join(sorted(pool))),
+                         required_hubs(keep, a.profile, None))
 
 
 if __name__ == "__main__":
