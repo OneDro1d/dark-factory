@@ -355,6 +355,21 @@ test_pre_compact_valid_json_outside_notepad() {
   rm -rf "$d"
 }
 
+test_pre_compact_strips_a_legacy_floor_from_notes() {
+  # A notepad written before 2026-09-18 carries the old block at its NOTES.md tail. The next
+  # compaction removes it (the floor now lives in PRECOMPACT.md) and leaves the rest untouched.
+  local base np; base="$(mktemp -d)"; np="$base/proj-legacy"
+  mkdir -p "$np"; cp -R "$TEMPLATE/." "$np/"
+  printf '# NOTES\nKEEP_ME above the floor\n<!-- pc-floor:start -->\n## PreCompact floor (old)\nOLD_FLOOR_BODY\n<!-- pc-floor:end -->\nKEEP_ME_TOO below\n' > "$np/NOTES.md"
+  run_hook "$HOOKS/pre-compact.sh" "{\"cwd\":\"$np\",\"session_id\":\"s10\",\"trigger\":\"auto\",\"transcript_path\":\"\"}"
+  assert_eq "0" "$RC" "pre-compact(legacy): exit 0"
+  assert_not_contains "$(cat "$np/NOTES.md")" "OLD_FLOOR_BODY" "legacy floor block stripped from NOTES.md"
+  assert_contains "$(cat "$np/NOTES.md")" "KEEP_ME above the floor" "content above the block kept"
+  assert_contains "$(cat "$np/NOTES.md")" "KEEP_ME_TOO below" "content below the block kept"
+  assert_file_exists "$np/PRECOMPACT.md" "PRECOMPACT.md written even with an empty transcript"
+  rm -rf "$base"
+}
+
 test_pre_compact_floors_into_notepad() {
   # build a notepad + a tiny fake transcript, then run PreCompact
   local base np tp; base="$(mktemp -d)"; np="$base/proj-demo"
@@ -371,9 +386,13 @@ test_pre_compact_floors_into_notepad() {
   assert_eq "0" "$RC" "pre-compact(notepad): exit 0"
   printf '%s' "$OUT" | jq -e '.' >/dev/null 2>&1
   assert_eq "0" "$?" "pre-compact(notepad): stdout is valid JSON"
-  # floor block landed in NOTES.md, redacted, and a journal entry exists
-  assert_contains "$(cat "$np/NOTES.md")" "PreCompact floor" "NOTES.md carries the floor block"
-  assert_not_contains "$(cat "$np/NOTES.md")" "$ghp" "floor redacts the token literal"
+  # the floor lands in PRECOMPACT.md (restored FIRST after compaction), redacted, NOT in the
+  # NOTES.md tail that the restore cuts first (moved 2026-09-18), and a journal entry exists
+  assert_file_exists "$np/PRECOMPACT.md" "pre-compact writes PRECOMPACT.md"
+  assert_contains "$(cat "$np/PRECOMPACT.md")" "PreCompact floor" "PRECOMPACT.md carries the floor"
+  assert_contains "$(cat "$np/PRECOMPACT.md")" "/code/arb/main.go" "the floor lists the files touched"
+  assert_not_contains "$(cat "$np/PRECOMPACT.md")" "$ghp" "floor redacts the token literal"
+  assert_not_contains "$(cat "$np/NOTES.md")" "pc-floor:start" "NOTES.md no longer carries a floor block"
   local jcount; jcount="$(ls "$np/sessions/"*.jsonl 2>/dev/null | wc -l | tr -d ' ')"
   assert_eq "1" "$jcount" "pre-compact appended exactly one session journal"
   assert_contains "$(cat "$np/sessions/"*.jsonl)" "precompact" "journal has a precompact milestone entry"

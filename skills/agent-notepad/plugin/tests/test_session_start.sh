@@ -67,6 +67,110 @@ print(h.hexdigest())
 PY
 }
 
+# ---- source=compact: the restore for a CONTINUING session (2026-09-18) --------------------------
+# Sized like the measured HoP case: a 5,438-byte handoff that the cold payload cut at 4,096, and a
+# NOTES.md far past its budget. The cap is measured per hook at ~10 KiB (9,900 whole, 12,000
+# externalised), so every part must stay under 10,000 bytes AND still carry the documents.
+_scaffold_big() { # prints notepad root with a 5,438-byte handoff and a ~16 KB NOTES.md
+  local np; np="$(_scaffold)"
+  mkdir -p "$np/handoffs"
+  python3 - "$np" <<'PY'
+import sys, os
+np = sys.argv[1]
+h = "# Handoff HANDOFF_HEAD_SENTINEL\n" + "".join("state line %04d of the handoff body, as written\n" % i for i in range(200))
+h = h[:5438 - 24] + "\nHANDOFF_TAIL_SENTINEL\n"
+open(os.path.join(np, "handoffs", "2026-09-18-big.md"), "w").write(h)
+n = "# NOTES\n## Next action\nNOTES_TOP_SENTINEL continue\n\n" + "".join("notes line %05d, working memory that goes on and on\n" % i for i in range(300)) + "NOTES_END_SENTINEL\n"
+open(os.path.join(np, "NOTES.md"), "w").write(n)
+PY
+  printf '%s' "$np"
+}
+_ctx() { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext // empty'; }
+_bytes() { printf '%s' "$1" | LC_ALL=C wc -c | tr -d ' '; }
+_run_compact() { # cwd [part] -> hook stdout for source=compact
+  if [ -n "${2:-}" ]; then
+    printf '{"hookEventName":"SessionStart","source":"compact","cwd":"%s"}' "$1" | bash "$HOOK" --part "$2"
+  else
+    printf '{"hookEventName":"SessionStart","source":"compact","cwd":"%s"}' "$1" | bash "$HOOK"
+  fi
+}
+
+test_compact_restores_the_handoff_whole_and_drops_the_orientation() {
+  local np out ctx; np="$(_scaffold_big)"
+  out="$(_run_compact "$np")"; ctx="$(_ctx "$out")"
+  assert_contains "$ctx" "HANDOFF_HEAD_SENTINEL" "compact: handoff head present"
+  assert_contains "$ctx" "HANDOFF_TAIL_SENTINEL" "compact: the 5,438-byte handoff arrives WHOLE (the cold path cuts it at 4,096)"
+  assert_contains "$ctx" "it arrived WHOLE" "compact: says the handoff is whole"
+  assert_contains "$ctx" "NOTES_TOP_SENTINEL" "compact: NOTES.md top present"
+  assert_not_contains "$ctx" "OTHER NOTEPADS" "compact: no machine-orientation block (the summary carries it)"
+  assert_not_contains "$ctx" "DIGEST_SENTINEL" "compact: DIGEST.md not re-injected"
+  assert_not_contains "$ctx" "MANIFEST_SENTINEL" "compact: manifest not re-injected"
+  assert_le "$(_bytes "$ctx")" 9999 "compact part 1: additionalContext under the measured ~10 KiB per-hook cap"
+  assert_eq "SessionStart" "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName')" "compact: valid SessionStart JSON"
+  rm -rf "$(dirname "$np")"
+}
+
+test_compact_part2_continues_notes_at_the_exact_byte() {
+  local np p1 p2 c1 c2 n1 n2 used total want got
+  np="$(_scaffold_big)"
+  c1="$(_ctx "$(_run_compact "$np")")"
+  c2="$(_ctx "$(_run_compact "$np" notes)")"
+  assert_contains "$c2" "part 2" "part 2 announces itself"
+  assert_le "$(_bytes "$c2")" 9999 "compact part 2: additionalContext under the per-hook cap"
+  # the NOTES bytes the two parts carry must be CONTIGUOUS: part1 [0,a) + part2 [a,b) == NOTES[0,b)
+  used="$(printf '%s' "$c1" | sed -n 's/^### NOTES.md — bytes 0-\([0-9]*\) of .*/\1/p')"
+  n2="$(printf '%s' "$c2" | sed -n 's/^### NOTES.md — bytes \([0-9]*\)-\([0-9]*\) of .*/\1 \2/p')"
+  assert_eq "$used" "${n2%% *}" "part 2 starts at the byte where part 1 stopped"
+  total="${n2##* }"
+  want="$(LC_ALL=C head -c "$total" "$np/NOTES.md"; printf x)"; want="${want%x}"
+  got="$(python3 - "$np/NOTES.md" "$c1" "$c2" <<'PY'
+import sys, re
+_, path, c1, c2 = sys.argv
+def body(ctx, hdr):
+    i = ctx.index(hdr); j = ctx.index("\n\n", i) + 2
+    k = ctx.rfind("\n[")   # the hook joins its [...] footer with ONE newline of its own
+    return ctx[j:k]
+b1 = body(c1, "### NOTES.md — bytes 0-")
+b2 = body(c2, "### NOTES.md — bytes ")
+sys.stdout.write(b1 + b2)
+sys.stdout.write("x")
+PY
+)"; got="${got%x}"
+  ASSERT_CASES=$((ASSERT_CASES + 1))
+  if [ "$want" = "$got" ]; then _pass; else _fail "parts 1+2 reproduce NOTES.md byte-for-byte up to byte $total"; fi
+  rm -rf "$(dirname "$np")"
+}
+
+test_compact_emits_the_precompact_floor_first() {
+  local np ctx fpos hpos; np="$(_scaffold_big)"
+  printf '# PreCompact floor\nFLOOR_SENTINEL recent intent\n' > "$np/PRECOMPACT.md"
+  ctx="$(_ctx "$(_run_compact "$np")")"
+  assert_contains "$ctx" "FLOOR_SENTINEL" "compact: PRECOMPACT.md floor is restored"
+  fpos="$(printf '%s' "$ctx" | grep -n 'FLOOR_SENTINEL' | head -1 | cut -d: -f1)"
+  hpos="$(printf '%s' "$ctx" | grep -n 'HANDOFF_HEAD_SENTINEL' | head -1 | cut -d: -f1)"
+  ASSERT_CASES=$((ASSERT_CASES + 1))
+  if [ -n "$fpos" ] && [ -n "$hpos" ] && [ "$fpos" -lt "$hpos" ]; then _pass
+  else _fail "floor comes before the handoff (floor line $fpos, handoff line $hpos)"; fi
+  rm -rf "$(dirname "$np")"
+}
+
+test_part_notes_is_silent_outside_compaction() {
+  local np out; np="$(_scaffold_big)"
+  out="$(printf '{"source":"startup","cwd":"%s"}' "$np" | AGENT_NOTEPAD_NO_PULL=1 bash "$HOOK" --part notes)"
+  assert_eq "{}" "$out" "--part notes on startup emits {} (the normal wiring owns startup)"
+  out="$(printf '{"source":"compact","cwd":"/"}' | bash "$HOOK" --part notes)"
+  assert_eq "{}" "$out" "--part notes outside a notepad emits {}"
+  rm -rf "$(dirname "$np")"
+}
+
+test_startup_payload_is_unchanged_by_the_compact_path() {
+  local np ctx; np="$(_scaffold_big)"
+  ctx="$(_ctx "$(printf '{"source":"startup","cwd":"%s"}' "$np" | AGENT_NOTEPAD_NO_PULL=1 bash "$HOOK")")"
+  assert_contains "$ctx" "OTHER NOTEPADS" "startup still carries the orientation block"
+  assert_contains "$ctx" "NOTEPAD RESOLVED" "startup still names the resolved notepad"
+  rm -rf "$(dirname "$np")"
+}
+
 test_hook_exists_and_executable() {
   assert_file_exists "$HOOK" "session-start.sh exists"
   ASSERT_CASES=$((ASSERT_CASES + 1))

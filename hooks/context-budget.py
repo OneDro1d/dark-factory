@@ -1,18 +1,42 @@
 #!/usr/bin/env python3
-"""context-budget — force a handoff before the context window is spent (Stop hook).
+"""context-budget — make the session CHECKPOINT before the window fills (Stop hook).
 
-WHY: native compaction summarises lossily and unpredictably. For a long autonomous
-mission the durable state should be the Mission Map + tickets + notepad, not a
-compaction summary. This gate makes the handoff happen while there is still enough
-room left to write a good one.
+WHY: native compaction summarises lossily. For a long autonomous mission the durable
+state should be the Mission Map + tickets + notepad, not a compaction summary. This gate
+makes that state current while there is still room to write it well.
+
+## Checkpoint, then CONTINUE (default since 2026-09-18) — not "hand off and /clear"
+
+MEASURED on the HoP session, 2026-09-18: one auto-compaction at 12:00:17Z took the window
+from 967,138 to 37,101 tokens in 75 s (`compact_boundary`, preTokens/postTokens), the session
+carried on, and its Monitor tasks and CronCreate jobs survived. Meanwhile this gate had fired
+at 85, 90 and 95% asking the operator for a restart that was never needed. The restart cycle
+spends the operator's attention on MECHANISM, which the estate's prime directive forbids.
+
+So the default now: refresh the handoff + NOTES.md, commit, save cross-session insight to
+the memory store, and KEEP WORKING. When auto-compaction comes, agent-notepad's
+SessionStart(source=compact) restore brings the handoff and NOTES back. The old
+"write a handoff and ask for /clear" text is kept behind DF_CONTEXT_GATE_MODE=restart.
+
+Fires ONCE per threshold crossing: once per compaction epoch (the count of
+`compact_boundary` records in the transcript), in either mode. After a compaction occupancy
+drops, and the next climb is a new crossing.
+
+The default threshold scales with the window: fire when RESERVE tokens are left, where
+RESERVE = min(80,000, 20% of the window). A 1M window auto-compacts at ~97% (967,138 measured
+above), so 92% leaves ~50k tokens to write the checkpoint; a 200k window fires at 80%.
+DF_CONTEXT_THRESHOLD=<pct> still overrides.
+
+The memory store the checkpoint names is Engram; what it is and how to reach it is
+documented in exactly one place: [Engram](../starter-kit/instance/AUTHENTICATION.md#engram)
 
 How occupancy is measured: the transcript records a `usage` block per assistant
 turn. Occupancy = input_tokens + cache_read_input_tokens + cache_creation_input_tokens
 (cache reads still occupy the window). Verified against a live session at 221,936.
 
-IMPORTANT -- a hook cannot clear the context window. This gate only forces the
-handoff to be WRITTEN. The actual /clear is the operator's action, or the next
-scheduled tick starting a fresh session.
+IMPORTANT -- a hook cannot clear or compact the context window. This gate only makes the
+checkpoint get WRITTEN. Compaction is the harness's; a /clear (restart mode only) is the
+operator's.
 
 Contract: read hook JSON on stdin; print {} to let the turn end, or
 {"decision":"block","reason":...} to force the agent to keep working with that
@@ -47,9 +71,10 @@ the first time it crosses the conservative default. After that the floor is
 learned and persisted, and every later session with that model starts correct.
 
 Config:
-  DF_CONTEXT_GATE=off        disable entirely
-  DF_CONTEXT_WINDOW=<int>    override the derived window
-  DF_CONTEXT_THRESHOLD=<pct> fire at this occupancy (default 85)
+  DF_CONTEXT_GATE=off             disable entirely
+  DF_CONTEXT_GATE_MODE=restart    the pre-2026-09-18 text: hand off, ask the operator to /clear
+  DF_CONTEXT_WINDOW=<int>         override the derived window
+  DF_CONTEXT_THRESHOLD=<pct>      fire at this occupancy (default: scaled to the window, above)
 """
 import json
 import math
@@ -135,7 +160,25 @@ def save_learned(model, observed):
         pass
 
 
-REASON = """Context budget gate: {pct:.1f}% of the window is occupied ({occupied} of {window} tokens).
+REASON_CHECKPOINT = """Context checkpoint: {pct:.1f}% of the window is occupied ({occupied} of {window} tokens; threshold {threshold:.0f}%).
+Window source: {source}.
+
+Checkpoint, then CONTINUE. Auto-compaction will come; this makes it lossless where it matters.
+Do these now, then carry on with the work you were doing:
+  1. Refresh the handoff: Skill(handoff) -- where the work stands, the ONE next action, what is
+     blocked and on whom, every artefact by path/URL. It is restored IN FULL after compaction.
+  2. Update NOTES.md (goal, last decisions, next action at the TOP -- the top is what is restored)
+     and commit both in the same commit. If a mission is running, update its map/ticket too.
+  3. Save anything cross-session-valuable to the memory store (Engram) -- decisions, patterns,
+     gotchas -- routed by the domain of the content.
+  4. Keep working. Do NOT stop, do NOT ask the operator to /clear or restart: after compaction the
+     SessionStart(compact) restore re-injects the handoff and NOTES.md, and running Monitor
+     tasks and CronCreate jobs survive compaction.
+
+This fires once per crossing; it re-arms after the next compaction.
+Old behaviour (hand off, then ask for /clear): DF_CONTEXT_GATE_MODE=restart. Off: DF_CONTEXT_GATE=off."""
+
+REASON_RESTART = """Context budget gate: {pct:.1f}% of the window is occupied ({occupied} of {window} tokens).
 Window source: {source}.
 
 Do these now, before ending the turn:
@@ -166,8 +209,21 @@ def occupancy(usage):
             + usage.get("cache_creation_input_tokens", 0))
 
 
+def default_threshold(window):
+    """Fire when RESERVE tokens are left: RESERVE = min(80k, 20% of the window).
+
+    1M -> 92% (auto-compaction measured at ~97%, so ~50k tokens to write the checkpoint);
+    200k -> 80%. A fixed 85% left 150k unused on 1M and only ~15k of headroom on 200k.
+    """
+    reserve = min(80000.0, 0.20 * window)
+    return 100.0 * (window - reserve) / window
+
+
 def scan_transcript(transcript_path):
-    """Return (last_usage, last_real_model, max_occupancy_seen).
+    """Return (last_usage, last_real_model, max_occupancy_seen, compactions).
+
+    compactions = the number of `compact_boundary` system records: the compaction EPOCH. The
+    gate fires once per epoch, so it re-arms after each compaction and never repeats inside one.
 
     max_occupancy is the evidence that disproves a too-small assumed window: the
     session demonstrably HELD that many tokens at once, so the window is at least
@@ -177,8 +233,17 @@ def scan_transcript(transcript_path):
     usage = None
     model = None
     max_occ = 0
+    compactions = 0
     with open(transcript_path, errors="replace") as fh:
         for line in fh:
+            if '"compact_boundary"' in line:
+                try:
+                    rec = json.loads(line)
+                    if rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
+                        compactions += 1
+                except ValueError:
+                    pass
+                continue
             if '"usage"' not in line:
                 continue
             try:
@@ -199,7 +264,7 @@ def scan_transcript(transcript_path):
             occ = occupancy(u)
             if occ > max_occ:
                 max_occ = occ
-    return usage, model, max_occ
+    return usage, model, max_occ, compactions
 
 
 def resolve_window(model, max_occ):
@@ -239,7 +304,7 @@ def main():
         allow()
 
     try:
-        usage, model, max_occ = scan_transcript(transcript)
+        usage, model, max_occ, compactions = scan_transcript(transcript)
     except Exception:
         allow()
     if not usage:
@@ -250,24 +315,24 @@ def main():
 
     try:
         window, source = resolve_window(model, max_occ)
-        threshold = float(os.environ.get("DF_CONTEXT_THRESHOLD", "85"))
+        if window <= 0:
+            allow()
+        env_threshold = os.environ.get("DF_CONTEXT_THRESHOLD")
+        threshold = float(env_threshold) if env_threshold else default_threshold(window)
     except ValueError:
-        allow()
-    if window <= 0:
         allow()
 
     pct = 100.0 * occupied / window
     if pct < threshold:
         allow()
 
-    # Fire at most once per session per 5-point band, so a long tail of turns
-    # above the line does not block every single one. Bands are capped at 100 --
-    # without the cap an over-100% reading (i.e. a wrong window) mints a fresh
-    # band every ~5% and blocks almost every turn, which is what happened on
-    # 2026-08-02 at 360/365/370.
-    band = min(int(pct // 5) * 5, 100)
+    # ONCE PER CROSSING (since 2026-09-18). The old rule fired once per 5-point band, so a single
+    # climb blocked at 85, 90 and 95% -- three interruptions for one event (measured on HoP). The
+    # marker is now keyed on the COMPACTION EPOCH: one block per climb, re-armed by the next
+    # compaction, which drops occupancy and starts a new climb. It also still caps the
+    # over-100% case (a wrong window) that minted a fresh band every ~5% on 2026-08-02.
     session = str(event.get("session_id") or "nosession").replace("/", "_")
-    marker = os.path.join(STATE_DIR, "%s.%d" % (session, band))
+    marker = os.path.join(STATE_DIR, "%s.e%d" % (session, compactions))
     try:
         os.makedirs(STATE_DIR, exist_ok=True)
         if os.path.exists(marker):
@@ -276,7 +341,10 @@ def main():
     except OSError:
         allow()
 
-    block(REASON.format(pct=pct, occupied=occupied, window=window, source=source))
+    if os.environ.get("DF_CONTEXT_GATE_MODE", "checkpoint") == "restart":
+        block(REASON_RESTART.format(pct=pct, occupied=occupied, window=window, source=source))
+    block(REASON_CHECKPOINT.format(pct=pct, occupied=occupied, window=window, source=source,
+                                   threshold=threshold))
 
 
 if __name__ == "__main__":

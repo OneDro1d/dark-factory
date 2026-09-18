@@ -2,8 +2,9 @@
 # hooks/pre-compact.sh — PreCompact deterministic floor (DESIGN §7.5).
 # Before context is compacted/cleared, snapshot recent user-intent + files-touched
 # from the transcript, REDACT secrets, and persist so the next session rehydrates:
-#   - inside a notepad → refresh a delimited "PreCompact floor" block in NOTES.md
-#     AND append a `precompact` milestone entry to the session journal;
+#   - inside a notepad → write the floor to <notepad>/PRECOMPACT.md (restored FIRST by
+#     session-start.sh on source=compact) AND append a `precompact` milestone entry to the
+#     session journal;
 #   - outside a notepad → handoff-auto parity: write the snapshot to
 #     <cwd>/.claude/handoff/handoff-latest.md (best-effort).
 # Never blocks compaction. Emits {} on stdout (valid JSON). EXIT 0 ALWAYS.
@@ -29,20 +30,34 @@ now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 np="$(find_notepad "$cwd" 2>/dev/null || true)"
 
 if [ -n "$np" ]; then
-  # ── 1) refresh the delimited floor block in NOTES.md (replace prior floor) ──
+  # ── 1) write the floor to PRECOMPACT.md — its OWN file, restored FIRST ──────
+  # ⛔ MOVED 2026-09-18. The floor used to be APPENDED to the NOTES.md tail, and the restore
+  # emits NOTES.md last and cuts it from the END to fit the ~10 KiB harness cap: the one block
+  # written specifically for the post-compaction session was the block that restore dropped.
+  # Measured on HoP: NOTES.md 14,008 bytes, ~1,200 restored, so the floor never arrived.
+  # session-start.sh (source=compact) now emits PRECOMPACT.md first, ahead of the handoff.
+  # Overwritten each time: it is the latest floor, not a history (that is the journal).
+  floor="$np/PRECOMPACT.md"
+  tmpf="$floor.tmp.$$"
+  {
+    printf '# PreCompact floor (deterministic, %s)\n' "$now"
+    printf '_Auto-written by agent-notepad before compaction (trigger=%s, session=%s): what the\n' "$trig" "$sid"
+    printf 'transcript showed just before it was summarised. Redacted, bounded. The handoff and NOTES.md\n'
+    printf 'are the authority; this is the mechanical safety net under them._\n\n'
+    printf '%s\n' "$snap"
+  } > "$tmpf" 2>/dev/null && mv "$tmpf" "$floor" 2>/dev/null || rm -f "$tmpf" 2>/dev/null
+
+  # One-time migration: strip a legacy floor block from the NOTES.md tail, so it stops costing
+  # restore budget and cannot contradict the new file.
   notes="$np/NOTES.md"
-  [ -f "$notes" ] || : > "$notes"
   begin='<!-- pc-floor:start -->'
   end='<!-- pc-floor:end -->'
-  block="$(printf '%s\n## PreCompact floor (deterministic, %s)\n_Auto-written before compaction (trigger=%s, session=%s). Model may fold this into the sections above, then it is safe to drop._\n\n%s\n%s\n' \
-             "$begin" "$now" "$trig" "$sid" "$snap" "$end")"
-  tmp="$notes.tmp.$$"
-  # strip any previous floor block, then append the fresh one
-  awk -v b="$begin" -v e="$end" '
-    $0==b {skip=1} skip==1 {if($0==e) skip=0; next} {print}
-  ' "$notes" > "$tmp" 2>/dev/null || cp "$notes" "$tmp"
-  printf '%s\n' "$block" >> "$tmp"
-  mv "$tmp" "$notes" 2>/dev/null || true
+  if [ -f "$notes" ] && grep -qF "$begin" "$notes" 2>/dev/null; then
+    tmp="$notes.tmp.$$"
+    awk -v b="$begin" -v e="$end" '
+      $0==b {skip=1} skip==1 {if($0==e) skip=0; next} {print}
+    ' "$notes" > "$tmp" 2>/dev/null && mv "$tmp" "$notes" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  fi
 
   # ── 2) append a precompact milestone to the session journal (append-only) ──
   jf=""
