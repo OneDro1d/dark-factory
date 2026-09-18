@@ -77,8 +77,18 @@ proj-arbbot/
   marker), upsert `sessions/index.json`, **mirror the journal into the memory index**,
   best-effort `git push`.
 - **UserPromptSubmit** — soft nudge to keep `NOTES.md` current (backed by the PreCompact floor).
-- **PreCompact** — deterministic floor: snapshot recent intent into `NOTES.md` + journal
-  before compaction, so `/clear` rehydrates losslessly.
+- **PreCompact** — deterministic floor: snapshot recent intent into `PRECOMPACT.md` (gitignored,
+  overwritten each time) + a journal entry before compaction. It used to be appended to the
+  `NOTES.md` tail, which is exactly the part the restore cuts first.
+- **SessionStart, `source=compact`** (since 2026-09-18) — a CONTINUING session gets the working
+  documents, not the cold-start orientation (the compaction summary carries that): the
+  `PRECOMPACT.md` floor, the newest handoff whole (up to ~7 KB), and `NOTES.md`. It is split over
+  **two wirings of the same script** (`session-start.sh` and `session-start.sh --part notes`, the
+  second on matcher `compact` only), because the harness caps each hook at ~10 KiB (re-measured on
+  Claude Code 2.1.276: 9,900 bytes whole, 12,000 externalised; two hooks at 9,900 both whole).
+  Part 2 continues `NOTES.md` from the exact byte part 1 stopped. With part 1 alone the restore is
+  still complete and says what it did not carry. Pair: Tier 1 `hooks/context-budget.py` now says
+  *checkpoint, then continue* instead of *hand off and /clear*.
 - **PreToolUse(Bash)** — the **commit gate** (ships in the *notepad's* `.claude/settings.json`,
   arms only in notepad sessions): blocks *agent* `git -C <code-repo> commit`s that drift
   from that repo's df-context-store.
