@@ -218,6 +218,10 @@ merge_hook() { # event script [matcher]
   ' "$SETTINGS" > "$t" && mv "$t" "$SETTINGS"
 }
 merge_hook SessionStart    session-start.sh "startup|resume|clear|compact"
+# The second half of the post-compaction restore: the same script, a second wiring, on compact
+# only. Two hooks because the harness caps EACH hook at ~10 KiB (measured 2026-09-18); see
+# session-start.sh _compact_restore.
+merge_hook SessionStart    "session-start.sh --part notes" "compact"
 merge_hook UserPromptSubmit user-prompt.sh  ""
 merge_hook PreCompact      pre-compact.sh   ""
 merge_hook Stop            stop.sh          ""

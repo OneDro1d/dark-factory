@@ -22,3 +22,8 @@
 # OS / editor cruft
 .DS_Store
 *.swp
+
+# PRECOMPACT.md: the PreCompact floor (hooks/pre-compact.sh). Overwritten at every compaction and
+# read back by the SAME session a moment later (session-start.sh, source=compact), so it is
+# machine-local by nature. Committing it would add a commit per compaction on every notepad.
+PRECOMPACT.md

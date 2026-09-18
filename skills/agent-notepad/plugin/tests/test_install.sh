@@ -83,8 +83,15 @@ test_install_is_idempotent() {
   bash "$INSTALL" --target "$T" >/dev/null 2>&1
   local s="$T/.claude/settings.json"
   local n
-  n="$(jq -r '[.hooks.SessionStart[]?.hooks[]?.command | select((. // "") | contains("session-start.sh"))] | length' "$s")"
+  # TWO SessionStart wirings of session-start.sh are intended since 2026-09-18 (the plain one, and
+  # `--part notes` on compact, because the harness caps each hook at ~10 KiB). Each must appear
+  # exactly ONCE after a second install.
+  n="$(jq -r '[.hooks.SessionStart[]?.hooks[]?.command | select((. // "") | endswith("session-start.sh"))] | length' "$s")"
   assert_eq "1" "$n" "SessionStart hook is not duplicated after a second install"
+  n="$(jq -r '[.hooks.SessionStart[]?.hooks[]?.command | select((. // "") | endswith("session-start.sh --part notes"))] | length' "$s")"
+  assert_eq "1" "$n" "the --part notes wiring is present once, not duplicated, after a second install"
+  n="$(jq -r '[.hooks.SessionStart[]? | select(.hooks[]?.command | endswith("--part notes")) | .matcher] | .[0] // ""' "$s")"
+  assert_eq "compact" "$n" "the --part notes wiring fires on compact only"
   n="$(jq -r '[.hooks.Stop[]?.hooks[]?.command | select((. // "") | contains("stop.sh"))] | length' "$s")"
   assert_eq "1" "$n" "Stop hook is not duplicated after a second install"
   rm -rf "$T"

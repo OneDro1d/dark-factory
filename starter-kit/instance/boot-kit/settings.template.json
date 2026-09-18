@@ -36,6 +36,15 @@
             "command": "__HOME__/.claude/hooks/agent-notepad/hooks/session-start.sh"
           }
         ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/agent-notepad/hooks/session-start.sh --part notes"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

@@ -29,9 +29,22 @@ _DIR="$(cd "$(dirname "$0")" && pwd)"
 input="$(cat)"
 cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
 [ -z "$cwd" ] && cwd="$PWD"
+# The event's source: startup | resume | clear | compact. Read since 2026-09-18; before that
+# every source got the same cold-start payload, including a compaction mid-session.
+src="$(printf '%s' "$input" | jq -r '.source // empty' 2>/dev/null)"
+# `--part notes` is the SECOND wiring of this same script, on matcher `compact` only: it
+# continues NOTES.md where part 1 stopped. See _compact_restore below for why two parts.
+part="main"
+[ "${1:-}" = "--part" ] && part="${2:-main}"
+if [ "$part" != "main" ] && [ "$src" != "compact" ]; then
+  printf '{}\n'; exit 0
+fi
 
 # --- resolve notepad; degrade to {} outside one ----------------------------
 np="$(find_notepad "$cwd")" || np=""
+if [ -z "$np" ] && [ "$part" != "main" ]; then
+  printf '{}\n'; exit 0
+fi
 if [ -z "$np" ]; then
   # ⛔ SILENCE WAS THE DEFECT, NOT THE `{}`. Resolution is walk-up only, by design: a session is
   # in a notepad or it is not. But a session started in a CODE REPO that some notepad DRIVES
@@ -78,6 +91,128 @@ if [ -z "$np" ]; then
     exit 0
   fi
   printf '{}\n'
+  exit 0
+fi
+
+# ---- source=compact: the restore a CONTINUING session needs ------------------------------------
+# ⛔ ADDED 2026-09-18. Until then a compaction got the cold-start payload: the handoff cut at
+# 4,096 bytes and NOTES.md at ~1,200 (measured on HoP: 4,096 of 5,438 and ~1,200 of 14,008), plus
+# the NOTEPAD RESOLVED / OTHER NOTEPADS / DIGEST / manifest framing that the compaction summary
+# already carries. A session that is CONTINUING needs the opposite trade: the working documents
+# whole, and none of the orientation.
+#
+# ⛔ WHY TWO PARTS, AND NOT ONE 24 KB PAYLOAD. The harness cap is ~10 KiB PER HOOK, on the
+# additionalContext field. RE-MEASURED on Claude Code 2.1.276, 2026-09-18, with a hook emitting
+# numbered markers into a one-turn session: 9,900 bytes arrived whole, 12,000 bytes were replaced
+# by a saved-to-file note with a ~2 KB preview. A bigger single payload delivers LESS. But the cap
+# is per hook: two hooks at 9,900 each both arrived whole. So the compact restore is split:
+#   part 1 (the normal wiring, source=compact): PRECOMPACT.md floor + the handoff + the NOTES head
+#   part 2 (`session-start.sh --part notes`, matcher compact): NOTES.md continued from the exact
+#          byte where part 1 stopped
+# The hooks run in parallel, so part 2 cannot read what part 1 did; it RE-COMPUTES part 1's cut
+# from the same files and the same arithmetic (_compact_part1 is pure). Part 1 alone is complete
+# and says what it did not deliver, so a machine without the second wiring degrades, not breaks.
+#
+# Byte-exact on purpose: LC_ALL=C makes ${#var} count bytes, which is what the cap counts.
+# 9,600: 9,900 was measured to arrive whole; the margin covers a multi-byte character at a cut.
+_COMPACT_FIELD="${AGENT_NOTEPAD_COMPACT_FIELD_BYTES:-9600}"
+NL=$'\n'; NL2=$'\n\n'
+_COMPACT_FLOOR_MAX="${AGENT_NOTEPAD_COMPACT_FLOOR_BYTES:-1500}"
+_COMPACT_NOTES_MIN="${AGENT_NOTEPAD_COMPACT_NOTES_MIN_BYTES:-1000}"
+
+_compact_chunk() { # <file> <offset> <max> -> bytes [offset, offset+max), cut back to a line end
+  local LC_ALL=C f="$1" off="$2" max="$3" s total
+  [ "$max" -gt 0 ] || return 0
+  s="$(tail -c +"$((off + 1))" "$f" 2>/dev/null | head -c "$max"; printf x)"; s="${s%x}"
+  total="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
+  if [ $((off + ${#s})) -lt "${total:-0}" ]; then
+    case "$s" in *$'\n'*) s="${s%$'\n'*}"$'\n' ;; esac
+  fi
+  printf '%s' "$s"
+}
+
+_P1="" ; _NOTES_USED=0 ; _NOTES_SIZE=0
+_compact_part1() { # <np> -> sets _P1 (the payload) and _NOTES_USED (NOTES.md bytes it carries)
+  local LC_ALL=C np="$1" hf="" hsz=0 fsz=0 floor="" hbody="" room nb head tail
+  [ -d "$np/handoffs" ] && hf="$(ls -t "$np/handoffs"/*.md 2>/dev/null | head -1)"
+  [ -n "$hf" ] && hsz="$(wc -c < "$hf" | tr -d ' ')"
+  _NOTES_SIZE=0; [ -f "$np/NOTES.md" ] && _NOTES_SIZE="$(wc -c < "$np/NOTES.md" | tr -d ' ')"
+  head="$(printf '## agent-notepad — restored after COMPACTION (%s)\n' "$(basename "$np")"
+    printf 'Notepad: %s\n' "$np"
+    printf 'You are CONTINUING the same session: the summary above carries the orientation, so this\n'
+    printf 'restore carries only the working documents, whole where the ~10 KiB hook cap allows:\n'
+    printf 'the PreCompact floor, the newest handoff, then NOTES.md (continued by part 2 if wired).\n'
+    printf 'Re-check your running Monitor tasks and cron jobs; they normally survive compaction.\n')"
+  if [ -f "$np/PRECOMPACT.md" ]; then
+    fsz="$(wc -c < "$np/PRECOMPACT.md" | tr -d ' ')"
+    # Headings are joined with $NL2 OUTSIDE the substitutions: $( ) strips trailing newlines, and
+    # the first version of this ran every heading straight into its body.
+    floor="$NL2### PreCompact floor — $np/PRECOMPACT.md$NL2$(_compact_chunk "$np/PRECOMPACT.md" 0 "$_COMPACT_FLOOR_MAX")"
+    [ "$fsz" -gt "$_COMPACT_FLOOR_MAX" ] && floor="$floor$(printf '\n[floor CUT at ~%s of %s bytes; open the file for the rest]' "$_COMPACT_FLOOR_MAX" "$fsz")"
+  fi
+  if [ -n "$hf" ]; then
+    # the handoff may use everything except the NOTES minimum and ~600 bytes of framing
+    room=$(( _COMPACT_FIELD - ${#head} - ${#floor} - _COMPACT_NOTES_MIN - 600 ))
+    hbody="$NL2### ⛔ NEWEST HANDOFF — $hf ($hsz bytes)$NL2"
+    if [ "$hsz" -le "$room" ]; then
+      hbody="$hbody$(cat "$hf")$NL---8<--- handoff ends: it arrived WHOLE ---8<---"
+    else
+      hbody="$hbody$(_compact_chunk "$hf" 0 "$room")$NL---8<--- handoff CUT at ~$room of $hsz bytes. OPEN $hf for the rest before acting. ---8<---"
+    fi
+  else
+    hbody="$NL2### Handoff — none in $np/handoffs/"
+  fi
+  _P1="$head$floor$hbody"
+  _NOTES_USED=0
+  if [ "$_NOTES_SIZE" -gt 0 ]; then
+    nb=$(( _COMPACT_FIELD - ${#_P1} - 420 ))
+    tail="$(_compact_chunk "$np/NOTES.md" 0 "$nb")"
+    _NOTES_USED=${#tail}
+    _P1="$_P1$NL2### NOTES.md — bytes 0-$_NOTES_USED of $_NOTES_SIZE$NL2$tail"
+    if [ "$_NOTES_USED" -ge "$_NOTES_SIZE" ]; then
+      _P1="$_P1$NL[NOTES.md arrived WHOLE]"
+    else
+      _P1="$_P1$NL[NOTES.md CUT at byte $_NOTES_USED of $_NOTES_SIZE. Part 2 continues from here if it is wired; either${NL}way, OPEN $np/NOTES.md before relying on anything below the fold.]"
+    fi
+  fi
+}
+
+_compact_part2() { # <np> -> stdout: NOTES.md continued from _NOTES_USED
+  local LC_ALL=C np="$1" head body nb
+  _compact_part1 "$np"
+  [ "$_NOTES_USED" -lt "$_NOTES_SIZE" ] || return 0
+  head="$(printf '## agent-notepad — restored after COMPACTION, part 2: NOTES.md continued\n')"
+  nb=$(( _COMPACT_FIELD - ${#head} - 400 ))
+  body="$(_compact_chunk "$np/NOTES.md" "$_NOTES_USED" "$nb")"
+  printf '%s\n\n### NOTES.md — bytes %s-%s of %s\n\n%s' "$head" "$_NOTES_USED" "$(( _NOTES_USED + ${#body} ))" "$_NOTES_SIZE" "$body"
+  if [ $(( _NOTES_USED + ${#body} )) -lt "$_NOTES_SIZE" ]; then
+    printf '\n[NOTES.md CUT at byte %s of %s. OPEN %s for the rest. It is over its own 150-line budget:\ngraduate the tail, do not rely on the restore to carry it.]' "$(( _NOTES_USED + ${#body} ))" "$_NOTES_SIZE" "$np/NOTES.md"
+  else
+    printf '\n[NOTES.md: parts 1 and 2 together carried it WHOLE]'
+  fi
+}
+
+_compact_emit() { # <payload> <systemMessage>
+  local j
+  j="$(printf '%s' "$1" | jq -Rs --arg m "$2" \
+        '{systemMessage:$m, hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:.}}')" \
+    && [ -n "$j" ] && { printf '%s\n' "$j"; return 0; }
+  printf '{"systemMessage":"agent-notepad: the post-compaction restore FAILED to encode; read the notepad handoff and NOTES.md yourself."}\n'
+}
+
+if [ "$src" = "compact" ]; then
+  # No pull: this is the same session a moment later, and a compaction must not wait on the network.
+  if [ "$part" = "notes" ]; then
+    _p2="$(_compact_part2 "$np")"
+    if [ -n "$_p2" ]; then
+      _compact_emit "$_p2" "agent-notepad: post-compaction restore, part 2 (NOTES.md continued)"
+    else
+      printf '{}\n'
+    fi
+  else
+    _compact_part1 "$np"
+    _compact_emit "$_P1" "agent-notepad: post-compaction restore — floor, handoff and NOTES.md re-injected; keep working"
+  fi
   exit 0
 fi
 

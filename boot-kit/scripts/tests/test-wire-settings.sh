@@ -317,6 +317,31 @@ contains "L: the declared hook behind bash is wired" "boot.sh"   "$(cat "$LL" 2>
 # merge path's wording) passed vacuously against the unfixed tree.
 absent   "L: and it is not skipped as undeclared"     "does not declare" "$O"
 
+echo "=== M: \`--part <name>\` IS a distinct hook; every other argument still is not ==="
+# ⛔ 2026-09-18: agent-notepad restores after compaction in TWO hooks (the harness caps each at
+# ~10 KiB), the second being the same file with `--part notes`. Keyed on the path alone, the
+# second wiring read as a duplicate of the first and was never added.
+MT="$T/tmpl-part.json"
+cat > "$MT" <<'JSON'
+{ "hooks": { "SessionStart": [
+  { "matcher": "startup|resume|clear|compact", "hooks": [
+    { "type": "command", "command": "__HOME__/.claude/hooks/boot.sh" } ] },
+  { "matcher": "compact", "hooks": [
+    { "type": "command", "command": "__HOME__/.claude/hooks/boot.sh --part notes" } ] } ] } }
+JSON
+ML="$T/m.json"
+cat > "$ML" <<JSON
+{ "hooks": { "SessionStart": [ { "matcher": "startup|resume|clear|compact", "hooks": [
+  { "type": "command", "command": "$H/.claude/hooks/boot.sh" } ] } ] } }
+JSON
+O="$(python3 "$W8" --template "$MT" --live "$ML" --home "$H" 2>&1)"
+contains "M: the --part wiring is added next to the plain one" "boot.sh --part notes" "$(cat "$ML")"
+N="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(len(g["hooks"]) for g in d["hooks"]["SessionStart"]))' "$ML")"
+[ "$N" = "2" ] && ok "M: exactly two SessionStart hooks, not three" || bad "M: exactly two SessionStart hooks" "got $N"
+O="$(python3 "$W8" --template "$MT" --live "$ML" --home "$H" 2>&1)"
+N="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(len(g["hooks"]) for g in d["hooks"]["SessionStart"]))' "$ML")"
+[ "$N" = "2" ] && ok "M: idempotent — a second run adds nothing" || bad "M: idempotent" "got $N"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"

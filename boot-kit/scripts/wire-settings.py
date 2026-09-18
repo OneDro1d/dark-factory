@@ -109,6 +109,30 @@ def hook_path(command):
 INTERPRETERS = {"bash", "sh", "zsh", "python", "python3", "node"}
 
 
+def hook_key(command):
+    """The IDENTITY of a wired hook: its file, plus `--part <name>` when the chain carries one.
+
+    ⛔ ADDED 2026-09-18. hook_path alone made "the same file" mean "the same hook", so a
+    DELIBERATE second wiring of one script was indistinguishable from a duplicate and was never
+    added: agent-notepad's `session-start.sh --part notes` (the second half of the post-compaction
+    restore, which exists because the harness caps each hook at ~10 KiB) would have been skipped
+    on every machine while its template entry looked wired. Every OTHER argument still does not
+    count, which keeps the reason hook_path exists: a hand-typed variant of the same hook must not
+    be wired a second time. `--part` is the one argument that names a distinct role.
+    """
+    p = hook_path(command)
+    home = os.environ.get("HOME", "")
+    c = command.replace("${HOME}", home).replace("$HOME", home)
+    try:
+        parts = shlex.split(c)
+    except ValueError:
+        parts = c.split()
+    for i, a in enumerate(parts[:-1]):
+        if a == "--part":
+            return "%s --part %s" % (p, parts[i + 1])
+    return p
+
+
 def count_hooks(chains):
     return sum(len((g or {}).get("hooks", []) or []) for gs in chains.values() for g in gs or [])
 
@@ -196,7 +220,7 @@ def wired_paths(settings, event):
         for h in (group or {}).get("hooks", []) or []:
             cmd = (h or {}).get("command")
             if cmd:
-                out.add(hook_path(cmd))
+                out.add(hook_key(cmd))
     return out
 
 
@@ -316,15 +340,15 @@ def main():
         for group in groups or []:
             missing = [h for h in (group or {}).get("hooks", []) or []
                        if (h or {}).get("command")
-                       and hook_path(h["command"]) not in have]
+                       and hook_key(h["command"]) not in have]
             if not missing:
                 continue
             newgroup = dict(group)
             newgroup["hooks"] = missing
             live["hooks"].setdefault(event, []).append(newgroup)
             for h in missing:
-                have.add(hook_path(h["command"]))
-                added.append("%s  %s" % (event, os.path.basename(hook_path(h["command"]))))
+                have.add(hook_key(h["command"]))
+                added.append("%s  %s" % (event, os.path.basename(hook_key(h["command"]))))
 
     # Differences OUTSIDE hooks are reported and never applied. See the module docstring.
     noted = []

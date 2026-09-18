@@ -18,9 +18,16 @@
 #
 # ⚠️ Never add an endpoint, a token or a hub name to this file. It lives in a PUBLIC repo.
 # The hooks promoted here were checked for all three before the move.
-# PreCompact hook: nudge to save cross-session insight before context compression.
-# Trusts that Claude learned routing from start_here earlier this session.
-
-cat <<'EOF'
-{"systemMessage":"Context is compressing. Save anything cross-session-valuable to Engram now — decisions, patterns, behaviors, session summary. Use the routing you learned from start_here earlier."}
-EOF
+#
+# ⛔ NOW A NO-OP, DELIBERATELY (2026-09-18). It used to emit a systemMessage asking the model to
+# "save anything cross-session-valuable to Engram now". But PreCompact fires as compaction
+# STARTS: the model takes no turn between this hook and the summary, so it could never act on
+# the nudge. It was an instruction nobody could follow, shown to the operator as if it meant
+# something. The nudge moved to the place a model CAN act on it: the context-budget checkpoint
+# (hooks/context-budget.py, REASON_CHECKPOINT step 3), which fires while there is still room.
+#
+# ⚠️ The FILE stays, emitting {}, because every instance lockfile declares and wires it.
+# Deleting it would turn a harmless no-op into a missing-hook drift on every machine. Undeclare
+# it from the records first; then it can go.
+cat >/dev/null 2>&1 || true   # drain the event so the harness never writes into a closed pipe
+printf '{}\n'
