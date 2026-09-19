@@ -248,6 +248,53 @@ test_publish_refuses_outside_notepad() {
   rm -rf "$d"
 }
 
+# ── (5) refuses an EMPTY body or an unexpected argument → non-zero, no write, no commit ──
+# ⛔ MEASURED 2026-09-19: a caller passed `--body-file <f>`. The helper takes an optional
+# body file as its THIRD positional argument, so `--body-file` was read as a file name, was
+# not a file, and the body fell back to stdin — which was empty. It exited 0 and committed and
+# pushed a header-only handoff. A header-only handoff is indistinguishable from success.
+_assert_refused() { # NP RC LABEL
+  if [ "$2" -ne 0 ]; then _pass; else _fail "$3: non-zero exit"; fi
+  ASSERT_CASES=$((ASSERT_CASES + 1))
+  if [ -z "$(ls -A "$1/handoffs" 2>/dev/null)" ]; then _pass; else _fail "$3: no handoff file written"; fi
+  ASSERT_CASES=$((ASSERT_CASES + 1))
+  assert_eq "seed" "$(git -C "$1" log -1 --pretty=%s 2>/dev/null)" "$3: no commit made"
+}
+
+test_publish_refuses_empty_body_and_unknown_args() {
+  local np bf
+  np="$(_mk_notepad_no_remote)"
+  export AGENT_NOTEPAD_DATE="2026-07-12"
+
+  : | "$LIB" "$np" "Empty Stdin" >/dev/null 2>&1
+  _assert_refused "$np" "$?" "empty stdin"
+
+  printf '  \n\t\n' | "$LIB" "$np" "Blank Stdin" >/dev/null 2>&1
+  _assert_refused "$np" "$?" "whitespace-only stdin"
+
+  # the exact measured call: a flag where the body file goes, a real file after it, empty stdin
+  bf="$(mktemp)"; printf 'the real body\n' > "$bf"
+  : | "$LIB" "$np" "Flag Call" --body-file "$bf" >/dev/null 2>&1
+  _assert_refused "$np" "$?" "--body-file <f> (extra argument)"
+
+  : | "$LIB" "$np" "Missing File" "$np/no-such-body.md" >/dev/null 2>&1
+  _assert_refused "$np" "$?" "a body file that does not exist"
+
+  : > "$bf"
+  "$LIB" "$np" "Empty File" "$bf" </dev/null >/dev/null 2>&1
+  _assert_refused "$np" "$?" "an empty body file"
+
+  # and the supported file form still works
+  printf 'the real body\n' > "$bf"
+  "$LIB" "$np" "File Form" "$bf" </dev/null >/dev/null 2>&1
+  assert_eq "0" "$?" "a real body file still publishes"
+  assert_contains "$(cat "$np/handoffs/2026-07-12-file-form.md" 2>/dev/null)" "the real body" \
+    "the body file's content is in the handoff"
+
+  rm -f "$bf"; rm -rf "$(dirname "$np")"
+  unset AGENT_NOTEPAD_DATE
+}
+
 # ── the commit message names the RUNNING mission(s) ─────────────────────────────
 # MEASURED 2026-09-08 on a Coder: this helper commits from INSIDE a script, so the mission
 # commit gate (a PreToolUse Bash matcher) never sees it — and its message `handoff: m-validate-…`

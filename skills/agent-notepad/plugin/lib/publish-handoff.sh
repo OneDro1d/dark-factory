@@ -13,6 +13,8 @@
 #   publish-handoff.sh <notepad-root> <topic> [body-file]
 #   printf '<body>' | publish-handoff.sh <notepad-root> <topic>
 # Prints the absolute path of the handoff doc it wrote.
+# REFUSES (exit 2, nothing written, nothing committed) on an empty or whitespace-only body,
+# a body file that does not exist, or any argument beyond the three above.
 #
 # Target overridable (tests point these at TEMP, never a real repo/remote):
 #   <notepad-root>            — the notepad to publish into (arg, not hardwired).
@@ -40,6 +42,20 @@ publish_handoff() { # NOTEPAD_ROOT TOPIC [BODY_FILE]
   local np="${1:-}" topic="${2:-handoff}" body_file="${3:-}"
   [ -n "$np" ] || { printf 'publish-handoff: missing notepad root\n' >&2; return 2; }
 
+  # ⛔ REFUSE A CALL THIS HELPER DOES NOT UNDERSTAND — before anything is written. Measured
+  # 2026-09-19: `publish-handoff.sh <np> <topic> --body-file <f>` read `--body-file` as the
+  # body-file NAME, found no such file, fell back to an empty stdin, and committed and pushed
+  # a header-only handoff with exit 0. A header-only handoff looks exactly like success.
+  if [ "$#" -gt 3 ]; then
+    printf 'publish-handoff: unexpected extra argument(s): %s\n' "${*:4}" >&2
+    printf 'usage: publish-handoff.sh <notepad-root> <topic> [body-file]  (or the body on stdin)\n' >&2
+    return 2
+  fi
+  if [ -n "$body_file" ] && [ ! -f "$body_file" ]; then
+    printf 'publish-handoff: body file not found: %s (no flags are accepted; pass the path itself)\n' "$body_file" >&2
+    return 2
+  fi
+
   # Resolve/verify the notepad: the given root must itself be (or sit under) a
   # notepad. Refuse otherwise so we never write outside a notepad.
   local root
@@ -48,20 +64,25 @@ publish_handoff() { # NOTEPAD_ROOT TOPIC [BODY_FILE]
     return 3
   }
 
+  # Body from stdin unless a body file is given. Read BEFORE anything is created, so an
+  # empty body leaves no file, no directory and no commit behind.
+  local raw
+  if [ -n "$body_file" ]; then
+    raw="$(cat "$body_file")"
+  else
+    raw="$(cat)"
+  fi
+  if [ -z "$(printf '%s' "$raw" | tr -d '[:space:]')" ]; then
+    printf 'publish-handoff: the handoff body is empty — nothing written, nothing committed\n' >&2
+    return 2
+  fi
+
   local date_stamp slug hf
   date_stamp="${AGENT_NOTEPAD_DATE:-$(date -u +%Y-%m-%d)}"
   slug="$(_slugify "$topic")"
   [ -n "$slug" ] || slug="handoff"
   mkdir -p "$root/handoffs"
   hf="$root/handoffs/${date_stamp}-${slug}.md"
-
-  # Body from stdin unless a body file is given.
-  local raw
-  if [ -n "$body_file" ] && [ -f "$body_file" ]; then
-    raw="$(cat "$body_file")"
-  else
-    raw="$(cat)"
-  fi
 
   # Compose the structured doc, then redact secrets over the WHOLE thing.
   {

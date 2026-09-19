@@ -118,7 +118,9 @@ pass, the commit and the forced push, and the `AGENT_NOTEPAD_*` test overrides.
 
 `$NOTEPAD_ROOT` is the current notepad (the nearest ancestor with `NOTES.md`; the
 SessionStart hook already resolved it). The helper **refuses** (non-zero exit, no write)
-if the target is not a notepad — a Handoff only belongs in a notepad.
+if the target is not a notepad — a Handoff only belongs in a notepad. It also refuses an
+empty body and any argument it does not take: there is no `--body-file` flag — pass the body
+on stdin, or a file path as the third argument.
 
 ### Suggested body sections
 
