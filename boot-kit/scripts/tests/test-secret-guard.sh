@@ -386,6 +386,91 @@ for bad_in in 'not json' '{"hook_event_name":"PreToolUse","tool_name":"Bash","to
 done
 
 echo
+echo
+echo "=== H: the follow-up gaps listed in #209's body (each RED on ddda0f58) ==="
+# WHY A SECTION OF ITS OWN. #209 shipped with its own misses written down in the PR body rather
+# than discovered later. These are those, one case per line of that list. H1 is the half that
+# matters most: a guard that denies the safe command is a guard someone switches off, and every
+# H1 case is a command a person has a legitimate reason to run.
+
+# ── H1: false positives — the safe form must stay allowed ────────────────────
+allow H1a "printenv HOME"
+allow H1b "printenv PATH"
+allow H1c "printenv | wc -l"
+allow H1d "cat src/.env.ts"
+allow H1e "cat docs/.env-guide.md"
+allow H1f "kubectl get secret -n ns-a -o jsonpath='{.items[*].metadata.name}'"
+allow H1g "kubectl get secret -n ns-a -o custom-columns=NAME:.metadata.name"
+allow H1h "kubectl get secret app -n ns-a -o json | jq '.data|keys'"
+# ⚠️ the counterpart cases, so a fix cannot simply stop denying: these must STILL be denied.
+deny H1a2 "printenv SERVICE_PAT"
+deny H1c2 "printenv | head -5"
+deny H1d2 "cat src/.env.local"
+deny H1f2 "kubectl get secret -n ns-a -o jsonpath='{.items[*].data}'"
+deny H1h2 "kubectl get secret app -n ns-a -o json | jq '.data'"
+
+# ── H2: deny-list misses ─────────────────────────────────────────────────────
+deny H2a "kubectl get -n kube-system secret app-secrets -o yaml"
+deny H2b "kubectl get secrets.v1 -o json"
+deny H2c "k get secret x -o yaml"
+deny H2d "oc get secret x -o yaml"
+deny H2e "kubectl exec mypod env"
+deny H2f "cat < .env"
+deny H2g "(env)"
+deny H2h "{ env; }"
+deny H2i "env | cut -d= -f1,2"
+deny H2j "timeout -s KILL 10 env"
+deny H2k "ssh -i ~/.ssh/id_ed25519 host env"
+deny H2l "docker exec mycontainer env"
+deny H2m "ps eww"
+deny H2n "cat .envrc"
+deny H2o "cp .env /dev/stdout"
+deny H2p "doctl apps spec get 1234 | cat"
+deny H2q "vault kv get -field=password secret/team/x | cat"
+deny H2r "op read op://vault/item/field | cat"
+deny H2s "aws secretsmanager get-secret-value --secret-id prod/db"
+deny H2t "gcloud secrets versions access latest --secret=db-password"
+deny H2u "helm get values my-release"
+deny H2v "az keyvault secret download --vault-name kv --name db --file /dev/stdout"
+deny H2w "git credential fill"
+deny H2x "cat ~/.aws/credentials"
+deny H2y "cat ~/.docker/config.json"
+deny H2z "cat ~/.kube/config"
+deny H2aa "cat ~/.netrc"
+# ⚠️ and the safe forms in the SAME families stay allowed, so H2 cannot be passed by denying more.
+allow H2s2 "aws secretsmanager list-secrets"
+allow H2t2 "gcloud secrets list"
+allow H2u2 "helm get manifest my-release"
+allow H2w2 "git credential-cache exit"
+allow H2z2 "kubectl config get-contexts"
+allow H2m2 "ps aux"
+# ⚠️ `ps aux` alone is a WEAK counter-case: it has no `e` at all, so it passes even a rule that
+# treats every `e` as the environment flag. These three carry an `e` that is NOT BSD `e`, and a
+# sweep of ordinary commands caught the first one denied by exactly that confusion.
+allow H2m3 "ps -ef"          # UNIX syntax: -e is "every process", prints no environment
+allow H2m4 "ps -o pid,etime" # the `e` is inside an option VALUE, not a flag cluster
+allow H2m5 "ps -p 1 -o comm="
+deny  H2m6 "ps axe"          # BSD cluster carrying e: this one really does print environments
+deny  H2m7 "ps auxeww"
+allow H2l2 "docker exec mycontainer ls /app"
+allow H2k2 "ssh -i ~/.ssh/id_ed25519 host uptime"
+
+# ── H3: redactor misses ──────────────────────────────────────────────────────
+# a YAML value under a secret-named key: the shape #209 shipped unmasked.
+# ⚠️ the value here is NOT in the hook's environment and has no known prefix, so the ONLY thing
+# that can mask it is a rule for `key: value`. Using an env secret here (the first draft did)
+# passes on ddda0f58 via the env-value list and proves nothing about YAML.
+YAML_PW="$(rnd 32)"
+OUT="$(printf '{"hook_event_name":"PostToolUse","tool_name":"mcp__x__y","tool_response":{"content":[{"type":"text","text":"apiVersion: v1\\ndata:\\n  password: %s\\n  username: YWRtaW4=\\n"}]}}' "$YAML_PW" | hook)"
+if printf '%s' "$OUT" | grep -q 'REDACTED' && ! printf '%s' "$OUT" | grep -qF "$YAML_PW"; then ok "H3a YAML 'password: <value>' is masked"
+else bad "H3a YAML 'password: <base64>' NOT masked" "$(printf '%s' "$OUT" | head -c 200)"; fi
+# and the username beside it, which is not a secret, survives
+printf '%s' "$OUT" | grep -q 'YWRtaW4=' && ok "H3a2 the non-secret key beside it is untouched" \
+  || bad "H3a2 masked a non-secret YAML value too" "$(printf '%s' "$OUT" | head -c 200)"
+# source code that merely mentions a secret-named identifier is NOT a credential
+wr H3b 'echo "token = generateToken(user)"' 'token = generateToken(user)'
+wr H3c "echo 'api_key = os.environ[\"API_KEY\"]'" 'api_key = os.environ["API_KEY"]'
+
 echo "=== G: the gitleaks config comes from the same rule table ==="
 CFG="$(hook --gitleaks-config)"
 for id in synapse-pat coder-token postgres-url-password; do
