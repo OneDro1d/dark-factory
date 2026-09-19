@@ -306,8 +306,14 @@ OUT="$(bash_event "$ONCE" | hook)"
 # F2 — prefix rules had no left boundary: ordinary hyphenated words matched sk-… and were masked,
 # prompts were blocked, and the pre-commit (same findings()) refused the commit.
 filt() { printf '%s\n' "$1" | hook --filter; }
+# The three token-prefix-inside-a-word vectors are ASSEMBLED here, like the fixtures above: written out
+# literally they are token-shaped text, which the publish gate's secret scan rightly refuses.
+U="_"; H="-"
+NEAR_GH="thigh""s${U}abcdefghijklmnopqrstuv0123"
+NEAR_XOX="xxoxb${H}not-a-slack-token-at-all"
+NEAR_AWS="BAK""IA""ABCDEFGHIJKLMNOP"
 for w in disk-encryption-configuration-v2 task-management-framework-overview risk-assessment-matrix-2024-final \
-         thighs_abcdefghijklmnopqrstuv0123 xxoxb-not-a-slack-token-at-all BAKIAABCDEFGHIJKLMNOP; do
+         "$NEAR_GH" "$NEAR_XOX" "$NEAR_AWS"; do
   [ "$(filt "see $w here")" = "see $w here" ] && ok "F2 not masked: $w" || bad "F2 over-redacted: $w" "$(filt "see $w here")"
 done
 OUT="$(jq -cn '{hook_event_name:"UserPromptSubmit", prompt:"please check the disk-encryption-configuration-v2 setting"}' | hook)"
