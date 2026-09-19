@@ -73,6 +73,11 @@ proj-arbbot/
   payload is the only channel that reaches the session — stderr is read by nobody.
   ⚠️ **Do not "fix" a large `NOTES.md` by capping the payload here.** Bloat is a real and
   separate problem; capping would restore the silent-truncation failure this removed.
+  It also installs the notepad's **credential pre-commit** when `~/.claude/hooks/secret-guard.py`
+  is installed (`secret-guard.py --install-precommit <notepad>`; idempotent, silent, skipped
+  under `AGENT_NOTEPAD_DRY_RUN=1`). The pre-commit re-redacts staged `sessions/*.jsonl` and
+  refuses any other staged credential, naming file, line and rule, never the value. An existing
+  `pre-commit` is kept as `pre-commit.local` and still runs after it.
 - **Stop** — append deterministic journal entries (files touched, commands, a stop
   marker), upsert `sessions/index.json`, **mirror the journal into the memory index**,
   best-effort `git push`.

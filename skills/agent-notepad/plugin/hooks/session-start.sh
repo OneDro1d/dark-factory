@@ -273,6 +273,17 @@ _bounded_pull() {
 }
 _bounded_pull "$np" || true
 
+# ---- the notepad's credential pre-commit ------------------------------------------------------
+# A notepad commits its session journals, and a journal is a transcript. secret-guard.py
+# --install-precommit puts a pre-commit in this notepad that re-redacts staged journals and refuses
+# any other staged credential (an existing pre-commit is kept as pre-commit.local and still runs).
+# Idempotent, local, silent: stdout here is the hook's JSON, so nothing may print. Skipped when the
+# guard is not installed and under AGENT_NOTEPAD_DRY_RUN=1, which promises no writes.
+_guard="${AGENT_NOTEPAD_SECRET_GUARD:-$HOME/.claude/hooks/secret-guard.py}"
+if [ "${AGENT_NOTEPAD_DRY_RUN:-0}" != "1" ] && [ -f "$_guard" ] && command -v python3 >/dev/null 2>&1; then
+  python3 "$_guard" --install-precommit "$np" >/dev/null 2>&1 || true
+fi
+
 # ---- the newest handoff, emitted FIRST -------------------------------------
 # Lifted out of the command substitution 2026-09-04. Two reasons, both measured:
 #
