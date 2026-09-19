@@ -23,6 +23,8 @@ _DIR="$(cd "$(dirname "$0")" && pwd)"
 _ROOT="$(dirname "$_DIR")"
 # shellcheck source=../lib/notepad.sh
 . "$_ROOT/lib/notepad.sh" 2>/dev/null || true
+# shellcheck source=../lib/redact.sh
+. "$_ROOT/lib/redact.sh" 2>/dev/null || true
 
 # emit allow + leave, guaranteeing exit 0.
 _allow() { printf '{}\n'; exit 0; }
@@ -67,8 +69,19 @@ if [ -n "$tp" ] && [ -f "$tp" ]; then
   fi
 fi
 
+# ⛔ EVERY ENTRY'S TEXT IS REDACTED HERE, before it can reach the journal. The journal is
+# committed and pushed, so a credential typed into a command used to land in git verbatim (it
+# reached a committed journal, 2026-09). Redacting in the one function every entry passes through
+# means a future entry kind cannot forget to.
+# ⚠️ FAILS CLOSED: if the redactor did not load, the text is withheld, never written raw.
 _emit_entry() { # kind text
-  jq -cn --arg ts "$ts" --arg kind "$1" --arg text "$2" --arg session "$sid" \
+  local text
+  if command -v redact_secrets >/dev/null 2>&1; then
+    text="$(printf '%s' "$2" | redact_secrets)"
+  else
+    text="[withheld: redactor unavailable]"
+  fi
+  jq -cn --arg ts "$ts" --arg kind "$1" --arg text "$text" --arg session "$sid" \
     '{ts:$ts, kind:$kind, text:$text, refs:[], commit:null, session:$session}'
 }
 
@@ -85,13 +98,17 @@ if [ -n "$slice" ]; then
         [ -n "$f" ] && append_journal "$jf" "$(_emit_entry file-touch "$f")"
       done
 
-  # bash commands — in order
+  # bash commands — in order, ONE ENTRY PER COMMAND. Each command travels as a JSON string on one
+  # line and is decoded whole, so a multi-line command (a heredoc, a pasted key block) reaches the
+  # redactor intact. Split into lines first, the body of a private key would be journaled line by
+  # line with nothing around it for a rule to recognise.
   printf '%s\n' "$slice" \
-    | jq -r 'select(.type=="assistant") | .message.content
+    | jq -c 'select(.type=="assistant") | .message.content
              | (if type=="array" then .[] else empty end)
              | select(.type=="tool_use") | select(.name=="Bash")
              | .input.command // empty' 2>/dev/null \
-    | while IFS= read -r c; do
+    | while IFS= read -r cj; do
+        c="$(printf '%s' "$cj" | jq -r . 2>/dev/null)"
         [ -n "$c" ] && append_journal "$jf" "$(_emit_entry command "$c")"
       done
 fi
