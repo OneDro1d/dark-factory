@@ -76,6 +76,12 @@ proj-arbbot/
 - **Stop** — append deterministic journal entries (files touched, commands, a stop
   marker), upsert `sessions/index.json`, **mirror the journal into the memory index**,
   best-effort `git push`.
+  ⛔ **Every journal entry passes through `lib/redact.sh` before it is written** — one entry
+  per whole command, so a multi-line key block is seen intact. The journal is committed and
+  pushed, and it used to be written unredacted: a credential typed into a command reached a
+  committed journal (2026-09). If the redactor fails to load, the entry text is withheld, never written raw.
+  ⚠️ Redaction is pattern-based. A bare high-entropy secret with no prefix and no keyword is
+  NOT caught, so never type a credential into a command; pass it through an env var or a file.
 - **UserPromptSubmit** — soft nudge to keep `NOTES.md` current (backed by the PreCompact floor).
 - **PreCompact** — deterministic floor: snapshot recent intent into `PRECOMPACT.md` (gitignored,
   overwritten each time) + a journal entry before compaction. It used to be appended to the

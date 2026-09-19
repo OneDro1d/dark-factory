@@ -7,6 +7,12 @@
 # Scope note: pattern/keyword based. It will NOT catch a bare high-entropy secret
 # with no recognizable prefix and no adjacent keyword (over-redacting SHAs/base64
 # is worse). Such secrets are caught only in keyworded form (api_key=...).
+#
+# ⛔ 2026-09: a credential typed into a command reached a committed session journal, because the
+# journal writer never called this and this had no rule for its shape. Added: syn_ tokens, any
+# *_PAT / *_TOKEN / *_KEY / *_SECRET / *_PASSWORD assignment (any case, quoted or not),
+# `Authorization: <scheme> <value>`, and X-… request headers (X-Pat:, X-Api-Key: …).
+# Every rule is idempotent: redacting [REDACTED] again yields the same text.
 
 # redact_secrets: replace common credential shapes with [REDACTED].
 redact_secrets() {
@@ -21,6 +27,10 @@ redact_secrets() {
     -e 's/(github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}/[REDACTED]/g' \
     -e 's/xox[baprs]-[A-Za-z0-9-]{10,}/[REDACTED]/g' \
     -e 's/AKIA[0-9A-Z]{16}/[REDACTED]/g' \
+    -e 's/syn_[A-Za-z0-9]{32,}/[REDACTED]/g' \
+    -e 's/(^|[^A-Za-z0-9_])(([A-Za-z0-9_]*_)?([Pp][Aa][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Kk][Ee][Yy]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]))=["'"'"']?[^[:space:]"'"'"']+["'"'"']?/\1\2=[REDACTED]/g' \
+    -e 's/([Aa]uthorization)[[:space:]]*:[[:space:]]*([A-Za-z]+[[:space:]]+)?[^[:space:]"'"'"']+/\1: [REDACTED]/g' \
+    -e 's/([Xx]-[A-Za-z0-9-]+)[[:space:]]*:[[:space:]]*[^[:space:]"'"'"']+/\1: [REDACTED]/g' \
     -e 's/([^[:space:]]*([Pp]assword|[Pp]asswd|[Ss]ecret|[Tt]oken|[Aa]pi[_-]?[Kk]ey)[^[:space:]=:]*)["]?[[:space:]]*[=:][[:space:]]*["]?[^[:space:]"]+/\1=[REDACTED]/g'
 }
 
