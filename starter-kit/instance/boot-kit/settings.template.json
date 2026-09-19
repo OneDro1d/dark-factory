@@ -65,6 +65,27 @@
             "command": "__HOME__/.claude/hooks/agent-notepad/hooks/user-prompt.sh"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/secret-guard.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/secret-guard.py",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -74,6 +95,11 @@
           {
             "type": "command",
             "command": "__HOME__/.claude/hooks/check-compound-bash.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/secret-guard.py",
             "timeout": 5
           }
         ]
