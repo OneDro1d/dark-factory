@@ -289,6 +289,97 @@ printf 'more\n' >> "$R/NOTES.md"; git -C "$R" add NOTES.md
 grep -q foreign-ran "$W/foreign.log" 2>/dev/null && ok "P7 the chained foreign hook still runs" || bad "P7 chained foreign hook did not run" "-"
 
 echo
+echo "=== F: review fixes (each was RED on the first head, fc8b033) ==="
+# F1 — the already-wrapped check was "MARKER in cmd": a trailing comment carrying the marker text
+# skipped the WHOLE hook, deny list included.
+for m in dontAsk bypassPermissions; do
+  OUT="$(bash_event 'gh auth token # secret-guard: output is redacted' "$m" | hook)"
+  [ "$(decision "$OUT")" = deny ] && ok "F1 $m: a marker comment does not skip the deny list" || bad "F1 $m: marker comment bypassed the deny list" "$OUT"
+done
+FORGED="$(printf '# secret-guard: output is redacted (secret-guard.py); the original command follows unchanged\ngh auth token')"
+OUT="$(bash_event "$FORGED" | hook)"
+[ "$(decision "$OUT")" = deny ] && ok "F1b a forged wrapper header does not skip the deny list" || bad "F1b forged header bypassed the deny list" "$OUT"
+ONCE="$(rewritten "$(bash_event 'echo hi' | hook)")"
+OUT="$(bash_event "$ONCE" | hook)"
+[ -z "$(rewritten "$OUT")" ] && [ "$(decision "$OUT")" = none ] && ok "F1c the hook's own wrapper is not wrapped twice" || bad "F1c wrapper re-wrapped or denied" "$(printf '%s' "$OUT" | head -c 120)"
+
+# F2 — prefix rules had no left boundary: ordinary hyphenated words matched sk-… and were masked,
+# prompts were blocked, and the pre-commit (same findings()) refused the commit.
+filt() { printf '%s\n' "$1" | hook --filter; }
+for w in disk-encryption-configuration-v2 task-management-framework-overview risk-assessment-matrix-2024-final \
+         thighs_abcdefghijklmnopqrstuv0123 xxoxb-not-a-slack-token-at-all BAKIAABCDEFGHIJKLMNOP; do
+  [ "$(filt "see $w here")" = "see $w here" ] && ok "F2 not masked: $w" || bad "F2 over-redacted: $w" "$(filt "see $w here")"
+done
+OUT="$(jq -cn '{hook_event_name:"UserPromptSubmit", prompt:"please check the disk-encryption-configuration-v2 setting"}' | hook)"
+[ "$(decision "$OUT")" = none ] && ok "F2 prompt with a hyphenated word is not blocked" || bad "F2 prompt wrongly blocked" "$OUT"
+FAKE_SK="sk-$(rnd 20)7Q$(rnd 20)"
+case "$(filt "key $FAKE_SK")" in *"$FAKE_SK"*) bad "F2 a real-shaped sk- key is no longer masked" "(value withheld)" ;; *) ok "F2 a real-shaped sk- key is still masked" ;; esac
+case "$(filt "k=$FAKE_GH")" in *"$FAKE_GH"*) bad "F2 gh token after = no longer masked" "(value withheld)" ;; *) ok "F2 a gh token after '=' is still masked" ;; esac
+printf 'see disk-encryption-configuration-v2 and task-management-framework-overview\n' > "$R/words.md"; git -C "$R" add words.md
+pc >/dev/null; [ $? -eq 0 ] && ok "F2 pre-commit passes hyphenated words" || bad "F2 pre-commit refused hyphenated words" "$(pc | head -3)"
+git -C "$R" commit -qm words
+
+# F3 — install followed core.hooksPath: a global hooksPath had its shared pre-commit renamed and the
+# guard armed for every repo; husky's .husky/_ file was renamed. Now: hooksPath set -> skip, say so.
+R3="$W/husky"; git init -q "$R3"; mkdir -p "$R3/.husky/_"
+printf '#!/bin/sh\necho husky\n' > "$R3/.husky/_/pre-commit"; chmod +x "$R3/.husky/_/pre-commit"
+git -C "$R3" config core.hooksPath .husky/_
+BEFORE="$(cksum < "$R3/.husky/_/pre-commit")"
+hook --install-precommit "$R3" >/dev/null 2>&1; RC=$?
+[ "$RC" -eq 0 ] && [ "$(cksum < "$R3/.husky/_/pre-commit")" = "$BEFORE" ] && [ ! -e "$R3/.husky/_/pre-commit.local" ] \
+  && ok "F3 repo core.hooksPath (husky): left alone, exit 0" || bad "F3 husky hook touched" "rc=$RC $(ls "$R3/.husky/_" | tr '\n' ' ')"
+R4="$W/plain"; git init -q "$R4"; GH4="$W/global-hooks"; mkdir -p "$GH4"
+printf '#!/bin/sh\necho shared\n' > "$GH4/pre-commit"; chmod +x "$GH4/pre-commit"
+printf '[core]\n\thooksPath = %s\n' "$GH4" > "$W/gitconfig-global"
+BEFORE="$(cksum < "$GH4/pre-commit")"
+env -i PATH="$PATH" HOME="$W/home" GIT_CONFIG_GLOBAL="$W/gitconfig-global" python3 "$GUARD" --install-precommit "$R4" >/dev/null 2>&1; RC=$?
+[ "$RC" -eq 0 ] && [ "$(cksum < "$GH4/pre-commit")" = "$BEFORE" ] && [ ! -e "$GH4/pre-commit.local" ] && [ ! -e "$R4/.git/hooks/pre-commit" ] \
+  && ok "F3b global core.hooksPath: the shared hook is left alone" || bad "F3b global hooksPath hook touched" "rc=$RC"
+OUT="$(env -i PATH="$PATH" HOME="$W/home" GIT_CONFIG_GLOBAL="$W/gitconfig-global" python3 "$GUARD" --install-precommit "$R4" 2>&1 >/dev/null)"
+printf '%s' "$OUT" | grep -q 'hooksPath' && ok "F3c the skip is logged, naming core.hooksPath" || bad "F3c skip not logged" "$OUT"
+
+# F4 — every doctl -o json was denied. Only the spec/secret-bearing subcommands are.
+allow F4 "doctl compute droplet list -o json"
+allow F4b "doctl kubernetes cluster list --output json"
+allow F4c "doctl databases list -o json"
+deny F4d "doctl databases connection 1234"
+deny F4e "doctl databases user list 1234"
+deny F4f "doctl kubernetes cluster kubeconfig show k8s-1"
+deny F4g "doctl registry docker-config"
+
+# F5 — wrapper robustness: the command runs in a subshell whose stdout+stderr go to the capture file,
+# so nothing it does (PATH, exec, traps, fds, shadowed commands, unset) can reach around the filter.
+wr() { # id command expected-line [value-that-must-not-appear]
+  local out rc; out="$(run_rewritten "$2")"; rc=$?
+  local left; left="$(find "$W" -maxdepth 1 -name 'secret-guard.*' | wc -l | tr -d ' ')"
+  if [ "$rc" -eq 99 ]; then bad "$1 not rewritten" "$2"
+  elif [ -n "${4:-}" ] && printf '%s' "$out" | grep -qF -- "$4"; then bad "$1 value reached the output" "(value withheld)"
+  elif ! printf '%s\n' "$out" | grep -qxF -- "$3"; then bad "$1 expected line missing" "$(printf '%s' "$out" | head -c 160)"
+  elif [ "$left" != 0 ]; then bad "$1 capture file left behind" "$left"
+  else ok "$1 $2"; fi
+}
+wr F5a 'export PATH=/nonexistent; echo x' 'x'
+wr F5b 'exec echo "pw $DB_PASSWORD"' 'pw [REDACTED]' "$FAKE_PW"
+wr F5c 'trap "echo bye $DB_PASSWORD" EXIT; echo hi' 'bye [REDACTED]' "$FAKE_PW"
+wr F5d 'echo x \' 'x'
+OUT="$(run_rewritten 'echo x \')"
+printf '%s' "$OUT" | grep -q '__sg' && bad "F5d wrapper internals leaked into the output" "$OUT" || ok "F5d no wrapper internals in the output"
+wr F5e 'echo "fd3 $DB_PASSWORD" >&3; echo after' 'after' "$FAKE_PW"
+wr F5f 'python3() { cat; }; rm() { :; }; echo "pw $DB_PASSWORD"' 'pw [REDACTED]' "$FAKE_PW"
+wr F5g 'v="$DB_PASSWORD"; unset DB_PASSWORD; echo "v $v"' 'v [REDACTED]' "$FAKE_PW"
+OUT="$(run_rewritten 'cd "$TMPDIR"; mkdir -p f5; cd f5; echo "in $DB_PASSWORD"; exit 7')"; RC=$?
+[ "$RC" -eq 7 ] && [ "$OUT" = "in [REDACTED]" ] \
+  && ok "F5h cd, output, exit 7: rc kept, output masked" || bad "F5h rc/output lost" "rc=$RC"
+OUT="$(run_rewritten 'cd "$TMPDIR"; mkdir -p f5b; cd f5b')"
+[ "$(cat "$W/cwd" 2>/dev/null)" = "$(cd "$W/f5b" && pwd -P)" ] && ok "F5h2 a cd in the command still moves the shell" || bad "F5h2 cwd lost" "$(cat "$W/cwd" 2>/dev/null)"
+for bad_in in 'not json' '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":"a string"}' \
+              '{"hook_event_name":"PostToolUse","tool_name":"mcp__x__y","tool_response":{"a":[1,{"b":null}]}}' '[]'; do
+  OUT="$(printf '%s' "$bad_in" | hook 2>/dev/null)"; RC=$?
+  [ "$RC" -eq 0 ] && [ "$(printf '%s' "$OUT" | jq -c . 2>/dev/null)" = '{}' ] \
+    && ok "F5i malformed input -> {} exit 0: ${bad_in:0:40}" || bad "F5i malformed input crashed" "rc=$RC out=$(printf '%s' "$OUT" | head -c 80)"
+done
+
+echo
 echo "=== G: the gitleaks config comes from the same rule table ==="
 CFG="$(hook --gitleaks-config)"
 for id in synapse-pat coder-token postgres-url-password; do

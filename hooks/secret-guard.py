@@ -55,26 +55,30 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import urllib.parse
 
 MARKER = "# secret-guard: output is redacted"
+WRAP_HEADER = f"{MARKER} (secret-guard.py); the original command follows unchanged\n"
 PRECOMMIT_MARKER = "secret-guard pre-commit"
 
 # ── the rule table: one source for the redactor, the prompt check, the pre-commit scan and the
 # ── generated gitleaks config. Every regex is RE2-compatible (no look-around) so gitleaks,
 # ── which is Go, can use it verbatim.
+# ⚠️ Every prefix starts at a word boundary (\b). Without it `sk-` matched inside ordinary hyphenated
+# words (disk-encryption-…, task-management-…): prompts were blocked, output was garbled, commits refused.
 RULES = [
-    ("synapse-pat", r"syn_[A-Za-z0-9]{32,}", "Synapse personal access token"),
-    ("github-token", r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})", "GitHub token"),
-    ("slack-token", r"xox[abposr]-[A-Za-z0-9-]{10,}", "Slack token"),
-    ("slack-app-token", r"xapp-[0-9]+-[A-Za-z0-9-]{10,}", "Slack app-level token"),
-    ("stripe-live-key", r"(?:sk|rk)_live_[A-Za-z0-9]{16,}", "Stripe live key"),
-    ("openai-key", r"sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}", "OpenAI-style secret key"),
-    ("supabase-secret-key", r"sb_secret_[A-Za-z0-9_-]{16,}", "Supabase secret key"),
-    ("aws-access-key-id", r"(?:AKIA|ASIA)[0-9A-Z]{16}", "AWS access key id"),
-    ("jwt", r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", "JSON Web Token"),
+    ("synapse-pat", r"\bsyn_[A-Za-z0-9]{32,}", "Synapse personal access token"),
+    ("github-token", r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})", "GitHub token"),
+    ("slack-token", r"\bxox[abposr]-[A-Za-z0-9-]{10,}", "Slack token"),
+    ("slack-app-token", r"\bxapp-[0-9]+-[A-Za-z0-9-]{10,}", "Slack app-level token"),
+    ("stripe-live-key", r"\b(?:sk|rk)_live_[A-Za-z0-9]{16,}", "Stripe live key"),
+    ("openai-key", r"\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}", "OpenAI-style secret key"),
+    ("supabase-secret-key", r"\bsb_secret_[A-Za-z0-9_-]{16,}", "Supabase secret key"),
+    ("aws-access-key-id", r"\b(?:AKIA|ASIA)[0-9A-Z]{16}", "AWS access key id"),
+    ("jwt", r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", "JSON Web Token"),
     ("coder-token", r"\b[A-Za-z0-9]{10}-[A-Za-z0-9]{22}\b", "Coder session/agent token"),
 ]
 # the password inside scheme://user:password@host — the user and host are kept
@@ -201,6 +205,7 @@ def findings(text, env=None, values_re=None):
 KUBECTL_NAMES = "kubectl get secret <name> -n <ns> -o go-template='{{range $k, $v := .data}}{{$k}} {{end}}'"
 MSG = {
     "kubectl": "This prints Secret VALUES (base64 is an encoding, not encryption), and whatever a command prints is stored in the session transcript. Key names only: " + KUBECTL_NAMES + " . Existence and sizes: kubectl describe secret <name> -n <ns>.",
+    "doctl-db": "This prints credentials (a database connection string or user password, a kubeconfig, or a registry auth). Put it straight where it is used without printing it, e.g. doctl kubernetes cluster kubeconfig save <cluster>, or pipe it into the consumer.",
     "doctl": "This prints the app spec, and DigitalOcean env values of type GENERAL are plain text in it. Names and types only: doctl apps spec get <id> | jq '[.. | .envs? // empty | .[] | {key, type}]'.",
     "gh-token": "This prints the GitHub token itself. To check a login: gh auth status (without -t). To use it, let gh send it (gh api ...) or rely on GH_TOKEN already in the environment; never print it.",
     "env": "This prints every environment variable's VALUE, tokens included. Names only: env | cut -d= -f1 . One variable set or not: test -n \"$NAME\" and echo the result.",
@@ -378,15 +383,20 @@ def _rule_for(argv, piped, redirected):
     if c in ("set", "export", "declare", "typeset") and (len(a) == 1 or a[1:] in (["-p"], ["-x"], ["-px"], ["-xp"])):
         return "env" if c != "set" or len(a) == 1 else None
     if c == "doctl":
-        fmt = _opt(a, "-o", "--output")
-        if fmt and fmt.lower().startswith("json"):
-            return "doctl"
-        if "apps" in a:
-            i = a.index("apps")
-            if a[i + 1:i + 2] == ["get"]:
+        # Only the subcommands that print secret material. `-o json` on anything else (droplet list,
+        # cluster list) prints nothing a text listing would not, so it is allowed.
+        sub = [t for t in a[1:] if not t.startswith("-")]
+        fmt = (_opt(a, "-o", "--output") or "").lower()
+        if sub[:1] == ["apps"]:
+            if sub[1:2] == ["get"] or fmt.startswith("json"):
                 return "doctl"
-            if a[i + 1:i + 3] == ["spec", "get"] and not piped and not redirected:
+            if sub[1:3] == ["spec", "get"] and not piped and not redirected:
                 return "doctl"
+        if sub[:1] == ["databases"] and (sub[1:2] == ["connection"] or
+                                         (sub[1:2] in (["user"], ["pool"]) and sub[2:3] in (["get"], ["list"], ["reset"]))):
+            return "doctl-db"
+        if sub[:4] == ["kubernetes", "cluster", "kubeconfig", "show"] or sub[:2] == ["registry", "docker-config"]:
+            return "doctl-db"
         return None
     if c == "vault":
         if a[1:3] == ["kv", "get"] or a[1:2] == ["read"]:
@@ -448,19 +458,53 @@ def _wrap(cmd):
     output: Claude Code reads the command's output when the shell exits, and the filters were still
     flushing. Capture-then-filter has nothing in flight at exit. It costs streaming, which a
     foreground Bash call never shows anyway (background calls are not rewritten).
-    Portable to bash 3.2 and zsh (no process substitution, no `wait` on one). No subshell, so a cd
-    in the command still moves the session. An `exit` inside the command runs the EXIT trap, which
-    delivers the output; otherwise the tail does it and restores the exit status.
+    Portable to bash 3.2 and zsh (no process substitution, no `wait` on one).
+
+    ⛔ THE COMMAND RUNS IN A SUBSHELL whose stdout+stderr go to the capture file, and nothing else
+    is open for it. The first version redirected the session shell itself (`exec >file`, with the
+    real outputs saved on fds 3/4 and an EXIT trap). Everything the command could do to that shell
+    broke it: `export PATH=…` hid python3 from the tail, `exec` or its own `trap … EXIT` skipped
+    the tail and left the capture file unredacted, `>&3` wrote past the filter, a function named
+    python3 replaced the filter, and a trailing `\\` glued the tail onto the command. In a
+    subshell none of that reaches the tail. The tail uses absolute paths anyway, and the fds a
+    parent might have left open (3-9) are closed for the command. The blank line after the command
+    absorbs a trailing `\\`. The subshell writes its final cwd to a side file and the tail cds
+    there, so a cd in the command still moves the session. After an `exit` inside the command the
+    cwd is not carried, just as Claude Code does not record it when the shell exits.
     """
     g = shlex.quote(os.path.abspath(__file__))
+    py = shlex.quote(sys.executable or "python3")
+    rm = shlex.quote(shutil.which("rm") or "/bin/rm")
+    mk = shlex.quote(shutil.which("mktemp") or "/usr/bin/mktemp")
     return (
-        f"{MARKER} (secret-guard.py); the original command follows unchanged\n"
-        '__sg_f="$(mktemp "${TMPDIR:-/tmp}/secret-guard.XXXXXX")"; '
-        f'__sg_end() {{ exec 1>&3 2>&4; python3 {g} --filter < "$__sg_f"; rm -f "$__sg_f"; }}; '
-        'trap __sg_end EXIT; exec 3>&1 4>&2 >"$__sg_f" 2>&1\n'
-        f"{cmd}\n"
-        '__sg_rc=$?; trap - EXIT; __sg_end; (exit $__sg_rc)'
+        WRAP_HEADER
+        + f'__sg_f="$({mk} "${{TMPDIR:-/tmp}}/secret-guard.XXXXXX")"\n'
+        + "(\n"
+        + f"{cmd}\n"
+        + "\n"
+        + '__sg_rc=$?; pwd -P >"$__sg_f.cwd" 2>/dev/null; exit $__sg_rc\n'
+        + ') >"$__sg_f" 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&-\n'
+        + f'__sg_rc=$?; {py} {g} --filter <"$__sg_f"; {rm} -f "$__sg_f"\n'
+        + f'if [ -s "$__sg_f.cwd" ]; then IFS= read -r __sg_c <"$__sg_f.cwd"; builtin cd "$__sg_c" 2>/dev/null; fi; {rm} -f "$__sg_f.cwd"\n'
+        + "(exit $__sg_rc)"
     )
+
+
+def _unwrap(cmd):
+    """The original command if cmd is EXACTLY what _wrap generated for it, else None.
+
+    ⛔ Never "contains the marker": a comment carrying the marker text used to skip the whole hook,
+    deny list included. And never "starts with the header" alone: a forged header followed by
+    anything would skip the redaction. Only a byte-exact regeneration counts as already wrapped.
+    """
+    if not cmd.startswith(WRAP_HEADER):
+        return None
+    lines = cmd.split("\n")
+    # header, mktemp, "(", <cmd lines…>, "", rc line, ")" redirect, tail x2, "(exit …)"
+    if len(lines) < 10 or lines[2] != "(":
+        return None
+    inner = "\n".join(lines[3:-6])
+    return inner if _wrap(inner) == cmd else None
 
 
 # ── hook entry points ────────────────────────────────────────────────────────────────────────────
@@ -469,13 +513,16 @@ def on_pre_tool_use(ev):
         return {}
     ti = ev.get("tool_input") or {}
     cmd = ti.get("command") or ""
-    if not cmd.strip() or MARKER in cmd:
+    if not isinstance(cmd, str) or not cmd.strip():
         return {}
+    # The deny list runs FIRST, on the command as given: nothing in the text can switch it off.
     key = deny_reason(cmd)
     if key:
         reason = "secret-guard: denied. " + MSG[key]
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                        "permissionDecisionReason": reason}}
+    if _unwrap(cmd) is not None:
+        return {}  # this hook's own wrapper, byte for byte: do not wrap it twice
     if os.environ.get("SECRET_GUARD_WRAP", "on").lower() == "off":
         return {}
     # ⛔ ONLY in bypassPermissions. MEASURED in a live headless session: in every other mode Claude
@@ -628,6 +675,15 @@ def install_precommit(repo):
     if r.returncode != 0:
         print(f"secret-guard: {repo} is not a git repository", file=sys.stderr)
         return 1
+    # ⛔ core.hooksPath (set at ANY scope) means the hooks directory is someone else's: a global
+    # one is shared by every repo on the machine, and a repo one is usually a hook manager's
+    # (husky's .husky/_). Installing there renamed their pre-commit. Skip, and say so.
+    hp = _git(["config", "--get", "core.hooksPath"], repo)
+    if hp.returncode == 0 and hp.stdout.strip():
+        print(f"secret-guard: {repo} uses core.hooksPath={hp.stdout.decode().strip()}; that directory is not ours, "
+              "so the credential pre-commit was NOT installed. Call `secret-guard.py --pre-commit` from that hook to add it.",
+              file=sys.stderr)
+        return 0
     hd = r.stdout.decode().strip()
     if not os.path.isabs(hd):
         hd = os.path.join(repo, hd)
@@ -695,10 +751,15 @@ def main(argv):
     except ValueError:
         print("{}")
         return 0
-    name = ev.get("hook_event_name", "")
-    handler = {"PreToolUse": on_pre_tool_use, "PostToolUse": on_post_tool_use,
-               "UserPromptSubmit": on_user_prompt}.get(name)
-    print(json.dumps(handler(ev) if handler else {}))
+    try:
+        name = ev.get("hook_event_name", "")
+        handler = {"PreToolUse": on_pre_tool_use, "PostToolUse": on_post_tool_use,
+                   "UserPromptSubmit": on_user_prompt}.get(name)
+        out = handler(ev) if handler else {}
+    except Exception as e:  # malformed input must not crash the hook; say what happened, change nothing
+        print(f"secret-guard: ignored an event it could not read ({type(e).__name__})", file=sys.stderr)
+        out = {}
+    print(json.dumps(out))
     return 0
 
 
