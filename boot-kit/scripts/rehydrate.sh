@@ -585,6 +585,28 @@ else
   rm -f "$SD_TMP"
 fi
 
+# ---- 4c. declared session settings (add-only, opt-in) ---------------------------
+# Section 4 wires hook chains and deliberately never applies any other key. This step applies
+# the non-hook keys a record DECLARES under `install.settings`, and nothing else. A record that
+# declares none gets a one-line no-op, so moving a pin to this engine changes no machine's
+# settings on its own.
+#
+# ⚠️ ADD-ONLY, and that is the override mechanism. A key already in $LIVE/settings.json keeps
+# its value and is reported, never overwritten: the operator's own choice wins over the record.
+# A notepad overrides per project with its own `.claude/settings.json`, which outranks this file.
+say ""
+say "== 4c. declared session settings -> $LIVE/settings.json (add-only) =="
+ADS="$SELFDIR/apply-declared-settings.py"
+if [ ! -f "$ADS" ]; then
+  say "  WARN  apply-declared-settings.py not beside this script — declared settings NOT applied"
+elif [ "$DRY" -eq 1 ]; then
+  python3 "$ADS" --lock "$LOCK" --live "$LIVE/settings.json" --dry-run \
+    || say "  WARN  declared settings NOT applied — see above"
+else
+  python3 "$ADS" --lock "$LOCK" --live "$LIVE/settings.json" \
+    || say "  WARN  declared settings NOT applied — see above"
+fi
+
 # ⚠️ Same shape as section 4, and for the same reason. `.gitattributes` in a notepad only NAMES
 # a merge driver; git will not run one it has no config for. The registration first shipped
 # inside the agent-notepad PLUGIN's installer — which nothing on this fleet executes — so it
