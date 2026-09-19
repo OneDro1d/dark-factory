@@ -228,6 +228,43 @@ else
            || die "commit ${T1_COMMIT:0:8} is not in $T1_REPO — the pin is wrong, or it was never pushed" ;;
     esac
   fi
+
+  # ---- 1b. the ENGINE follows `track` too ------------------------------------------------
+  # ⛔ WHY THIS IS HERE AND NOT ONLY IN rehydrate.sh. rehydrate.sh resolves `track` and moves
+  # the vendored tree -- but it runs in step 3, and step 2 below has already copied the engine
+  # from the RECORDED commit. So the first install after a move ran the PREVIOUS engine:
+  # skills and hooks came from the moved tree and were current, while anything the engine
+  # itself does (a new rehydrate section, lock-verify) was one commit behind. Measured: a new
+  # rehydrate section appeared only on the SECOND install after the move.
+  #
+  # The resolution rule is rehydrate.sh's own (tag first, then branch; --frozen ignores it; a
+  # ref that resolves to nothing warns and keeps the recorded pin). rehydrate.sh still OWNS the
+  # record: it resolves the same ref in step 3 and rewrites `.commit`. This step only makes the
+  # engine that does that the one the record is about to name.
+  T1_TRACK="$(jq -r --arg n "$T1_NAME" '.upstreams[$n].track // empty' "$LOCK")"
+  if [ -n "$T1_TRACK" ] && [ "$FROZEN" -eq 1 ]; then
+    say "  frozen $T1_NAME tracks '$T1_TRACK' — ignored; the engine comes from the recorded ${T1_COMMIT:0:8}"
+  elif [ -n "$T1_TRACK" ] && [ "$DRY" -eq 1 ]; then
+    say "would  resolve $T1_NAME '$T1_TRACK' before copying the engine"
+  elif [ -n "$T1_TRACK" ] && [ -d "$T1/.git" ]; then
+    # --tags --force: a plain fetch does not move tags, and a `stable` tag is the advised target.
+    GIT_TERMINAL_PROMPT=0 git -C "$T1" fetch --quiet --tags --force origin 2>/dev/null || true
+    T1_RESOLVED=""
+    for _ref in "refs/tags/$T1_TRACK" "refs/remotes/origin/$T1_TRACK"; do
+      _got="$(git -C "$T1" rev-parse --verify --quiet "$_ref^{commit}" 2>/dev/null || true)"
+      [ -n "$_got" ] && { T1_RESOLVED="$_got"; break; }
+    done
+    if [ -z "$T1_RESOLVED" ]; then
+      say "  WARN  $T1_NAME tracks '$T1_TRACK' — no such tag or branch; the engine comes from the recorded ${T1_COMMIT:0:8}"
+    elif [ "$T1_RESOLVED" != "$T1_COMMIT" ]; then
+      if git -C "$T1" checkout --quiet "$T1_RESOLVED" 2>/dev/null; then
+        say "  track  $T1_NAME '$T1_TRACK': engine from ${T1_RESOLVED:0:8} (record says ${T1_COMMIT:0:8}; rehydrate moves it below)"
+        T1_COMMIT="$T1_RESOLVED"
+      else
+        say "  WARN  could not check out ${T1_RESOLVED:0:8} — the engine comes from the recorded ${T1_COMMIT:0:8}"
+      fi
+    fi
+  fi
 fi
 
 ENGINE_SRC="$T1/boot-kit/scripts"
