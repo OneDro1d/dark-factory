@@ -150,6 +150,12 @@ also holds a manifest, a charter and session journals that other machinery write
 own schedule; sweeping them in publishes a half-written record from a different tier under
 this one's commit message.
 
+⛔ **It refuses a call it does not understand, before writing anything.** An empty or
+whitespace-only body, a body file that does not exist, or any argument beyond
+`<notepad-root> <topic> [body-file]` exits 2 with no file and no commit. Measured 2026-09-19:
+`--body-file <f>` was read as a body-file *name*, the body fell back to an empty stdin, and a
+header-only handoff was committed and pushed with exit 0 — indistinguishable from success.
+
 ⚠️ **The commit is not best-effort; only the push is.** A flaky remote must not block a
 local checkpoint, but a *rejected commit* reported as success loses the checkpoint
 entirely — so a non-zero commit (other than "nothing to commit") is surfaced and returns
