@@ -14,6 +14,7 @@
   ],
   "hooks": [
     "check-compound-bash.sh",
+    "secret-guard.py",
     "context-budget.py",
     "agent-notepad/hooks/session-start.sh",
     "agent-notepad/hooks/user-prompt.sh",
