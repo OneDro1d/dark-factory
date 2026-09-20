@@ -743,4 +743,44 @@ STUB
   rm -rf "$stub" "$(dirname "$np")"
 }
 
+# ⛔ A SLICE TOO SMALL TO HOLD A COMPLETE BLOCK IS WORSE THAN A POINTER, and the bytes it eats
+# come out of NOTES.md, which sits on a floor underneath it.
+#
+# MEASURED 2026-09-20 on notepad-onedroid-dark-factory: DIGEST.md at 240,713 bytes was given
+# 1,036 of them, and the slice that arrived broke off mid-word inside a CORRECTION -- at the
+# text "That was wrong a" -- so the reader received the half that says the opposite of what the
+# block concludes. NOTES.md sat on its 1,200-byte floor underneath. Freeing DIGEST alone was NOT
+# enough: the manifest absorbed the same bytes and spent them on the $-prefixed editorial about
+# how to EDIT it. Both consumers ahead of the floor need the verdict.
+#
+# ⚠️ THIS TEST MUST FAIL ON THE PRE-FIX HOOK, and it does -- verified by running it against
+# ddda0f58 before the change. A suite that passes both before and after has not tested the change.
+test_oversized_sections_point_instead_of_dribbling_and_notes_gets_the_bytes() {
+  local np out; np="$(_scaffold)"
+  mkdir -p "$np/handoffs"
+  # a realistic handoff: big enough to squeeze the document budget, under the 4,096 cap
+  awk 'BEGIN{ printf "# handoff\n"; for(i=0;i<95;i++) print "handoff body line filler ........." }' \
+    > "$np/handoffs/2026-09-20-squeeze.md"
+  # DIGEST far larger than anything the budget could carry
+  awk 'BEGIN{ for(i=0;i<6000;i++) print "digest filler block ............" }' >> "$np/DIGEST.md"
+  # a manifest whose PROJECTED repo digest is also too big for what is left
+  awk 'BEGIN{ printf "{ \"repos\": ["; for(i=0;i<60;i++){ if(i)printf ","; printf "{\"name\":\"r%d\",\"path\":\"/abs/code/MANIFEST_SENTINEL%d\",\"branch\":\"main\",\"role\":\"primary\"}", i, i } printf "] }\n" }' \
+    > "$np/repos.manifest.json"
+  # a sentinel ABOVE the old 1,200-byte floor but well inside the freed budget
+  awk 'BEGIN{ for(i=0;i<40;i++) print "notes head filler line ..............." }' >> "$np/NOTES.md"
+  printf 'NOTES_PAST_THE_OLD_FLOOR\n' >> "$np/NOTES.md"
+  awk 'BEGIN{ for(i=0;i<2000;i++) print "notes tail filler ............." }' >> "$np/NOTES.md"
+
+  out="$(AGENT_NOTEPAD_NO_PULL=1 _run_hook "$np")"
+
+  assert_contains "$out" "POINTER ONLY" "an unusable slice is replaced by a pointer"
+  assert_contains "$out" "NOTES_PAST_THE_OLD_FLOOR" \
+    "the freed bytes reach NOTES.md instead of dribbling into a fragment"
+  assert_contains "$out" "DIGEST.md" "the pointer still names the file it did not inject"
+  assert_contains "$out" "repos.manifest.json" "and so does the manifest pointer"
+  # the head of NOTES.md must still arrive - the pointer rule must never apply to NOTES itself
+  assert_contains "$out" "NOTES_SENTINEL_ARBBOT" "NOTES.md is still read head-first, never pointed at"
+  rm -rf "$(dirname "$np")"
+}
+
 run_tests

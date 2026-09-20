@@ -531,6 +531,64 @@ combined="$(
   _budget="${AGENT_NOTEPAD_MAX_BYTES:-$_default_budget}"
   _reserve_notes="${AGENT_NOTEPAD_NOTES_MIN_BYTES:-1200}"
   [ "$_reserve_notes" -ge "$_budget" ] && _reserve_notes=$(( _budget / 2 ))
+  # ⛔ ONE DECISION, ONE HOME. The DIGEST verdict is computed HERE, once, and BOTH the
+  # announcement below and the emitter further down read these variables. It used to be decided
+  # twice, the announcement recomputing it from raw sizes, and that is exactly how a 174-byte
+  # file got announced as too large directly above its own full inline (eso laptop, 2026-09-08).
+  # Two homes for one number is the defect; the arithmetic was never the hard part.
+  _minslice="${AGENT_NOTEPAD_MIN_USEFUL_SLICE:-2000}"
+  _dsz=0
+  [ -f "$np/DIGEST.md" ] && _dsz="$(wc -c < "$np/DIGEST.md" 2>/dev/null | tr -d ' ')"
+  _dsz="${_dsz:-0}"
+  _dleft=$(( _budget - _reserve_notes ))
+  _digest_mode=omit ; _dspend=0
+  if [ "$_dsz" -gt 0 ]; then
+    if [ "$_dleft" -le 512 ]; then
+      _digest_mode=omit ; _dspend=0
+    elif [ "$_dsz" -le "$_dleft" ]; then
+      _digest_mode=whole ; _dspend="$_dsz"
+    elif [ "$_dleft" -lt "$_minslice" ]; then
+      # ⛔ A CAVEAT CUT MID-SENTENCE IS A COMPRESSED CAVEAT, and compressing one is the single
+      # thing the notepad rule forbids. MEASURED 2026-09-20 on notepad-onedroid-dark-factory:
+      # DIGEST.md was 240,713 bytes, the cold budget left 1,036 for it, and the slice that
+      # arrived broke off mid-word inside a CORRECTION, at the text "That was wrong a" - so a
+      # reader could carry away the half that says the opposite of what the block concludes.
+      # 0.4 percent of a document is not a document. A pointer costs ~200 bytes of framing
+      # instead of the whole remaining budget, cannot be misread, and hands the bytes to NOTES.
+      # ⚠️ NOTES.md deliberately gets NO such rule: it is read head-first (goal and next action
+      # live at the top), so its head is useful at any size. DIGEST.md is a pile of independent
+      # blocks, and that is what makes a partial one dangerous rather than merely incomplete.
+      _digest_mode=pointer ; _dspend=0
+    else
+      _digest_mode=slice ; _dspend="$_dleft"
+    fi
+  fi
+  # ⚠️ THE SAME VERDICT FOR THE MANIFEST, AND IT IS NOT OPTIONAL. Measured 2026-09-20: freeing
+  # DIGEST alone did NOT reach NOTES.md - the manifest simply absorbed the 1,036 bytes instead,
+  # and spent them on a RAW slice whose first 2,090 bytes are the $-prefixed prose about how to
+  # EDIT the file. Fixing one greedy consumer in a priority chain just moves the waste one step
+  # down; the rule has to hold for every document ahead of the one with the floor.
+  _mraw=0
+  [ -f "$np/repos.manifest.json" ] && _mraw="$(wc -c < "$np/repos.manifest.json" 2>/dev/null | tr -d ' ')"
+  _mraw="${_mraw:-0}"
+  _msz=0
+  if [ -f "$np/repos.manifest.json" ] && command -v jq >/dev/null 2>&1; then
+    _msz="$(jq -c '{repos: [ (.repos // [])[] | {name, path, remote, branch, role, note} | with_entries(select(.value != null)) ]}' "$np/repos.manifest.json" 2>/dev/null | wc -c | tr -d ' ')"
+  fi
+  _msz="${_msz:-0}"
+  _mleft=$(( _budget - _dspend - _reserve_notes ))
+  _manifest_mode=omit ; _mspend=0
+  if [ "$_mraw" -gt 0 ]; then
+    if [ "$_mleft" -le 512 ]; then
+      _manifest_mode=omit ; _mspend=0
+    elif [ "$_msz" -gt 0 ] && [ "$_msz" -le "$_mleft" ]; then
+      _manifest_mode=digest ; _mspend="$_msz"
+    elif [ "$_mleft" -lt "$_minslice" ]; then
+      _manifest_mode=pointer ; _mspend=0
+    else
+      _manifest_mode=slice ; _mspend="$_mleft"
+    fi
+  fi
   # ⛔ DECIDED FROM THE SAME NUMBERS _emit_bounded WILL USE, so the announcement and the emission
   # cannot disagree. They did: this line printed NOT-inlined-too-large-for-the-budget for a
   # 174-byte file, unconditionally, directly above a full inline of that file (eso laptop,
@@ -543,14 +601,12 @@ combined="$(
     # with a jq filter carrying [])[] in single quotes, does not parse on bash 3.2 (macOS):
     # the arithmetic scanner mis-reads the brackets and the whole hook dies with
     # unexpected EOF. Found by hunk-bisecting this very block, 2026-09-08.
-    _dsz=0; _msz=0
-    if [ -f "$np/DIGEST.md" ]; then
-      _dsz="$(wc -c < "$np/DIGEST.md" 2>/dev/null | tr -d ' ')"
-    fi
-    if [ -f "$np/repos.manifest.json" ] && command -v jq >/dev/null 2>&1; then
-      _msz="$(jq -c '{repos: [ (.repos // [])[] | {name, path, remote, branch, role, note} | with_entries(select(.value != null)) ]}' "$np/repos.manifest.json" 2>/dev/null | wc -c | tr -d ' ')"
-    fi
-    _pre=$(( ${_dsz:-0} + ${_msz:-0} ))
+    # _dspend and _mspend come from the two single decisions above -- NOT recomputed here. Using
+    # the raw sizes was survivable only by accident: it made _nleft hugely negative, which clamped
+    # to the reserve and happened to be the right answer for the wrong reason. With pointer
+    # verdicts in play that accident stops holding, and a recomputation would disagree with the
+    # emitter -- which is the exact defect the 2026-09-08 comment above this block records.
+    _pre=$(( ${_dspend:-0} + ${_mspend:-0} ))
     # DIGEST and the manifest may not spend into the NOTES reserve, so NOTES gets at least it.
     _nleft=$(( _budget - _pre ))
     [ "$_nleft" -lt "$_reserve_notes" ] && _nleft="$_reserve_notes"
@@ -663,7 +719,15 @@ combined="$(
   # goal and Next action live at the TOP, so the first N KB is the operationally useful part.
   # That is a property of the template, not a law — if that layout changes, this ordering has
   # to be revisited rather than trusted.
-  _emit_bounded "$np/DIGEST.md"           "DIGEST.md (cross-scope, derived)" "" "$_reserve_notes"
+  # Reads the ONE verdict computed with the budget above; it does not decide again.
+  if [ "$_digest_mode" = "pointer" ]; then
+    printf '\n\n### DIGEST.md (cross-scope, derived) — POINTER ONLY, %s bytes NOT injected\n' "$_dsz"
+    printf '  Deliberate: only %s bytes of budget remained, and a slice that small ends\n' "$_dleft"
+    printf '  mid-sentence. Half a caveat is worse than a pointer to the whole one, so these\n'
+    printf '  bytes go to NOTES.md instead. ⛔ OPEN IT:  %s\n' "$np/DIGEST.md"
+  else
+    _emit_bounded "$np/DIGEST.md"         "DIGEST.md (cross-scope, derived)" "" "$_reserve_notes"
+  fi
   # WARN THE REPOS, NOT THE EDITORIAL. Measured 2026-09-05: the manifest is 4,504 bytes and 2,090
   # of them are top-level $-prefixed prose about how to EDIT it, placed FIRST. The raw-file cap
   # delivered all of that and ONE of three repo entries, cut mid-word. The repos array projected
@@ -692,7 +756,15 @@ combined="$(
     _spent=$(( _spent + dsz ))
     return 0
   }
-  _emit_manifest
+  # Reads the ONE verdict computed with the budget above; it does not decide again.
+  if [ "$_manifest_mode" = "pointer" ]; then
+    printf '\n\n### repos.manifest.json — POINTER ONLY, %s bytes NOT injected\n' "$_mraw"
+    printf '  Deliberate: %s bytes of budget remained, and a raw slice that small delivers the\n' "$_mleft"
+    printf '  $-prefixed editorial about how to EDIT the file rather than the repos themselves.\n'
+    printf '  Those bytes go to NOTES.md instead. ⛔ OPEN IT:  %s\n' "$np/repos.manifest.json"
+  else
+    _emit_manifest
+  fi
   _emit_bounded "$np/NOTES.md"            "NOTES.md"
 )"
 
