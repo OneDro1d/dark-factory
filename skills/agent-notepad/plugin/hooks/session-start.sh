@@ -258,7 +258,7 @@ _cold_budget() { # <np> -> sets _hf _hsz _hcap _budget _reserve_notes _notes_flo
     _hsz="$(wc -c < "$_hf" 2>/dev/null | tr -d ' ')"; _hsz="${_hsz:-0}"
     _hoff="$_hsz"; [ "$_hoff" -gt "$_hcap" ] && _hoff="$_hcap"
   fi
-  _total="${AGENT_NOTEPAD_TOTAL_BYTES:-6300}"
+  _total="${AGENT_NOTEPAD_TOTAL_BYTES:-6100}"
   _default_budget=$(( _total - _hoff ))
   [ "$_default_budget" -lt 1200 ] && _default_budget=1200
   _budget="${AGENT_NOTEPAD_MAX_BYTES:-$_default_budget}"
@@ -647,9 +647,21 @@ combined="$(
   # ⚠️ THE FRAMING IS NOT IN THE TOTAL AND IT IS NOT SMALL. Headings, the orientation block, the
   # next-action quote (up to 600 bytes), the other-notepads list, every OMITTED / TRUNCATED notice:
   # measured at ~3,800 bytes with a pathological NOTES.md in the suite (6,600 for documents put
-  # the field at 10,110). 6,300 for the documents keeps that worst case under 10,000. The handoff
-  # cap is 4,096 so a full-size handoff plus the NOTES reserve still fits: 4,096 + 1,200 + 3,800.
+  # the field at 10,110). The handoff cap is 4,096 so a full-size handoff plus the NOTES reserve
+  # still fits: 4,096 + 1,200 + 3,800.
   # Under-spending by a KB is a cost; over-spending by one byte is a 2 KB preview and no restore.
+  #
+  # ⛔ 6,300 → 6,100, MEASURED 2026-09-20. The line above used to end "6,300 for the documents
+  # keeps that worst case under 10,000" and ITS OWN ARITHMETIC REFUTES IT: 6,300 + 3,800 = 10,100.
+  # On the real notepad, framing measured 3,754 and the field came out at 10,054.
+  # ⚠️ THAT IS NOT SAFE JUST BECAUSE IT IS UNDER 10,240. The cap was measured as an INTERVAL —
+  # 10,000 arrived, 10,500 did not (`9834b409`) — so everything in (10,000, 10,500] is UNVERIFIED,
+  # and 10,054 sits inside it. 10 KiB is the best guess at the ceiling, never an observation.
+  # ⚠️ The failure is not graceful: one byte over and the WHOLE field becomes a 2 KB preview, so
+  # the right target is the largest value actually OBSERVED to arrive (~9,900, `2fc96e95`), not
+  # the smallest believed to fail. 6,100 + 3,800 = 9,900. It costs NOTES.md 200 cold bytes and
+  # buys delivery certainty — and against a floor, those 200 bytes were never the binding
+  # constraint on what NOTES.md carries; ORDER is (`a3af5e14`).
   #
   # ⚠️ NOTES.md GETS A RESERVED SLICE. It is emitted LAST (its top is the useful part, and it grows
   # without limit), and last meant it was the one always OMITTED. Reserving 1,200 bytes means the
