@@ -104,4 +104,71 @@ test_floor_does_not_move_cold_part2() {
     "cold part 2 is BYTE-IDENTICAL with and without a floor — no gap can open"
 }
 
+# ⛔ THE BUDGET INVARIANT — AND WHY 444 GREEN TESTS DID NOT CATCH THE DEFECT THIS PINS.
+#
+# _scaffold above builds a notepad whose documents total a few hundred bytes. The cold budget is
+# NEVER CONTENDED there, so every consumer gets everything it asks for and no overspend is
+# possible. The suite was green on the exact code that shipped this bug. A case that cannot fail
+# is not a case: this one contends the budget on purpose.
+#
+# MEASURED 2026-09-20 on the real notepad, first live /clear after this branch was wired: the
+# floor emitter never added _fspend to _spent, so DIGEST.md recomputed its slice from _spent=0 and
+# took 1,079 bytes the budget had already given away. Field = 10,818 against a cap measured at
+# 10 KiB (Engram `9834b409`) ⇒ the harness replaced ALL of part 1 with a ~2 KB preview. The
+# restore lost the handoff, the floor and the head of NOTES.md to save a DIGEST slice the verdict
+# had already said to drop. ⚠️ AN OVERSPEND IN AN ORDERED BUDGET DOES NOT COST ITS OWN SIZE — it
+# costs the whole payload.
+_scaffold_contended() { # prints "<np>|<transcript>"
+  local base np tp
+  base="$(mktemp -d)"
+  np="$base/proj-contended"
+  mkdir -p "$np/sessions" "$np/handoffs"
+  # Each document is far larger than its share, so every one of them must be cut or dropped.
+  head -c 40000 /dev/zero | tr '\0' 'N' > "$np/NOTES.md"
+  head -c 60000 /dev/zero | tr '\0' 'D' > "$np/DIGEST.md"
+  head -c  8000 /dev/zero | tr '\0' 'H' > "$np/handoffs/2026-09-20-x.md"
+  tp="$base/transcript.jsonl"
+  # >900 bytes of intent so the floor is CAPPED, not merely present.
+  {
+    printf '{"type":"user","message":{"content":"USERINTENT_MARKER_QUETZAL %s"}}\n' "$(head -c 2000 /dev/zero | tr '\0' 'u')"
+  } > "$tp"
+  printf '%s|%s' "$np" "$tp"
+}
+
+test_cold_field_stays_within_the_harness_cap() {
+  local s np tp raw field bytes announced delivered
+  command -v jq >/dev/null 2>&1 || { assert_eq skip skip "jq absent — cold-field cap not measured"; return 0; }
+  s="$(_scaffold_contended)"; np="${s%%|*}"; tp="${s##*|}"
+  _fire SessionEnd '"reason":"clear",' "$np" "$tp"
+  raw="$(printf '{"hook_event_name":"SessionStart","source":"clear","cwd":"%s"}' "$np" \
+    | AGENT_NOTEPAD_NO_PULL=1 bash "$SS")"
+  field="$(printf '%s' "$raw" | jq -r '.hookSpecificOutput.additionalContext // .additionalContext // empty')"
+  bytes="$(printf '%s' "$field" | wc -c | tr -d ' ')"
+
+  # ⛔ THE CONTROL, FIRST. If the scaffold ever stops contending the budget, every assertion below
+  # passes for the wrong reason. Prove the squeeze is real before trusting the cap.
+  case "$field" in
+    *"NOTES.md — CUT"*) assert_eq contended contended "CONTROL: the budget IS contended (NOTES cut)" ;;
+    *) assert_eq contended uncontended "CONTROL: scaffold no longer contends the budget — the cap assertion below is vacuous" ;;
+  esac
+
+  # 10,240 = the measured ceiling, inside (10,000, 10,500] — Engram `9834b409`, 2026-09-08.
+  # It is on the additionalContext FIELD, not on stdout.
+  if [ "$bytes" -le 10240 ]; then
+    assert_eq within within "cold part 1 field is ${bytes} bytes, within the 10 KiB harness cap"
+  else
+    assert_eq within "over by $(( bytes - 10240 ))" \
+      "cold part 1 field is ${bytes} bytes — OVER the 10 KiB cap, so the harness delivers a 2 KB preview instead"
+  fi
+
+  # ⛔ ANNOUNCEMENT AND EMISSION ARE ONE DECISION. The banner's NOTES figure comes from _pre
+  # (which counts the floor); the emitter's comes from _spent. They agree only while every
+  # emitter records what it spent — which is precisely what regressed. This assertion is
+  # version-independent: it pins the invariant, not a byte count that will move.
+  announced="$(printf '%s' "$field" | sed -n 's/.*first ~\([0-9]*\) of.*/\1/p' | head -1)"
+  delivered="$(printf '%s' "$field" | awk '/TRUNCATED at/ && /NOTES\.md/ {print $3; exit}')"
+  assert_eq "${announced:-none}" "${delivered:-none}" \
+    "the banner's NOTES.md byte count equals what the emitter actually delivered"
+}
+
 run_tests

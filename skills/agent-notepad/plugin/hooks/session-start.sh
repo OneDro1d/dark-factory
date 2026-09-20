@@ -877,6 +877,19 @@ combined="$(
     printf '\n\n### SESSION FLOOR — %s\n\n' "$np/PRECOMPACT.md"
     _compact_chunk "$np/PRECOMPACT.md" 0 "$_fspend"
     [ "${_fsz:-0}" -gt "${_fspend:-0}" ] && printf '\n[floor CUT at ~%s of %s bytes; open the file for the rest]\n' "$_fspend" "$_fsz"
+    # ⛔ THE FLOOR MUST RECORD WHAT IT SPENT. _emit_bounded derives every later document's slice
+    # from `_budget - _spent - reserve`, so a consumer that emits without adding to _spent is
+    # INVISIBLE to the ordered budget and every document after it is handed bytes that are
+    # already gone. MEASURED 2026-09-20, the first live /clear after this branch was wired:
+    # the verdict above said _digest_mode=omit (_dleft=179), the emitter recomputed 1,079 from a
+    # _spent still at 0, and DIGEST.md took 1,079 UNBUDGETED bytes. Field: 10,818 against a cap
+    # measured at 10 KiB (Engram `9834b409`) — so the whole of part 1 was replaced by a 2 KB
+    # preview. ⚠️ THE OVERSPEND DESTROYS MORE THAN IT TAKES: 1,079 bytes of DIGEST cost the
+    # handoff, the floor and the head of NOTES.md — everything the restore exists to deliver.
+    # ⚠️ It also silently broke the announcement/emission contract this file states twice: the
+    # banner promised NOTES.md 1,379 bytes (from _pre, which DOES count the floor) and the
+    # emitter delivered 1,200. Two homes for one number, exactly as recorded three blocks up.
+    _spent=$(( _spent + _fspend ))
   fi
   if [ "$_digest_mode" = "pointer" ]; then
     printf '\n\n### DIGEST.md (cross-scope, derived) — POINTER ONLY, %s bytes NOT injected\n' "$_dsz"
