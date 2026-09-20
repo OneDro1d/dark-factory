@@ -584,7 +584,37 @@ combined="$(
   # the cap was raised) that is an instruction contradicting reality, and this estate measured
   # on 2026-04-24 what that produces: the agent follows the RULE over the reality. So each line
   # is decided from the actual byte counts at emit time -- inlined whole, or cut and by how much.
+  # ⛔ THE FLOOR VERDICT IS COMPUTED HERE, ABOVE ITS OWN ANNOUNCEMENT, because the announcement
+  # block that follows runs BEFORE the DIGEST/manifest verdicts further down. The first version of
+  # this patch put it beside those and printed _fspend eleven lines before assigning it: under
+  # `set -u` that is an unbound-variable death, and the hook is on the session critical path.
+  # The rule this file already states applies to ORDER as well as to count — one home, and it has
+  # to come before every reader of it.
+  _fcap="${AGENT_NOTEPAD_COLD_FLOOR_BYTES:-900}"
+  _fsz=0
+  [ -f "$np/PRECOMPACT.md" ] && _fsz="$(wc -c < "$np/PRECOMPACT.md" 2>/dev/null | tr -d ' ')"
+  _fsz="${_fsz:-0}"
+  _fspend=0
+  if [ "$_fsz" -gt 0 ] && [ "$_fcap" -gt 0 ]; then
+    _fspend="$_fsz"
+    [ "$_fspend" -gt "$_fcap" ] && _fspend="$_fcap"
+    # never at the cost of the NOTES reserve
+    if [ "$_fspend" -gt $(( _budget - _reserve_notes )) ]; then
+      _fspend=$(( _budget - _reserve_notes ))
+      [ "$_fspend" -lt 0 ] && _fspend=0
+    fi
+  fi
   printf '\n### ⛔ WHAT IS BELOW, AND WHAT IS NOT\n\n'
+  # Announced from the SAME _fspend the emitter uses, per the one-decision-one-home rule that the
+  # DIGEST block below states and that this file has already been bitten by twice.
+  if [ "${_fspend:-0}" -gt 0 ]; then
+    if [ "${_fsz:-0}" -le "${_fspend:-0}" ]; then
+      printf '  0. SESSION FLOOR — INLINED IN FULL below (%s bytes): what the previous session was\n' "$_fsz"
+      printf '     doing at the moment it ended.  %s\n' "$np/PRECOMPACT.md"
+    else
+      printf '  0. SESSION FLOOR — CUT: %s of %s bytes below. ⛔ OPEN IT for the rest:  %s\n' "$_fspend" "$_fsz" "$np/PRECOMPACT.md"
+    fi
+  fi
   # _hf, _hsz and _hcap come from _cold_budget, which ran at top level. They used to be computed
   # HERE, inside this subshell, which is why part 2 could not agree with part 1 about anything.
   if [ -n "$_hf" ]; then
@@ -632,10 +662,35 @@ combined="$(
   # file got announced as too large directly above its own full inline (eso laptop, 2026-09-08).
   # Two homes for one number is the defect; the arithmetic was never the hard part.
   _minslice="${AGENT_NOTEPAD_MIN_USEFUL_SLICE:-2000}"
+  # ⛔ THE FLOOR IS FIRST IN THE CHAIN, AND ON THIS PATH IT OUTRANKS DIGEST AND THE MANIFEST.
+  # ADDED with the SessionEnd(clear) wiring: until then nothing wrote a floor before a /clear and
+  # nothing read one on a cold start, so both halves were missing and each one alone is useless.
+  #
+  # ⚠️ WHY IT RANKS HIGHER HERE THAN ON THE COMPACTION PATH. After a compaction a summary carries
+  # the orientation and the floor is a safety net UNDER it. After a /clear there is no summary at
+  # all — the floor is the only record of what was in flight. Same file, different worth, because
+  # what survives alongside it is different.
+  #
+  # ⚠️ IT IS CAPPED SMALLER THAN COMPACTION'S 1,500. The cold field is tighter: the documents
+  # budget is 6,300 and a real restore was measured filling ~8,830 of the ~9,600 hook cap once
+  # framing is counted, so the true headroom is ~800 bytes, not 1,500. A number that fits one
+  # path is not a number that fits the other — which is why this is its own knob and not a reuse
+  # of _COMPACT_FLOOR_MAX.
+  #
+  # ⚠️ THIS IS A NEW CONSUMER AT THE FRONT OF AN ORDERED BUDGET, so it is paid for by whoever is
+  # LAST — the trap this file already records one block down ("fixing one greedy consumer in a
+  # priority chain just moves the waste one step down"). Here it lands on DIGEST and the manifest,
+  # both of which already degrade to pointers through the verdicts below. NOTES.md is protected:
+  # _nleft clamps to _reserve_notes regardless of what the earlier consumers spent.
+  #
+  # ⛔ AND THE INVARIANT THAT MUST NOT MOVE: cold part 2 starts at _notes_floor, which is
+  # _reserve_notes and does NOT depend on _budget or on anything spent here. So adding this
+  # consumer cannot shift part 2's start and cannot open a GAP — the failure that is invisible by
+  # construction. A test pins it; do not "optimise" _notes_floor to track the real cut.
   _dsz=0
   [ -f "$np/DIGEST.md" ] && _dsz="$(wc -c < "$np/DIGEST.md" 2>/dev/null | tr -d ' ')"
   _dsz="${_dsz:-0}"
-  _dleft=$(( _budget - _reserve_notes ))
+  _dleft=$(( _budget - _fspend - _reserve_notes ))
   _digest_mode=omit ; _dspend=0
   if [ "$_dsz" -gt 0 ]; then
     if [ "$_dleft" -le 512 ]; then
@@ -671,7 +726,7 @@ combined="$(
     _msz="$(jq -c '{repos: [ (.repos // [])[] | {name, path, remote, branch, role, note} | with_entries(select(.value != null)) ]}' "$np/repos.manifest.json" 2>/dev/null | wc -c | tr -d ' ')"
   fi
   _msz="${_msz:-0}"
-  _mleft=$(( _budget - _dspend - _reserve_notes ))
+  _mleft=$(( _budget - _fspend - _dspend - _reserve_notes ))
   _manifest_mode=omit ; _mspend=0
   if [ "$_mraw" -gt 0 ]; then
     if [ "$_mleft" -le 512 ]; then
@@ -701,7 +756,7 @@ combined="$(
     # to the reserve and happened to be the right answer for the wrong reason. With pointer
     # verdicts in play that accident stops holding, and a recomputation would disagree with the
     # emitter -- which is the exact defect the 2026-09-08 comment above this block records.
-    _pre=$(( ${_dspend:-0} + ${_mspend:-0} ))
+    _pre=$(( ${_fspend:-0} + ${_dspend:-0} + ${_mspend:-0} ))
     # DIGEST and the manifest may not spend into the NOTES reserve, so NOTES gets at least it.
     _nleft=$(( _budget - _pre ))
     [ "$_nleft" -lt "$_reserve_notes" ] && _nleft="$_reserve_notes"
@@ -815,6 +870,14 @@ combined="$(
   # That is a property of the template, not a law — if that layout changes, this ordering has
   # to be revisited rather than trusted.
   # Reads the ONE verdict computed with the budget above; it does not decide again.
+  # ⛔ THE FLOOR IS EMITTED FIRST — ahead of DIGEST, the manifest and NOTES. It is the smallest
+  # document here and the only one describing THIS machine's last few minutes rather than the
+  # objective in general. On a restore after /clear it is the only such record that exists.
+  if [ "${_fspend:-0}" -gt 0 ]; then
+    printf '\n\n### SESSION FLOOR — %s\n\n' "$np/PRECOMPACT.md"
+    _compact_chunk "$np/PRECOMPACT.md" 0 "$_fspend"
+    [ "${_fsz:-0}" -gt "${_fspend:-0}" ] && printf '\n[floor CUT at ~%s of %s bytes; open the file for the rest]\n' "$_fspend" "$_fsz"
+  fi
   if [ "$_digest_mode" = "pointer" ]; then
     printf '\n\n### DIGEST.md (cross-scope, derived) — POINTER ONLY, %s bytes NOT injected\n' "$_dsz"
     printf '  Deliberate: only %s bytes of budget remained, and a slice that small ends\n' "$_dleft"

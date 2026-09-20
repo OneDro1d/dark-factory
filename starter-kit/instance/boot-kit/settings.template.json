@@ -144,6 +144,18 @@
         ]
       }
     ],
+    "SessionEnd": [
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/agent-notepad/hooks/pre-compact.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
