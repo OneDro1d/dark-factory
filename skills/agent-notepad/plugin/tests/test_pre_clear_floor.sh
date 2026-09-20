@@ -171,4 +171,38 @@ test_cold_field_stays_within_the_harness_cap() {
     "the banner's NOTES.md byte count equals what the emitter actually delivered"
 }
 
+# ⛔ THE FLOOR'S AGE IS PART OF THE CLAIM. The banner used to say the floor was "what the previous
+# session was doing", which is true after a /clear and FALSE after a restart — `pre-compact.sh`
+# writes only for reason=clear, so a restart writes no floor and the reader gets the last clear's.
+# Measured 2026-09-20: served a floor two sessions and 44 minutes old under that wording.
+# Both directions are asserted here: a fresh floor must NOT be flagged, an old one MUST be.
+# A one-sided version of this test would pass on code that never warns at all.
+test_stale_floor_is_announced_and_a_fresh_one_is_not() {
+  local s np tp fresh aged
+  s="$(_scaffold)"; np="${s%%|*}"; tp="${s##*|}"
+  _fire SessionEnd '"reason":"clear",' "$np" "$tp"
+
+  fresh="$(printf '{"hook_event_name":"SessionStart","source":"clear","cwd":"%s"}' "$np" \
+    | AGENT_NOTEPAD_NO_PULL=1 bash "$SS")"
+  case "$fresh" in
+    *"WRITTEN "*" MINUTES AGO"*)
+      assert_eq quiet flagged "a floor written seconds ago must NOT be called stale" ;;
+    *) assert_eq quiet quiet "fresh floor is not flagged" ;;
+  esac
+
+  # Age it. `touch -d` is GNU and `touch -t` is portable, so use -t.
+  touch -t "$(date -u -v-3H +%Y%m%d%H%M 2>/dev/null || date -u -d '3 hours ago' +%Y%m%d%H%M)" \
+    "$np/PRECOMPACT.md" 2>/dev/null || { assert_eq skip skip "cannot age the file here"; return 0; }
+  aged="$(printf '{"hook_event_name":"SessionStart","source":"clear","cwd":"%s"}' "$np" \
+    | AGENT_NOTEPAD_NO_PULL=1 bash "$SS")"
+  case "$aged" in
+    *"NOT the session that just ended"*)
+      assert_eq flagged flagged "a 3-hour-old floor IS announced as stale" ;;
+    *"AGE could not be read"*)
+      assert_eq flagged flagged "age unreadable here, and that is ANNOUNCED rather than assumed fresh" ;;
+    *) assert_eq flagged quiet \
+         "a 3-hour-old floor was served with no staleness notice — the warning cannot fire" ;;
+  esac
+}
+
 run_tests

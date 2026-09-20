@@ -258,7 +258,16 @@ _cold_budget() { # <np> -> sets _hf _hsz _hcap _budget _reserve_notes _notes_flo
     _hsz="$(wc -c < "$_hf" 2>/dev/null | tr -d ' ')"; _hsz="${_hsz:-0}"
     _hoff="$_hsz"; [ "$_hoff" -gt "$_hcap" ] && _hoff="$_hcap"
   fi
-  _total="${AGENT_NOTEPAD_TOTAL_BYTES:-6100}"
+  # ⛔ 6,100 → 6,000, and THE SECOND CHASE OF THIS CONSTANT IN ONE SESSION IS THE REAL FINDING.
+  # The framing is not inside this total, it varies per notepad (the 600-byte next-action quote,
+  # the other-notepads list, one line per OMITTED/TRUNCATED verdict), and it grew 159 bytes here
+  # purely because NOTES.md was edited. So NO fixed value of `_total` is safe for every notepad:
+  # tuning it fixes the notepad you measured and silently mis-sizes the next one.
+  # ⇒ THE ACTUAL FIX, NOT DONE HERE: build the payload, measure the FIELD, and if it exceeds the
+  # safe ceiling trim the last document (NOTES.md, which is read head-first) by the overage and
+  # announce it. That converts a guess into a guarantee. Tracked as a follow-up; this commit only
+  # buys headroom for the staleness line, and says so rather than implying the number is right.
+  _total="${AGENT_NOTEPAD_TOTAL_BYTES:-6000}"
   _default_budget=$(( _total - _hoff ))
   [ "$_default_budget" -lt 1200 ] && _default_budget=1200
   _budget="${AGENT_NOTEPAD_MAX_BYTES:-$_default_budget}"
@@ -609,11 +618,43 @@ combined="$(
   # DIGEST block below states and that this file has already been bitten by twice.
   if [ "${_fspend:-0}" -gt 0 ]; then
     if [ "${_fsz:-0}" -le "${_fspend:-0}" ]; then
-      printf '  0. SESSION FLOOR — INLINED IN FULL below (%s bytes): what the previous session was\n' "$_fsz"
-      printf '     doing at the moment it ended.  %s\n' "$np/PRECOMPACT.md"
+      printf '  0. SESSION FLOOR — INLINED IN FULL below (%s bytes): what the session that wrote it\n' "$_fsz"
+      printf '     was doing at the moment it ended.  %s\n' "$np/PRECOMPACT.md"
     else
       printf '  0. SESSION FLOOR — CUT: %s of %s bytes below. ⛔ OPEN IT for the rest:  %s\n' "$_fspend" "$_fsz" "$np/PRECOMPACT.md"
     fi
+    # ⛔ SAY HOW OLD IT IS, BECAUSE THIS LINE USED TO CLAIM MORE THAN THE FILE SUPPORTS. It read
+    # "what the PREVIOUS SESSION was doing", which is true after a /clear and FALSE after a
+    # restart: `pre-compact.sh` writes a floor only for SessionEnd reason=clear (the guard that
+    # stops a near-empty transcript destroying a good one), so a restart writes NO floor and the
+    # reader is served the last CLEAR's — measured 2026-09-20, two sessions and 40 minutes back.
+    # ⚠️ SAME DEFECT CLASS AS THE ONE FIXED TWO COMMITS AGO: an announcement asserting more than
+    # the artifact supports. There it was "already in your context" for a handoff that was not;
+    # here it is "the previous session" for a floor that is older than that. ⛔ A STALE ARTIFACT
+    # IS NOT ABSENT — it is wrong AND present, and it is still served, which is harder to notice.
+    # The session id cannot decide this (it differs from the current one on BOTH paths). Age can:
+    # a /clear writes the floor 20-29 ms before SessionStart, a restart minutes or hours earlier.
+    # ⚠️ `date -r <file>` is GNU. On BSD/macOS -r means "seconds since epoch", so it FAILS on a
+    # path — hence the `stat -f %m` second try. ⛔ AND THE UNKNOWN CASE IS ANNOUNCED, NOT ASSUMED
+    # FRESH: the first draft fell back to "now", which makes the age 0 and the warning silently
+    # never fire. A warning that cannot fire is indistinguishable from one that is absent, and
+    # this file would have shipped it to every macOS install without a single failing test.
+    _fmt="$(date -r "$np/PRECOMPACT.md" +%s 2>/dev/null || stat -f %m "$np/PRECOMPACT.md" 2>/dev/null || true)"
+    case "$_fmt" in
+      ''|*[!0-9]*)
+        printf '     ⚠️ AGE UNREADABLE here — may predate the session that just ended; see its header.\n' ;;
+      *)
+        _fage=$(( $(date +%s) - _fmt ))
+        # ⚠️ ONE LINE, DELIBERATELY. The framing is NOT inside _total, so anything printed here is
+        # an UNBUDGETED consumer of the same field the documents are rationed out of — the exact
+        # shape of the overspend fixed two commits ago. Measured: the two-line draft took this
+        # notepad's field from 9,928 to ~10,078, back into the unverified (10,000, 10,500] band.
+        # It fires only on the restart path, and a worst case that only happens sometimes is still
+        # the worst case a hard cap is judged by.
+        if [ "$_fage" -gt 120 ]; then
+          printf '     ⚠️ WRITTEN %s MIN AGO — NOT the session that just ended; a restart writes no floor.\n' "$(( _fage / 60 ))"
+        fi ;;
+    esac
   fi
   # _hf, _hsz and _hcap come from _cold_budget, which ran at top level. They used to be computed
   # HERE, inside this subshell, which is why part 2 could not agree with part 1 about anything.
