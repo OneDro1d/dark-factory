@@ -171,7 +171,7 @@ new_index="$(jq --arg s "$sid" --arg ts "$ts" --arg jf "$jf_base" --argjson cur 
 # last commit on the branch. The model commits its own work often, so a bare `git log -1`
 # would keep reading those, believe the journal was just synced, and starve it forever.
 #
-# ⚠️ RESIDUAL, ON A NOTEPAD SHARED BY TWO MACHINES (loom-storage, loom_storage): both sides
+# ⚠️ RESIDUAL, ON A NOTEPAD SHARED BY TWO MACHINES: both sides
 # append to sessions/index.json, so committing it means the two histories can genuinely
 # DIVERGE, and --ff-only refuses on divergence too. That is still strictly better than
 # today (a dirty tree refuses unconditionally, and the tree is dirty every single stop),
