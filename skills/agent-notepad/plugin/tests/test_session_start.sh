@@ -783,4 +783,139 @@ test_oversized_sections_point_instead_of_dribbling_and_notes_gets_the_bytes() {
   rm -rf "$(dirname "$np")"
 }
 
+# ---- the COLD path gets a part 2 too (2026-09-20) -----------------------------------------------
+# ⛔ WHY THESE EXIST. #199 wired the COMPACTION restore as two hooks and left the cold path
+# (startup|resume|clear) as one. MEASURED on a real notepad, 2026-09-20: a 28,359-byte NOTES.md
+# was restored 45.6% by a compaction and 4.6% by a /clear — and /clear is the path the skill
+# actively recommends for a full window. The cold reserve is 1,200 bytes; everything past it
+# reached nothing. These cases pin the second cold hook and, above all, the NO-GAP property.
+_run_cold() { # cwd [part] [source=clear] -> hook stdout
+  local src="${3:-clear}"
+  if [ -n "${2:-}" ]; then
+    printf '{"hookEventName":"SessionStart","source":"%s","cwd":"%s"}' "$src" "$1" \
+      | AGENT_NOTEPAD_NO_PULL=1 bash "$HOOK" --part "$2"
+  else
+    printf '{"hookEventName":"SessionStart","source":"%s","cwd":"%s"}' "$src" "$1" \
+      | AGENT_NOTEPAD_NO_PULL=1 bash "$HOOK"
+  fi
+}
+
+test_cold_part2_carries_the_notes_part1_had_no_budget_for() {
+  local np c1 c2 n2 delivered; np="$(_scaffold_big)"
+  c1="$(_ctx "$(_run_cold "$np")")"
+  c2="$(_ctx "$(_run_cold "$np" cold-notes)")"
+  assert_contains "$c1" "NOTES_TOP_SENTINEL" "cold part 1 still carries the head of NOTES.md"
+  assert_contains "$c2" "part 2" "cold part 2 announces itself"
+  assert_le "$(_bytes "$c2")" 9999 "cold part 2: additionalContext under the measured ~10 KiB per-hook cap"
+  # The point of the change, stated as a number rather than a feeling: part 1's NOTES slice is
+  # the 1,200-byte reserve, and part 2 must carry multiples of that.
+  # ⚠️ Parse DEFENSIVELY. When the hook emits {} the heading is absent, and an unguarded
+  # $(( ${n2##* } )) kills the whole suite with a syntax error instead of failing this one case —
+  # which is what the red-first control run for this change actually hit.
+  n2="$(printf '%s' "$c2" | sed -n 's/^### NOTES.md — bytes \([0-9]*\)-\([0-9]*\) of .*/\1 \2/p')"
+  ASSERT_CASES=$((ASSERT_CASES + 1))
+  delivered=0
+  case "$n2" in [0-9]*' '[0-9]*) delivered=$(( ${n2##* } - ${n2%% *} )) ;; esac
+  if [ "$delivered" -ge 8000 ]; then _pass
+  else _fail "cold part 2 carries >= 8000 bytes of NOTES.md (carried $delivered)"; fi
+  rm -rf "$(dirname "$np")"
+}
+
+test_cold_parts_leave_no_gap_in_notes() {
+  local np c1 c2 n2 s e cut want got; np="$(_scaffold_big)"
+  c1="$(_ctx "$(_run_cold "$np")")"
+  c2="$(_ctx "$(_run_cold "$np" cold-notes)")"
+  n2="$(printf '%s' "$c2" | sed -n 's/^### NOTES.md — bytes \([0-9]*\)-\([0-9]*\) of .*/\1 \2/p')"
+  s=""; e=""
+  case "$n2" in [0-9]*' '[0-9]*) s="${n2%% *}"; e="${n2##* }" ;; esac
+  # Part 1 announces its own cut in the TRUNCATED footer _emit_bounded prints.
+  cut="$(printf '%s' "$c1" | sed -n 's/^\[TRUNCATED at \([0-9]*\) of [0-9]* bytes.*/\1/p' | tail -1)"
+  ASSERT_CASES=$((ASSERT_CASES + 1))
+  if [ -z "$s" ]; then
+    _fail "cold part 2 emitted a NOTES.md range at all (it emitted none)"
+    rm -rf "$(dirname "$np")"; return 0
+  fi
+  # ⛔ THE ONE PROPERTY THAT MATTERS. Part 2 starts at the floor part 1 GUARANTEES, not at a
+  # prediction of where it actually stopped, so it may overlap — but it must never start AFTER
+  # part 1 stopped, because that gap would be NOTES.md bytes no hook delivered and nothing
+  # announced. A silent hole is the failure this whole design is shaped to avoid.
+  if [ -n "$cut" ] && [ "$s" -le "$cut" ]; then _pass
+  else _fail "cold part 2 starts at or before part 1's cut (part2 starts $s, part1 cut at ${cut:-unknown})"; fi
+  # And the slice it claims is the slice it carries: NOTES[s:e] byte-for-byte.
+  want="$(LC_ALL=C tail -c +"$(( s + 1 ))" "$np/NOTES.md" | LC_ALL=C head -c "$(( e - s ))"; printf x)"; want="${want%x}"
+  got="$(python3 - "$c2" <<'PY'
+import sys
+ctx = sys.argv[1]
+i = ctx.index("### NOTES.md — bytes ")
+j = ctx.index("\n\n", i) + 2
+k = ctx.rfind("\n[")
+sys.stdout.write(ctx[j:k] + "x")
+PY
+)"; got="${got%x}"
+  ASSERT_CASES=$((ASSERT_CASES + 1))
+  if [ "$want" = "$got" ]; then _pass
+  else _fail "cold part 2's body is exactly the byte range its heading claims"; fi
+  rm -rf "$(dirname "$np")"
+}
+
+test_cold_part2_is_silent_on_compaction() {
+  local np out; np="$(_scaffold_big)"
+  # ⚠️ The compaction path has its OWN part 2 (`--part notes`). If `--part cold-notes` also fired
+  # there, a compacted session would get NOTES.md three times and lose the room to the duplicate.
+  out="$(_run_cold "$np" cold-notes compact)"
+  assert_eq "{}" "$(printf '%s' "$out" | tr -d '[:space:]')" "--part cold-notes emits nothing on source=compact"
+  rm -rf "$(dirname "$np")"
+}
+
+test_cold_part2_is_silent_when_notes_already_arrived_whole() {
+  local np out; np="$(_scaffold)"
+  # A small NOTES.md fits inside part 1's slice, so there is nothing left to continue. Emitting a
+  # second copy of it would be pure duplication charged against the session's context.
+  out="$(_run_cold "$np" cold-notes)"
+  assert_eq "{}" "$(printf '%s' "$out" | tr -d '[:space:]')" "cold part 2 is silent when part 1 carried NOTES.md whole"
+  rm -rf "$(dirname "$np")"
+}
+
+test_an_unknown_part_restores_nothing() {
+  local np out; np="$(_scaffold_big)"
+  # A typo in a wired command must not silently fall through to the MAIN payload: that would
+  # duplicate the entire cold restore into the session and look like it worked.
+  out="$(_run_cold "$np" notes-cold)"
+  assert_eq "{}" "$(printf '%s' "$out" | tr -d '[:space:]')" "an unrecognised --part emits nothing"
+  rm -rf "$(dirname "$np")"
+}
+
+test_cold_part1_is_unchanged_by_the_second_hook() {
+  local np a b; np="$(_scaffold_big)"
+  # The refactor moved the budget arithmetic out of the payload subshell to top level so both
+  # hooks could read it. Part 1's payload must be byte-identical across that move; this case is
+  # the control that says the change added a hook rather than altering the existing one.
+  a="$(_ctx "$(_run_cold "$np" "" startup)")"
+  b="$(_ctx "$(_run_cold "$np" "" clear)")"
+  assert_eq "$(_bytes "$a")" "$(_bytes "$b")" "cold part 1 is the same payload on startup and clear"
+  assert_contains "$a" "HANDOFF_HEAD_SENTINEL" "cold part 1 still carries the handoff"
+  assert_contains "$a" "MANIFEST_SENTINEL" "cold part 1 still carries the manifest"
+  assert_contains "$a" "DIGEST_SENTINEL" "cold part 1 still carries DIGEST.md"
+  rm -rf "$(dirname "$np")"
+}
+
+test_cold_part2_is_wired_in_the_settings_template() {
+  # ⛔ A HOOK THAT IS NOT WIRED IS A HOOK THAT DOES NOT RUN. This file is the only thing that
+  # puts the second cold hook on a machine, and wire-settings.py merges ADD-ONLY keyed by
+  # `<file> --part <name>` — so the part name here must DIFFER from the compaction one, or the
+  # entry is skipped on every machine that already has `--part notes` and still reads as wired.
+  # ROOT is <repo>/skills/agent-notepad/plugin, so the repo root is three levels up.
+  local t; t="$(dirname "$(dirname "$(dirname "$ROOT")")")/starter-kit/instance/boot-kit/settings.template.json"
+  assert_file_exists "$t" "the instance settings template exists"
+  ASSERT_CASES=$((ASSERT_CASES + 1))
+  if python3 - "$t" <<'PY'
+import json, sys
+h = json.load(open(sys.argv[1]))["hooks"]["SessionStart"]
+g = [x for x in h if any("--part cold-notes" in (k.get("command") or "") for k in x.get("hooks", []))]
+m = g[0].get("matcher", "") if g else ""
+sys.exit(0 if g and "clear" in m and "compact" not in m else 1)
+PY
+  then _pass; else _fail "template wires --part cold-notes on a cold matcher that includes clear and excludes compact"; fi
+}
+
 run_tests

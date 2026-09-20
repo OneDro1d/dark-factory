@@ -342,6 +342,33 @@ O="$(python3 "$W8" --template "$MT" --live "$ML" --home "$H" 2>&1)"
 N="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(len(g["hooks"]) for g in d["hooks"]["SessionStart"]))' "$ML")"
 [ "$N" = "2" ] && ok "M: idempotent — a second run adds nothing" || bad "M: idempotent" "got $N"
 
+echo "=== M2: a SECOND --part name is added beside an existing one ==="
+# ⛔ 2026-09-20: the cold restore gained its own second hook, `--part cold-notes`, and the whole
+# reason it is a new NAME rather than a widened matcher on `--part notes` is this merge. Case M
+# proves a --part is added next to a plain wiring; it does NOT prove a --part is added next to a
+# DIFFERENT --part of the same file, which is the shape that actually ships. A matcher change on
+# an already-wired entry is never applied — it would have looked wired and done nothing.
+M2T="$T/tmpl-part2.json"
+cat > "$M2T" <<'JSON'
+{ "hooks": { "SessionStart": [
+  { "matcher": "compact", "hooks": [
+    { "type": "command", "command": "__HOME__/.claude/hooks/boot.sh --part notes" } ] },
+  { "matcher": "startup|resume|clear", "hooks": [
+    { "type": "command", "command": "__HOME__/.claude/hooks/boot.sh --part cold-notes" } ] } ] } }
+JSON
+M2L="$T/m2.json"
+cat > "$M2L" <<JSON
+{ "hooks": { "SessionStart": [ { "matcher": "compact", "hooks": [
+  { "type": "command", "command": "$H/.claude/hooks/boot.sh --part notes" } ] } ] } }
+JSON
+O="$(python3 "$W8" --template "$M2T" --live "$M2L" --home "$H" 2>&1)"
+contains "M2: --part cold-notes is added although --part notes is already wired" "--part cold-notes" "$(cat "$M2L")"
+N="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(len(g["hooks"]) for g in d["hooks"]["SessionStart"]))' "$M2L")"
+[ "$N" = "2" ] && ok "M2: two distinct --part hooks, the existing one untouched" || bad "M2: two distinct --part hooks" "got $N"
+# ⚠️ AND THE POSITIVE CONTROL: the same run must NOT re-add the one already there.
+N="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(1 for g in d["hooks"]["SessionStart"] for h in g["hooks"] if h["command"].endswith("--part notes")))' "$M2L")"
+[ "$N" = "1" ] && ok "M2: --part notes is still wired exactly once" || bad "M2: --part notes wired once" "got $N"
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
