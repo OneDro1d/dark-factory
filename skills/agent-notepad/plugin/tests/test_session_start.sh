@@ -746,7 +746,7 @@ STUB
 # ⛔ A SLICE TOO SMALL TO HOLD A COMPLETE BLOCK IS WORSE THAN A POINTER, and the bytes it eats
 # come out of NOTES.md, which sits on a floor underneath it.
 #
-# MEASURED 2026-09-20 on notepad-onedroid-dark-factory: DIGEST.md at 240,713 bytes was given
+# MEASURED 2026-09-20 on a real notepad: DIGEST.md at 240,713 bytes was given
 # 1,036 of them, and the slice that arrived broke off mid-word inside a CORRECTION -- at the
 # text "That was wrong a" -- so the reader received the half that says the opposite of what the
 # block concludes. NOTES.md sat on its 1,200-byte floor underneath. Freeing DIGEST alone was NOT

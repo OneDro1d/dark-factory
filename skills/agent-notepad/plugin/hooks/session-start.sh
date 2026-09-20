@@ -549,7 +549,7 @@ combined="$(
       _digest_mode=whole ; _dspend="$_dsz"
     elif [ "$_dleft" -lt "$_minslice" ]; then
       # ⛔ A CAVEAT CUT MID-SENTENCE IS A COMPRESSED CAVEAT, and compressing one is the single
-      # thing the notepad rule forbids. MEASURED 2026-09-20 on notepad-onedroid-dark-factory:
+      # thing the notepad rule forbids. MEASURED 2026-09-20 on a real notepad:
       # DIGEST.md was 240,713 bytes, the cold budget left 1,036 for it, and the slice that
       # arrived broke off mid-word inside a CORRECTION, at the text "That was wrong a" - so a
       # reader could carry away the half that says the opposite of what the block concludes.
