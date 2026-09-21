@@ -16,6 +16,18 @@ ROOT="$(dirname "$HERE")"
 HOOK="$ROOT/hooks/stop.sh"
 . "$HERE/assert.sh"
 
+# ⛔ THE EXIT CODE HAS TO SURVIVE A SUBSHELL, AND IT DID NOT. `_run_hook` used to set a plain
+# HOOK_RC variable. Most call sites capture its stdout — `out="$(_run_hook ...)"` — which runs
+# the whole function in a SUBSHELL, so that assignment was discarded and the later
+# `assert_eq "0" "$HOOK_RC"` read whatever a PREVIOUS test had left in the parent shell.
+# Measured 2026-09-20: `test_stop_appends_journal_and_upserts_index` was asserting the exit code
+# of a hook run performed by `test_new_session_new_journal_prior_untouched`, which happens to run
+# earlier alphabetically. It would have passed with the hook under test returning 1, and run on
+# its own it would have died on an unbound variable instead. A check that cannot fail is not a
+# check. The rc now goes through a file, which crosses the subshell boundary.
+HOOK_RC_FILE="$(mktemp)"
+_hook_rc() { cat "$HOOK_RC_FILE" 2>/dev/null; }
+
 
 # --- scaffolding ------------------------------------------------------------
 
@@ -54,6 +66,7 @@ _run_hook() { # np transcript session -> stdout(hook), sets HOOK_RC
   printf '{"transcript_path":"%s","cwd":"%s","session_id":"%s"}' "$tp" "$np" "$sid" \
     | bash "$HOOK"
   HOOK_RC=$?
+  printf '%s' "$HOOK_RC" > "$HOOK_RC_FILE"   # survives `out="$(_run_hook ...)"`; see the note above
 }
 
 # --- tests ------------------------------------------------------------------
@@ -72,7 +85,7 @@ test_stop_appends_journal_and_upserts_index() {
 
   out="$(_run_hook "$np" "$tp" "sess1")"
 
-  assert_eq "0" "$HOOK_RC" "hook exits 0"
+  assert_eq "0" "$(_hook_rc)" "hook exits 0"
   assert_eq "{}" "$out" "hook prints {} (allow)"
 
   # exactly one journal file was created for sess1
@@ -161,6 +174,102 @@ test_outside_notepad_is_noop() { # regression: degrade politely
   # the mirror tier was removed 2026-08-03, so only the no-op contract remains.)
   assert_eq "" "$(cat "$log" 2>/dev/null)" "no side-effect file outside a notepad"
   rm -rf "$sb" "$log"
+}
+
+# --- time-gated journal commit (2026-09-20) ---------------------------------
+# ⛔ WHY THESE EXIST. This hook wrote sessions/ on every stop and never committed it, so
+# the notepad tree was dirty permanently — and `git pull --ff-only` in session-start.sh
+# REFUSES on a dirty tree. The push looked fine (it had nothing to push), so the failure
+# was silent: the machine restored stale Notes forever. Measured: a notepad 20 commits
+# behind for 17 days.
+# ⚠️ Run RED FIRST. Against the pre-fix hook, cases 1-3 must FAIL; a suite that passes
+# before and after has tested nothing.
+
+test_journal_commit_leaves_sessions_clean() {
+  local np tp out dirty
+  np="$(_scaffold_notepad)"
+  tp="$(_write_transcript_1 "$np")"
+
+  export AGENT_NOTEPAD_SYNC_MIN=0        # 0 = sync on every stop, so the test is deterministic
+  out="$(_run_hook "$np" "$tp" "sess-sync")"
+  unset AGENT_NOTEPAD_SYNC_MIN
+
+  # ⛔ The Stop hook must still allow, and must still cost the model nothing.
+  # additionalContext on Stop forces a FULL EXTRA MODEL TURN; {} costs zero.
+  assert_eq "{}" "$out" "hook still prints {} with the journal sync on"
+  assert_eq "0" "$(_hook_rc)" "hook still exits 0 with the journal sync on"
+
+  dirty="$(git -C "$np" status --porcelain -- sessions/ 2>/dev/null)"
+  assert_eq "" "$dirty" "sessions/ is committed, so the tree is not left dirty"
+  assert_contains "$(git -C "$np" log --oneline -1 2>/dev/null)" "journal sync" \
+    "a journal-sync commit was created"
+
+  rm -rf "$(dirname "$np")"
+}
+
+test_time_gate_holds_a_recent_sync() {
+  local np tp before after
+  np="$(_scaffold_notepad)"
+  tp="$(_write_transcript_1 "$np")"
+
+  export AGENT_NOTEPAD_SYNC_MIN=0
+  _run_hook "$np" "$tp" "sess-gate" >/dev/null
+  unset AGENT_NOTEPAD_SYNC_MIN
+  before="$(git -C "$np" rev-parse HEAD 2>/dev/null)"
+  # red-first anchor: without the fix there is no commit at all, so this is empty
+  assert_contains "$(git -C "$np" log --oneline 2>/dev/null)" "journal sync" \
+    "the first stop synced the journal"
+
+  # second stop, moments later, with the real default-shaped interval
+  _append_transcript_2 "$tp"
+  export AGENT_NOTEPAD_SYNC_MIN=120
+  _run_hook "$np" "$tp" "sess-gate" >/dev/null
+  unset AGENT_NOTEPAD_SYNC_MIN
+  after="$(git -C "$np" rev-parse HEAD 2>/dev/null)"
+
+  assert_eq "$before" "$after" "a stop inside the interval does NOT make a second commit"
+  rm -rf "$(dirname "$np")"
+}
+
+test_sync_never_commits_the_models_staged_work() {
+  local np tp committed staged
+  np="$(_scaffold_notepad)"
+  tp="$(_write_transcript_1 "$np")"
+
+  # the model is mid-edit and has staged its own work
+  printf 'work in progress\n' > "$np/NOTES.md"
+  git -C "$np" add NOTES.md
+
+  export AGENT_NOTEPAD_SYNC_MIN=0
+  _run_hook "$np" "$tp" "sess-staged" >/dev/null
+  unset AGENT_NOTEPAD_SYNC_MIN
+
+  # red-first anchor: the sync must actually have run, or the rest proves nothing
+  assert_contains "$(git -C "$np" log --oneline 2>/dev/null)" "journal sync" \
+    "the journal sync ran while the model had staged work"
+
+  # ⛔ THE SAFETY PROPERTY: a hook-authored commit must never sweep in the model's work.
+  # This is why the hook uses `git commit -- sessions/` and not a bare `git commit`.
+  committed="$(git -C "$np" show --name-only --format= HEAD 2>/dev/null)"
+  assert_not_contains "$committed" "NOTES.md" "the hook commit does NOT contain the model's file"
+  staged="$(git -C "$np" diff --cached --name-only 2>/dev/null)"
+  assert_contains "$staged" "NOTES.md" "the model's staged work is still staged afterwards"
+
+  rm -rf "$(dirname "$np")"
+}
+
+test_no_sync_env_disables_the_commit() {
+  local np tp out
+  np="$(_scaffold_notepad)"
+  tp="$(_write_transcript_1 "$np")"
+
+  export AGENT_NOTEPAD_NO_SYNC=1 AGENT_NOTEPAD_SYNC_MIN=0
+  out="$(_run_hook "$np" "$tp" "sess-off")"
+  unset AGENT_NOTEPAD_NO_SYNC AGENT_NOTEPAD_SYNC_MIN
+
+  assert_eq "{}" "$out" "hook still prints {} with the sync disabled"
+  assert_eq "" "$(git -C "$np" log --oneline 2>/dev/null)" "no commit when AGENT_NOTEPAD_NO_SYNC=1"
+  rm -rf "$(dirname "$np")"
 }
 
 run_tests

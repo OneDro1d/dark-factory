@@ -34,6 +34,15 @@
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\" --part notes"
           }
         ]
+      },
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\" --part cold-notes"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -52,6 +61,18 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pre-compact.sh\""
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pre-compact.sh\"",
+            "timeout": 30
           }
         ]
       }
