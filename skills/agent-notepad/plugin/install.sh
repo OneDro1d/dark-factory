@@ -201,18 +201,25 @@ jq '
 ' "$SETTINGS" > "$_tmp" && mv "$_tmp" "$SETTINGS"
 
 # 3b) idempotent merge of one Notes hook (adds only if that command is absent)
-merge_hook() { # event script [matcher]
-  local ev="$1" script="$2" matcher="${3:-}"
+merge_hook() { # event script [matcher] [timeout-seconds]
+  local ev="$1" script="$2" matcher="${3:-}" tmo="${4:-0}"
   local cmd="$STABLE_HOOKS/$script"
   local t; t="$(mktemp)"
-  jq --arg ev "$ev" --arg cmd "$cmd" --arg m "$matcher" '
+  # ⚠️ THE TIMEOUT IS NOT DECORATION — on SessionEnd the DEFAULT BUDGET IS ~1.5 s AND IT KILLS.
+  # Measured on 2.1.278: a 3 s SessionEnd hook was cut short; the same entry with "timeout": 30
+  # ran to completion. The floor writer measured 0.32 s on a 12 MB transcript, so it fits today
+  # and grows with the transcript — and the failure mode is a floor that is silently NOT written,
+  # which looks exactly like a session that had nothing to save. Other events are far more
+  # generous, so 0 (omit the key) stays the default everywhere else.
+  jq --arg ev "$ev" --arg cmd "$cmd" --arg m "$matcher" --argjson tmo "$tmo" '
     .hooks = (.hooks // {})
     | .hooks[$ev] = (.hooks[$ev] // [])
     | if ([.hooks[$ev][]?.hooks[]?.command] | index($cmd)) != null
       then .
       else .hooks[$ev] += [
-        ( if $m == "" then {hooks: [{type:"command", command:$cmd}]}
-          else {matcher:$m, hooks: [{type:"command", command:$cmd}]} end )
+        ( ( if $tmo > 0 then {type:"command", command:$cmd, timeout:$tmo}
+            else {type:"command", command:$cmd} end ) as $h
+          | if $m == "" then {hooks: [$h]} else {matcher:$m, hooks: [$h]} end )
       ]
       end
   ' "$SETTINGS" > "$t" && mv "$t" "$SETTINGS"
@@ -222,10 +229,30 @@ merge_hook SessionStart    session-start.sh "startup|resume|clear|compact"
 # only. Two hooks because the harness caps EACH hook at ~10 KiB (measured 2026-09-18); see
 # session-start.sh _compact_restore.
 merge_hook SessionStart    "session-start.sh --part notes" "compact"
+# ⛔ AND THE SAME AGAIN FOR THE COLD PATH (2026-09-20). #199 split the COMPACTION restore in two
+# and left startup|resume|clear as a single hook — so /clear, the path the skill itself recommends
+# for a full window, restored only the ~1,200-byte NOTES reserve: MEASURED 4.6% of a real 28 KB
+# NOTES.md against compaction's 45.6%. A DISTINCT --part name, not a widened matcher on the line
+# above: the merge below is add-only keyed by `<file> --part <name>`, so a matcher change on an
+# entry that is already wired is never applied and still reads as wired.
+# ⚠️ THIS WIRING HAS THREE HOMES — here, .claude-plugin/plugin.json, and the kit's
+# starter-kit/instance/boot-kit/settings.template.json. A hook added to one of them runs only for
+# the machines installed by that route.
+merge_hook SessionStart    "session-start.sh --part cold-notes" "startup|resume|clear"
 merge_hook UserPromptSubmit user-prompt.sh  ""
 merge_hook PreCompact      pre-compact.sh   ""
+# ⛔ THE PRE-CLEAR FLOOR. The SAME writer on a second event, because PreCompact does NOT fire on
+# /clear — so until now a compaction kept a floor and a /clear kept nothing, on the path the skill
+# actively recommends when the window fills.
+# ⚠️ `clear` IS LOAD-BEARING, NOT TIDINESS. Measured: a /clear emits SessionEnd(clear), then
+# SessionStart(clear), then — in the NEW session — SessionEnd(other) against a near-empty
+# transcript. The floor is overwritten in place, so an unmatched wiring writes a good floor and
+# destroys it ~900 ms later. The hook carries the same check internally, so losing this matcher
+# degrades to doing nothing rather than to eating the floor.
+# ⚠️ 30 s because the SessionEnd default (~1.5 s) was measured KILLING a slower hook.
+merge_hook SessionEnd      pre-compact.sh   "clear" 30
 merge_hook Stop            stop.sh          ""
-echo "agent-notepad:   hooks wired  -> SessionStart, UserPromptSubmit, PreCompact, Stop"
+echo "agent-notepad:   hooks wired  -> SessionStart, UserPromptSubmit, PreCompact, SessionEnd, Stop"
 
 # --- 4) summary --------------------------------------------------------------
 cat <<EOF

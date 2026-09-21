@@ -389,7 +389,11 @@ test_pre_compact_floors_into_notepad() {
   # the floor lands in PRECOMPACT.md (restored FIRST after compaction), redacted, NOT in the
   # NOTES.md tail that the restore cuts first (moved 2026-09-18), and a journal entry exists
   assert_file_exists "$np/PRECOMPACT.md" "pre-compact writes PRECOMPACT.md"
-  assert_contains "$(cat "$np/PRECOMPACT.md")" "PreCompact floor" "PRECOMPACT.md carries the floor"
+  # ⚠️ heading renamed 2026-09-20 "# PreCompact floor" -> "# Session floor": the same writer now
+  # also runs on SessionEnd(clear), where "PreCompact" was an actively false label. The EVENT is
+  # in the line below the heading, so assert on that rather than on the word "PreCompact" alone.
+  assert_contains "$(cat "$np/PRECOMPACT.md")" "# Session floor" "PRECOMPACT.md carries the floor"
+  assert_contains "$(cat "$np/PRECOMPACT.md")" "event=PreCompact" "the floor names the event that wrote it"
   assert_contains "$(cat "$np/PRECOMPACT.md")" "/code/arb/main.go" "the floor lists the files touched"
   assert_not_contains "$(cat "$np/PRECOMPACT.md")" "$ghp" "floor redacts the token literal"
   assert_not_contains "$(cat "$np/NOTES.md")" "pc-floor:start" "NOTES.md no longer carries a floor block"
