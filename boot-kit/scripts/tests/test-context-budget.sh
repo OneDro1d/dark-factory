@@ -182,6 +182,85 @@ OUT="$(gate sH4 "$W/h4.jsonl")"
 blocked "$OUT" && ok "H: resume re-records: 600k at start, 300k at resume, 250k blocks" || bad "H: resume re-records" "$OUT"
 rm -f "$W/home/.claude/settings.json"
 
+echo "=== I: DF_CONTEXT_GATE_MODE=autoclear — two phases, and every precondition checked at FIRE time ==="
+# ⚠️ TMUX/TMUX_PANE are INHERITED, and this suite is usually run from inside tmux. Left alone the
+# cases would pass for the wrong reason on a developer's box and fail in CI. Every call below
+# strips both and sets them back explicitly, so the pane is an INPUT to the test, never ambient.
+mkdir -p "$W/np/sessions"
+printf '# NOTES\n' > "$W/np/NOTES.md"
+mtime() { python3 -c 'import os,sys,time; os.utime(sys.argv[1], (time.time()+float(sys.argv[2]),)*2)' "$1" "$2"; }
+wire_floor() {
+  mkdir -p "$W/home/.claude"
+  printf '{"hooks":{"SessionEnd":[{"matcher":"clear","hooks":[{"type":"command","command":"/x/agent-notepad/hooks/pre-compact.sh"}]}]}}\n' \
+    > "$W/home/.claude/settings.json"
+}
+unwire_floor() { rm -f "$W/home/.claude/settings.json"; }
+# ac <session> <transcript> <cwd> [extra env...] — autoclear mode, tmux stripped unless re-set
+ac() {
+  local s="$1" t="$2" c="$3"; shift 3
+  printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","stop_hook_active":false}' "$s" "$t" "$c" \
+    | env -u DF_CONTEXT_THRESHOLD -u DF_CONTEXT_WINDOW -u DF_CONTEXT_GATE \
+          -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u TMUX -u TMUX_PANE -u DF_CONTEXT_AUTOCLEAR_DRYRUN \
+          HOME="$W/home" DF_CONTEXT_GATE_MODE=autoclear "$@" python3 "$GATE"
+}
+transcript "$W/i.jsonl" claude-opus-5 930000
+
+# I1 — phase 1 is still a block, with the autoclear text rather than the checkpoint text
+OUT="$(ac sI1 "$W/i.jsonl" "$W/np")"
+R="$(reason "$OUT")"
+blocked "$OUT" && ok "I1: phase 1 blocks" || bad "I1: phase 1 blocks" "$OUT"
+case "$R" in *"AUTOCLEAR IS ARMED"*) ok "I1: phase 1 says autoclear is armed";; *) bad "I1: phase 1 says autoclear is armed" "$R";; esac
+case "$R" in *"DISCARDS the window"*) ok "I1: phase 1 says a clear discards, unlike a compaction";; *) bad "I1: phase 1 warns it discards" "$R";; esac
+
+# ⛔ I2 — THE INTERLOCK. Pane present, floor NOT wired: the clear must refuse, because after a
+# /clear there would be nothing mechanical left. This is the case that makes autoclear safe to
+# enable on a machine whose fleet pin does not yet carry the floor.
+unwire_floor
+OUT="$(ac sI1 "$W/i.jsonl" "$W/np" TMUX=/tmp/fake,1,0 TMUX_PANE=%9)"
+R="$(reason "$OUT")"
+case "$R" in *"floor writer is NOT wired"*) ok "I2: INTERLOCK — no floor wiring, the clear refuses";; *) bad "I2: INTERLOCK — no floor wiring refuses" "$R";; esac
+case "$R" in *"now disarmed"*) ok "I2: an environment precondition disarms rather than nags";; *) bad "I2: disarms" "$R";; esac
+OUT="$(ac sI1 "$W/i.jsonl" "$W/np" TMUX=/tmp/fake,1,0 TMUX_PANE=%9)"
+blocked "$OUT" && bad "I2: once disarmed it stays quiet" "$OUT" || ok "I2: once disarmed it stays quiet"
+
+# I3 — no tmux pane at all: no actuator, so no fire
+OUT="$(ac sI3 "$W/i.jsonl" "$W/np")"
+OUT="$(ac sI3 "$W/i.jsonl" "$W/np")"
+R="$(reason "$OUT")"
+case "$R" in *"no tmux pane"*) ok "I3: no pane — nothing to type into, so it does not fire";; *) bad "I3: no pane does not fire" "$R";; esac
+
+# I4 — pane + floor wired, but NOTES.md is OLDER than the marker: the checkpoint never landed.
+# Retryable, because that one IS the agent's to fix.
+wire_floor
+OUT="$(ac sI4 "$W/i.jsonl" "$W/np" TMUX=/tmp/fake,1,0 TMUX_PANE=%9)"
+mtime "$W/np/NOTES.md" -600
+OUT="$(ac sI4 "$W/i.jsonl" "$W/np" TMUX=/tmp/fake,1,0 TMUX_PANE=%9)"
+R="$(reason "$OUT")"
+case "$R" in *"not touched since the gate armed"*) ok "I4: a stale NOTES.md is not a checkpoint";; *) bad "I4: stale NOTES.md blocks the fire" "$R";; esac
+case "$R" in *"try again"*) ok "I4: a missing checkpoint is retryable, not disarming";; *) bad "I4: missing checkpoint is retryable" "$R";; esac
+
+# I5 — every precondition met: it fires (dry run, so no keys reach a real terminal).
+OUT="$(ac sI5 "$W/i.jsonl" "$W/np" TMUX=/tmp/fake,1,0 TMUX_PANE=%9)"
+mtime "$W/np/NOTES.md" 600
+OUT="$(ac sI5 "$W/i.jsonl" "$W/np" TMUX=/tmp/fake,1,0 TMUX_PANE=%9 DF_CONTEXT_AUTOCLEAR_DRYRUN=1)"
+R="$(reason "$OUT")"
+case "$R" in *"would have sent /clear"*) ok "I5: CONTROL — with every precondition met it DOES reach the fire path";; *) bad "I5: CONTROL — it reaches the fire path" "$R";; esac
+# ⛔ Without I5 the four refusals above prove nothing: a gate that never fires refuses everything,
+# and every one of those cases would still be green. I5 is what makes them meaningful.
+
+# I6 — no notepad above cwd: nothing to clear into
+mkdir -p "$W/bare"
+OUT="$(ac sI6 "$W/i.jsonl" "$W/bare" TMUX=/tmp/fake,1,0 TMUX_PANE=%9)"
+OUT="$(ac sI6 "$W/i.jsonl" "$W/bare" TMUX=/tmp/fake,1,0 TMUX_PANE=%9)"
+R="$(reason "$OUT")"
+case "$R" in *"no notepad above cwd"*) ok "I6: no NOTES.md above cwd — it does not fire";; *) bad "I6: no notepad does not fire" "$R";; esac
+
+# I7 — the DEFAULT mode is untouched by all of this: a second turn in the epoch still just allows
+OUT="$(gate sI7 "$W/i.jsonl")"
+OUT="$(gate sI7 "$W/i.jsonl")"
+blocked "$OUT" && bad "I7: checkpoint mode still fires once per crossing" "$OUT" || ok "I7: checkpoint mode still fires once per crossing"
+unwire_floor
+
 echo
 echo "passed $PASS  failed $FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"

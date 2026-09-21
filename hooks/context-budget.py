@@ -79,11 +79,39 @@ Config:
   DF_CONTEXT_GATE_MODE=restart    the pre-2026-09-18 text: hand off, ask the operator to /clear
   DF_CONTEXT_WINDOW=<int>         override the derived window
   DF_CONTEXT_THRESHOLD=<pct>      fire at this occupancy (default: scaled to the window, above)
+  DF_CONTEXT_GATE_MODE=autoclear  checkpoint, then /clear the session automatically (below)
+  DF_CONTEXT_AUTOCLEAR_DRYRUN=1   autoclear mode: report the decision, send no keys
+
+## autoclear mode (2026-09-20) -- why a /clear can be better than a compaction
+
+A compaction costs a full re-read of the window to produce a summary that is lossy anyway.
+A /clear costs nothing and discards it outright. For a mission whose durable state is the
+notepad (handoff + NOTES.md + the map), the clear is the cheaper equivalent -- PROVIDED the
+state is actually on disk first, and provided something mechanical survives the clear.
+
+So this mode is strictly two-phase, and the second phase is gated on evidence, never on the
+agent's word that it checkpointed:
+
+  phase 1  threshold crossed  -> block with the checkpoint instructions (as ever), arm phase 2
+  phase 2  a later clean Stop -> verify the preconditions, then send `/clear` to the tmux pane
+
+⛔ THE INTERLOCK, and it is the whole reason this is safe to wire before the fleet has the
+floor. `/clear` DISCARDS the context; unlike compaction there is no summary behind it. If the
+SessionEnd floor writer is not wired in settings.json, nothing mechanical survives, and firing
+here would destroy exactly the state this gate exists to protect. A gate that cannot verify
+its own safety net does not fire -- it degrades to the checkpoint text and says why. Same for
+a missing tmux pane (no actuator) and for a checkpoint that did not actually land on disk.
+
+⚠️ Every precondition is checked at FIRE time, not at arm time. The floor can be unwired, the
+pane can close and the notepad can go stale in between, and a precondition read once is a
+claim about a world that has since moved on.
 """
 import json
 import math
 import os
+import subprocess
 import sys
+import time
 
 STATE_DIR = os.path.join(os.path.expanduser("~"), ".claude", "state", "context-budget")
 LEARNED_PATH = os.path.join(STATE_DIR, "windows.json")
@@ -196,6 +224,136 @@ Resume order is: Mission Map -> claimed ticket -> handoff. Do NOT rely on native
 compaction; it summarises lossily, and the map exists precisely so it is not needed.
 
 Bypass (intentional): DF_CONTEXT_GATE=off, or raise DF_CONTEXT_THRESHOLD."""
+
+REASON_AUTOCLEAR = """Context checkpoint: {pct:.1f}% of the window is occupied ({occupied} of {window} tokens; threshold {threshold:.0f}%).
+Window source: {source}.
+
+AUTOCLEAR IS ARMED. When you next end a turn cleanly, this session will be sent `/clear`.
+A clear DISCARDS the window -- there is no summary behind it, so what is not on disk is gone.
+Do these now, and do not leave them half-done:
+  1. Refresh the handoff: Skill(handoff) -- where the work stands, the ONE next action, what is
+     blocked and on whom, every artefact by path/URL. It is restored in full on a cold start.
+  2. Update NOTES.md -- goal, last decisions, next action at the TOP, because the top is what a
+     cold restore reaches. Commit both in the same commit.
+  3. Save anything cross-session-valuable to the memory store (Engram), routed by the domain of
+     the content.
+  4. Then end your turn. Do not start new work you are not willing to lose.
+
+The clear will NOT fire unless all of these hold at that moment, and it says so if it skips:
+the SessionEnd floor writer is wired, a tmux pane is available, and NOTES.md is NEWER than this
+message -- the checkpoint is verified on disk, never taken on your word.
+
+Off: DF_CONTEXT_GATE_MODE=checkpoint. Rehearse without sending keys: DF_CONTEXT_AUTOCLEAR_DRYRUN=1."""
+
+REASON_AUTOCLEAR_SKIPPED = """Autoclear did NOT fire: {reason}
+
+The context window is still full, so the checkpoint still matters -- the handoff and NOTES.md
+are what a cold session reads first. {again}"""
+
+
+def _tmux_pane():
+    """The actuator, or None. Hooks inherit TMUX/TMUX_PANE from the session that launched
+    Claude, so the pane to type into is the one in the environment -- never one discovered by
+    listing panes, which would pick a stranger's session on a shared box."""
+    if not os.environ.get("TMUX"):
+        return None
+    return os.environ.get("TMUX_PANE") or None
+
+
+def _floor_is_wired():
+    """⛔ THE INTERLOCK. True only if a SessionEnd hook runs the notepad floor writer.
+
+    Without it a /clear leaves nothing mechanical behind. The floor writer itself fails closed
+    on any SessionEnd whose reason is not `clear`, so an entry that has lost its matcher still
+    degrades safely -- which is why the matcher is not required here, only the wiring."""
+    path = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
+    try:
+        with open(path) as fh:
+            settings = json.load(fh)
+    except Exception:
+        return False
+    for entry in (settings.get("hooks") or {}).get("SessionEnd") or []:
+        for hook in entry.get("hooks") or []:
+            if "pre-compact.sh" in (hook.get("command") or ""):
+                return True
+    return False
+
+
+def _notepad_root(cwd):
+    """Nearest ancestor holding NOTES.md -- the notepad root marker. The directory name is
+    never the test; several notepads are named nothing like their objective."""
+    path = os.path.abspath(cwd or os.getcwd())
+    while True:
+        if os.path.isfile(os.path.join(path, "NOTES.md")):
+            return path
+        parent = os.path.dirname(path)
+        if parent == path:
+            return None
+        path = parent
+
+
+def _checkpoint_is_fresh(cwd, armed_at):
+    """Did the checkpoint this gate ASKED for actually land on disk after it asked?
+
+    A self-report is not an assessment: the agent saying it wrote the handoff and the handoff
+    having been written are different facts, and only one of them survives the clear. mtime is
+    coarse but unforgeable by an agent that simply did not do the work."""
+    root = _notepad_root(cwd)
+    if not root:
+        return False, "no notepad above cwd (no NOTES.md) -- nothing to clear into"
+    notes = os.path.join(root, "NOTES.md")
+    try:
+        if os.path.getmtime(notes) > armed_at:
+            return True, root
+    except OSError:
+        return False, "cannot stat NOTES.md"
+    return False, "NOTES.md not touched since the gate armed -- checkpoint not on disk"
+
+
+def _fire_clear(pane):
+    """Type `/clear` into the pane, then Enter as a SEPARATE send-keys after a pause.
+
+    One send-keys carrying both would race the TUI's slash-command autocomplete, where Enter
+    selects a menu entry instead of submitting the line. The pause is the cheap fix; a wrong
+    menu selection is not."""
+    subprocess.run(["tmux", "send-keys", "-t", pane, "/clear"],
+                   check=True, timeout=10,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(0.4)
+    subprocess.run(["tmux", "send-keys", "-t", pane, "Enter"],
+                   check=True, timeout=10,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _autoclear(event, armed_at):
+    """Phase 2. Returns None if the clear FIRED, else (reason, retryable).
+
+    Every precondition is read here, at fire time. Read at arm time they would be claims about
+    a world that has since moved on -- the pane can close and the wiring can change in between.
+
+    `retryable` separates the two kinds of skip, because they deserve opposite treatment. An
+    unmet ENVIRONMENT precondition (no pane, no wiring, no notepad) will not change inside this
+    session, so re-reporting it every turn is pure noise: say it once and disarm. A missing
+    CHECKPOINT is the agent's to fix and fixing it is the whole point, so that one is worth
+    saying again."""
+    pane = _tmux_pane()
+    if not pane:
+        return ("no tmux pane in this environment -- there is nothing to type into", False)
+    if not _floor_is_wired():
+        return ("the SessionEnd floor writer is NOT wired in ~/.claude/settings.json, so a "
+                "clear would leave nothing mechanical behind -- refusing to fire", False)
+    ok, detail = _checkpoint_is_fresh(event.get("cwd") or "", armed_at)
+    if not ok:
+        retryable = detail.startswith("NOTES.md not touched")
+        return (detail, retryable)
+    if os.environ.get("DF_CONTEXT_AUTOCLEAR_DRYRUN"):
+        return ("DRY RUN -- would have sent /clear to tmux pane %s (notepad %s)"
+                % (pane, detail), False)
+    try:
+        _fire_clear(pane)
+    except Exception as exc:
+        return ("tmux send-keys failed (%s) -- the session is unchanged" % exc, False)
+    return None
 
 
 def allow():
@@ -452,16 +610,53 @@ def main():
     # over-100% case (a wrong window) that minted a fresh band every ~5% on 2026-08-02.
     session = str(event.get("session_id") or "nosession").replace("/", "_")
     marker = os.path.join(STATE_DIR, "%s.e%d" % (session, compactions))
+    mode = os.environ.get("DF_CONTEXT_GATE_MODE", "checkpoint")
     try:
         os.makedirs(STATE_DIR, exist_ok=True)
-        if os.path.exists(marker):
+        armed = os.path.exists(marker)
+        if armed and mode != "autoclear":
             allow()
-        open(marker, "w").close()
+        if not armed:
+            open(marker, "w").close()
     except OSError:
         allow()
 
-    if os.environ.get("DF_CONTEXT_GATE_MODE", "checkpoint") == "restart":
+    # PHASE 2 (autoclear only). The marker already exists, so the checkpoint was asked for on an
+    # earlier turn and the agent has had a full turn to do it. Now verify and fire.
+    if armed:
+        fired = marker + ".cleared"
+        disarmed = marker + ".disarmed"
+        try:
+            if os.path.exists(fired) or os.path.exists(disarmed):
+                allow()
+            armed_at = os.path.getmtime(marker)
+        except OSError:
+            allow()
+        outcome = _autoclear(event, armed_at)
+        if outcome is None:
+            try:
+                open(fired, "w").close()
+            except OSError:
+                pass
+            # The keys are already in the pane; the clear happens as this turn ends. Blocking
+            # here would start a turn that is about to be discarded.
+            allow()
+        reason, retryable = outcome
+        try:
+            if not retryable:
+                open(disarmed, "w").close()
+        except OSError:
+            pass
+        block(REASON_AUTOCLEAR_SKIPPED.format(reason=reason,
+                                              again="I will try again after your next turn."
+                                              if retryable else
+                                              "Autoclear is now disarmed for this session."))
+
+    if mode == "restart":
         block(REASON_RESTART.format(pct=pct, occupied=occupied, window=window, source=source))
+    if mode == "autoclear":
+        block(REASON_AUTOCLEAR.format(pct=pct, occupied=occupied, window=window, source=source,
+                                      threshold=threshold))
     block(REASON_CHECKPOINT.format(pct=pct, occupied=occupied, window=window, source=source,
                                    threshold=threshold))
 
