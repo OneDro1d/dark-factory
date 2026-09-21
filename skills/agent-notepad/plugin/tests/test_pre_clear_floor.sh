@@ -2,6 +2,10 @@
 # U8 — the PRE-CLEAR FLOOR: hooks/pre-compact.sh on SessionEnd, and session-start.sh reading the
 # floor back on a COLD restore.
 #
+# Comments below cite Engram document ids as evidence for measured constants. Engram is the
+# memory store; what it is and how to reach it is documented in exactly one place:
+# [Engram](../../../../starter-kit/instance/AUTHENTICATION.md#engram)
+#
 # ⛔ WHY THIS FILE EXISTS AT ALL. Until now pre-compact.sh had NO behavioural test — only
 # test_install.sh asserting it was wired. The floor mechanism itself was unverified, which is why
 # "this header says compacted/cleared but nothing is wired on clear" survived for months: every

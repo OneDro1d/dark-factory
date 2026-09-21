@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # hooks/session-start.sh — agent-notepad SessionStart restore + best-effort pull (U2).
 #
+# Comments below cite Engram document ids as evidence for measured constants. Engram is the
+# memory store; what it is and how to reach it is documented in exactly one place:
+# [Engram](../../../../starter-kit/instance/AUTHENTICATION.md#engram)
+#
 # DESIGN §7.1: the READ end of the "actually used" triangle. When cwd is inside a
 # notepad, best-effort `git -C <notepad> pull --ff-only` (bounded, non-blocking,
 # failure ignored) then FILE-READS-ONLY inject NOTES.md + DIGEST.md (if present) +
