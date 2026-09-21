@@ -77,6 +77,38 @@ test_settings_wires_four_notes_hooks_to_stable_path() {
   rm -rf "$T"
 }
 
+test_settings_wires_both_notes_continuation_hooks() {
+  # ⛔ THE RESTORE IS SPLIT IN TWO ON BOTH PATHS, and each half is a separate wiring of the same
+  # script. The case above proves SessionStart is wired to session-start.sh AT ALL — one match is
+  # enough for it, so it would pass with either continuation hook missing entirely. The
+  # continuations are what carry NOTES.md past the first ~1,200 bytes; unwired, the restore
+  # silently shrinks to what one hook can hold and nothing says so.
+  local T; T="$(mktemp -d)"
+  bash "$INSTALL" --target "$T" >/dev/null 2>&1
+  local s="$T/.claude/settings.json" m
+  m="$(jq -r '[.hooks.SessionStart[]? | select(any(.hooks[]?.command; contains("--part notes"))) | .matcher] | join(",")' "$s")"
+  assert_eq "compact" "$m" "--part notes is wired on compact only"
+  m="$(jq -r '[.hooks.SessionStart[]? | select(any(.hooks[]?.command; contains("--part cold-notes"))) | .matcher] | join(",")' "$s")"
+  assert_eq "startup|resume|clear" "$m" "--part cold-notes is wired on the cold sources only"
+  rm -rf "$T"
+}
+
+test_plugin_manifest_and_installer_wire_the_same_hooks() {
+  # ⚠️ THREE HOMES, ONE WIRING: install.sh, .claude-plugin/plugin.json and the kit's
+  # settings.template.json. A machine gets whichever route installed it, so an entry added to one
+  # home and forgotten in another is a hook that runs for some of the fleet and not the rest —
+  # with every "is it wired?" check passing on both.
+  local T pj; T="$(mktemp -d)"
+  bash "$INSTALL" --target "$T" >/dev/null 2>&1
+  pj="$PLUGIN_ROOT/.claude-plugin/plugin.json"
+  assert_file_exists "$pj" "the plugin manifest exists"
+  local a b
+  a="$(jq -r '[.hooks.SessionStart[]?.hooks[]?.command | capture("--part (?<p>[a-z-]+)").p] | sort | join(",")' "$T/.claude/settings.json")"
+  b="$(jq -r '[.hooks.SessionStart[]?.hooks[]?.command | capture("--part (?<p>[a-z-]+)").p] | sort | join(",")' "$pj")"
+  assert_eq "$a" "$b" "installer and plugin manifest declare the same --part hooks"
+  rm -rf "$T"
+}
+
 test_install_is_idempotent() {
   local T; T="$(mktemp -d)"
   bash "$INSTALL" --target "$T" >/dev/null 2>&1

@@ -222,6 +222,16 @@ merge_hook SessionStart    session-start.sh "startup|resume|clear|compact"
 # only. Two hooks because the harness caps EACH hook at ~10 KiB (measured 2026-09-18); see
 # session-start.sh _compact_restore.
 merge_hook SessionStart    "session-start.sh --part notes" "compact"
+# ⛔ AND THE SAME AGAIN FOR THE COLD PATH (2026-09-20). #199 split the COMPACTION restore in two
+# and left startup|resume|clear as a single hook — so /clear, the path the skill itself recommends
+# for a full window, restored only the ~1,200-byte NOTES reserve: MEASURED 4.6% of a real 28 KB
+# NOTES.md against compaction's 45.6%. A DISTINCT --part name, not a widened matcher on the line
+# above: the merge below is add-only keyed by `<file> --part <name>`, so a matcher change on an
+# entry that is already wired is never applied and still reads as wired.
+# ⚠️ THIS WIRING HAS THREE HOMES — here, .claude-plugin/plugin.json, and the kit's
+# starter-kit/instance/boot-kit/settings.template.json. A hook added to one of them runs only for
+# the machines installed by that route.
+merge_hook SessionStart    "session-start.sh --part cold-notes" "startup|resume|clear"
 merge_hook UserPromptSubmit user-prompt.sh  ""
 merge_hook PreCompact      pre-compact.sh   ""
 merge_hook Stop            stop.sh          ""

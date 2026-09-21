@@ -100,6 +100,27 @@ proj-arbbot/
   Part 2 continues `NOTES.md` from the exact byte part 1 stopped. With part 1 alone the restore is
   still complete and says what it did not carry. Pair: Tier 1 `hooks/context-budget.py` now says
   *checkpoint, then continue* instead of *hand off and /clear*.
+- **SessionStart, `source=startup|resume|clear`** — the COLD restore: the orientation block, the
+  newest handoff (≤4,096 bytes), `DIGEST.md`, the manifest digest, then `NOTES.md` LAST with
+  whatever the budget left — a reserved floor of 1,200 bytes.
+  ⛔ **SPLIT IN TWO SINCE 2026-09-20, and until then this path was the starved one.** The
+  compaction restore got its second hook in 2026-09-18 and the cold path did not, so on a real
+  28,359-byte `NOTES.md` a compaction restored **45.6%** and a `/clear` restored **4.6%** — and
+  `/clear` is the path this skill itself recommends for a full window. The second wiring is
+  `session-start.sh --part cold-notes` on matcher `startup|resume|clear`.
+  ⚠️ **It starts at the floor part 1 GUARANTEES, not at where part 1 actually stopped.** The two
+  hooks run in PARALLEL, so part 2 cannot observe part 1's cut; part 1's slice is ≥ the 1,200-byte
+  reserve and sometimes much more. So the first bytes of part 2 may REPEAT part 1, and that is the
+  deliberate choice: **overlap costs a kilobyte, a gap is NOTES.md that no hook delivered and
+  nothing announced.**
+  ⚠️ **It is a new `--part` NAME rather than a widened matcher on `--part notes`, and that is
+  load-bearing.** `wire-settings.py` merges hooks add-only, keyed by `<file> --part <name>`: a
+  matcher changed on an entry that is already wired is never applied, and the entry still reads as
+  wired. A widened matcher would have shipped, pinned, installed and done nothing.
+  ⚠️ **This wiring has THREE homes** — `plugin/install.sh`, `plugin/.claude-plugin/plugin.json`
+  and the kit's `starter-kit/instance/boot-kit/settings.template.json`. A machine gets whichever
+  route installed it, so an entry added to one and forgotten in another is a hook that runs for
+  part of the fleet, with every "is it wired?" check green on both.
 - **PreToolUse(Bash)** — the **commit gate** (ships in the *notepad's* `.claude/settings.json`,
   arms only in notepad sessions): blocks *agent* `git -C <code-repo> commit`s that drift
   from that repo's df-context-store.
