@@ -205,4 +205,46 @@ test_stale_floor_is_announced_and_a_fresh_one_is_not() {
   esac
 }
 
+# ⛔ THE BACKSTOP MAY NOT OPEN A GAP. It shrinks the documents budget until the field fits, and
+# cold part 2 runs in a SEPARATE PROCESS with the unmodified environment, starting at
+# `_reserve_notes`. If a trimming pass ever pushed part 1's NOTES slice below that, the bytes
+# between part 1's end and part 2's start would be delivered by NEITHER hook and nothing would
+# announce it. This drives the backstop to its floor with an absurd ceiling and asserts the two
+# halves still meet — with a control proving the backstop actually engaged, or the test is vacuous.
+test_backstop_never_opens_a_gap_between_the_parts() {
+  local s np tp big small p1 p2 cut start
+  command -v jq >/dev/null 2>&1 || { assert_eq skip skip "jq absent — backstop not measured"; return 0; }
+  s="$(_scaffold_contended)"; np="${s%%|*}"; tp="${s##*|}"
+  _fire SessionEnd '"reason":"clear",' "$np" "$tp"
+
+  big="$(printf '{"hook_event_name":"SessionStart","source":"clear","cwd":"%s"}' "$np" \
+    | AGENT_NOTEPAD_NO_PULL=1 AGENT_NOTEPAD_FIELD_CEILING=999999 bash "$SS" \
+    | jq -r '.hookSpecificOutput.additionalContext' | wc -c)"
+  p1="$(printf '{"hook_event_name":"SessionStart","source":"clear","cwd":"%s"}' "$np" \
+    | AGENT_NOTEPAD_NO_PULL=1 AGENT_NOTEPAD_FIELD_CEILING=4000 bash "$SS" \
+    | jq -r '.hookSpecificOutput.additionalContext')"
+  small="$(printf '%s' "$p1" | wc -c)"
+
+  # CONTROL: the low ceiling must actually have shrunk the payload.
+  if [ "$small" -lt "$big" ]; then
+    assert_eq engaged engaged "CONTROL: the backstop engaged (${big} -> ${small} bytes)"
+  else
+    assert_eq engaged inert \
+      "CONTROL: a 4000-byte ceiling did not shrink a ${big}-byte payload — the gap assertion below is vacuous"
+  fi
+
+  p2="$(printf '{"hook_event_name":"SessionStart","source":"clear","cwd":"%s"}' "$np" \
+    | AGENT_NOTEPAD_NO_PULL=1 bash "$SS" --part cold-notes \
+    | jq -r '.hookSpecificOutput.additionalContext')"
+  cut="$(printf '%s' "$p1"  | awk '/TRUNCATED at/ && /NOTES\.md/ {print $3; exit}')"
+  start="$(printf '%s' "$p2" | sed -n 's/.*NOTES\.md — bytes \([0-9]*\)-.*/\1/p' | head -1)"
+  : "${cut:=0}" "${start:=0}"
+  if [ "$cut" -ge "$start" ]; then
+    assert_eq meet meet "parts meet: part 1 ends at ${cut}, part 2 starts at ${start} — no gap"
+  else
+    assert_eq meet "gap of $(( start - cut )) bytes" \
+      "part 1 ends at ${cut} and part 2 starts at ${start} — those bytes reach NO hook"
+  fi
+}
+
 run_tests

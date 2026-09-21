@@ -246,7 +246,12 @@ fi
 # It is PURE: file sizes and environment, no writes, no network. That matters because the hooks
 # run in PARALLEL, so part 2 cannot observe anything part 1 did.
 _cold_budget() { # <np> -> sets _hf _hsz _hcap _budget _reserve_notes _notes_floor
-  local np="$1" _hoff=0 _total _default_budget _nsz=0
+  # ⚠️ `_hoff` IS DELIBERATELY NOT LOCAL. It is one of the numbers this function computes for its
+  # callers, exactly like _hcap/_hsz/_budget/_reserve_notes beside it, and the backstop below needs
+  # it to know how far it may trim. It was local, and under `set -u` that made the backstop abort
+  # the whole hook — which emits NOTHING and starts the session blind. Caught by the gap test.
+  _hoff=0 ; _total=""
+  local np="$1" _default_budget _nsz=0
   _hf=""
   if [ -d "$np/handoffs" ]; then _hf="$(ls -t "$np/handoffs"/*.md 2>/dev/null | head -1)"; fi
   # 4,096 (was 5,120): with the harness cap MEASURED at ~10 KiB on the additionalContext field
@@ -536,7 +541,11 @@ _scan_other_notepads() {
 
 # --- build the combined context (file reads only) --------------------------
 name="$(basename "$np")"
-combined="$(
+# ⛔ CALLABLE, AND A SUBSHELL, so a second pass is byte-for-byte a fresh build. It used to be an
+# inline `combined="$( … )"`. Wrapping it changes nothing about what it emits — every `return`
+# inside belongs to a nested helper, and `_spent` is re-initialised at the top of the emitters —
+# but it lets the BACKSTOP below rebuild the payload once it knows how big the first one came out.
+_build_combined() { (
   printf '## agent-notepad — restored working memory (%s)\n' "$name"
   printf 'Objective-scoped working memory, auto-loaded on session start. Resume from '
   printf 'this instead of re-deriving state.\n'
@@ -990,7 +999,53 @@ combined="$(
     _emit_manifest
   fi
   _emit_bounded "$np/NOTES.md"            "NOTES.md"
-)"
+); }
+
+combined="$(_build_combined)"
+
+# ⛔ THE BACKSTOP: MEASURE THE FIELD, DO NOT PREDICT IT.
+#
+# `_total` budgets the DOCUMENTS. The framing — headings, the orientation block, the 600-byte
+# next-action quote, one line per OMITTED/TRUNCATED verdict — is NOT in it, varies per notepad,
+# and on 2026-09-20 grew 159 bytes purely because NOTES.md was edited. So `_total` was tuned
+# THREE TIMES in one session (6300 → 6100 → 6000), each time correct for the notepad in front of
+# me and a guess for every other one. ⚠️ A CONSTANT CHASED REPEATEDLY IS NOT A CONSTANT; it is a
+# measurement nobody is taking. This takes it: build, measure, and if the field is over the
+# ceiling, hand back the overage and build again.
+#
+# ⛔ WHAT IT MAY NEVER TOUCH — `_reserve_notes`. The cold part 2 runs in a SEPARATE PROCESS with
+# the unmodified environment, and starts at `_notes_floor` = `_reserve_notes`. If a second pass
+# shrank that, part 1 would end before part 2 begins and the bytes between would be delivered by
+# NEITHER hook, with nothing announcing it — the silent-loss failure this file calls invisible by
+# construction. So the retry floor is `_hoff + _reserve_notes + 1`: enough that `_budget` stays
+# strictly above the reserve and the `-ge` clamp inside `_cold_budget` can never fire. Part 1 then
+# still delivers at least `_reserve_notes`, so the worst case is a repeated byte, never a gap.
+#
+# ⚠️ CEILING, not the cap. 10,240 is the best guess at the harness limit; (10,000, 10,500] was
+# never verified. 9,920 is the largest payload OBSERVED to arrive whole (this notepad, the
+# 2026-09-21 restore, read back out of the delivered context). Aim at what was seen to work.
+_CEILING="${AGENT_NOTEPAD_FIELD_CEILING:-9900}"
+_pass=0
+while [ "${#combined}" -gt "$_CEILING" ] && [ "$_pass" -lt 2 ]; do
+  _pass=$(( _pass + 1 ))
+  _floor_total=$(( _hoff + _reserve_notes + 1 ))
+  _new_total=$(( _total - ( ${#combined} - _CEILING ) - 16 ))
+  [ "$_new_total" -lt "$_floor_total" ] && _new_total="$_floor_total"
+  # Nothing left to give: say so in the transcript rather than spinning or silently overflowing.
+  if [ "$_new_total" -ge "$_total" ]; then break; fi
+  AGENT_NOTEPAD_TOTAL_BYTES="$_new_total" _cold_budget "$np"
+  combined="$(_build_combined)"
+done
+if [ "${#combined}" -gt "$_CEILING" ]; then
+  # ⚠️ ANNOUNCE THE OVERFLOW RATHER THAN SHIPPING IT QUIETLY. If the harness does drop this
+  # payload the reader never sees this line — but if it squeaks through, the next session is told
+  # its restore was not guaranteed, which is the only warning anyone can act on.
+  _over_len="${#combined}"
+  combined="$combined
+[⚠️ THIS RESTORE IS $_over_len BYTES, OVER THE $_CEILING-BYTE CEILING, AND COULD NOT BE TRIMMED
+ FURTHER WITHOUT MOVING THE NOTES.md RESERVE THAT COLD PART 2 STARTS FROM — which would open a
+ silent gap. It may arrive as a ~2 KB preview instead. Shrink the newest handoff or NOTES.md.]"
+fi
 
 # --- emit the dual-field SessionStart JSON contract ------------------------
 # jq safely encodes the payload (newlines, quotes, backticks).
