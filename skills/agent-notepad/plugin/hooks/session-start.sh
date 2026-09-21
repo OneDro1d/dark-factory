@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # hooks/session-start.sh — agent-notepad SessionStart restore + best-effort pull (U2).
 #
+# Comments below cite Engram document ids as evidence for measured constants. Engram is the
+# memory store; what it is and how to reach it is documented in exactly one place:
+# [Engram](../../../../starter-kit/instance/AUTHENTICATION.md#engram)
+#
 # DESIGN §7.1: the READ end of the "actually used" triangle. When cwd is inside a
 # notepad, best-effort `git -C <notepad> pull --ff-only` (bounded, non-blocking,
 # failure ignored) then FILE-READS-ONLY inject NOTES.md + DIGEST.md (if present) +
@@ -246,7 +250,12 @@ fi
 # It is PURE: file sizes and environment, no writes, no network. That matters because the hooks
 # run in PARALLEL, so part 2 cannot observe anything part 1 did.
 _cold_budget() { # <np> -> sets _hf _hsz _hcap _budget _reserve_notes _notes_floor
-  local np="$1" _hoff=0 _total _default_budget _nsz=0
+  # ⚠️ `_hoff` IS DELIBERATELY NOT LOCAL. It is one of the numbers this function computes for its
+  # callers, exactly like _hcap/_hsz/_budget/_reserve_notes beside it, and the backstop below needs
+  # it to know how far it may trim. It was local, and under `set -u` that made the backstop abort
+  # the whole hook — which emits NOTHING and starts the session blind. Caught by the gap test.
+  _hoff=0 ; _total=""
+  local np="$1" _default_budget _nsz=0
   _hf=""
   if [ -d "$np/handoffs" ]; then _hf="$(ls -t "$np/handoffs"/*.md 2>/dev/null | head -1)"; fi
   # 4,096 (was 5,120): with the harness cap MEASURED at ~10 KiB on the additionalContext field
@@ -258,7 +267,16 @@ _cold_budget() { # <np> -> sets _hf _hsz _hcap _budget _reserve_notes _notes_flo
     _hsz="$(wc -c < "$_hf" 2>/dev/null | tr -d ' ')"; _hsz="${_hsz:-0}"
     _hoff="$_hsz"; [ "$_hoff" -gt "$_hcap" ] && _hoff="$_hcap"
   fi
-  _total="${AGENT_NOTEPAD_TOTAL_BYTES:-6300}"
+  # ⛔ 6,100 → 6,000, and THE SECOND CHASE OF THIS CONSTANT IN ONE SESSION IS THE REAL FINDING.
+  # The framing is not inside this total, it varies per notepad (the 600-byte next-action quote,
+  # the other-notepads list, one line per OMITTED/TRUNCATED verdict), and it grew 159 bytes here
+  # purely because NOTES.md was edited. So NO fixed value of `_total` is safe for every notepad:
+  # tuning it fixes the notepad you measured and silently mis-sizes the next one.
+  # ⇒ THE ACTUAL FIX, NOT DONE HERE: build the payload, measure the FIELD, and if it exceeds the
+  # safe ceiling trim the last document (NOTES.md, which is read head-first) by the overage and
+  # announce it. That converts a guess into a guarantee. Tracked as a follow-up; this commit only
+  # buys headroom for the staleness line, and says so rather than implying the number is right.
+  _total="${AGENT_NOTEPAD_TOTAL_BYTES:-6000}"
   _default_budget=$(( _total - _hoff ))
   [ "$_default_budget" -lt 1200 ] && _default_budget=1200
   _budget="${AGENT_NOTEPAD_MAX_BYTES:-$_default_budget}"
@@ -527,7 +545,11 @@ _scan_other_notepads() {
 
 # --- build the combined context (file reads only) --------------------------
 name="$(basename "$np")"
-combined="$(
+# ⛔ CALLABLE, AND A SUBSHELL, so a second pass is byte-for-byte a fresh build. It used to be an
+# inline `combined="$( … )"`. Wrapping it changes nothing about what it emits — every `return`
+# inside belongs to a nested helper, and `_spent` is re-initialised at the top of the emitters —
+# but it lets the BACKSTOP below rebuild the payload once it knows how big the first one came out.
+_build_combined() { (
   printf '## agent-notepad — restored working memory (%s)\n' "$name"
   printf 'Objective-scoped working memory, auto-loaded on session start. Resume from '
   printf 'this instead of re-deriving state.\n'
@@ -584,7 +606,69 @@ combined="$(
   # the cap was raised) that is an instruction contradicting reality, and this estate measured
   # on 2026-04-24 what that produces: the agent follows the RULE over the reality. So each line
   # is decided from the actual byte counts at emit time -- inlined whole, or cut and by how much.
+  # ⛔ THE FLOOR VERDICT IS COMPUTED HERE, ABOVE ITS OWN ANNOUNCEMENT, because the announcement
+  # block that follows runs BEFORE the DIGEST/manifest verdicts further down. The first version of
+  # this patch put it beside those and printed _fspend eleven lines before assigning it: under
+  # `set -u` that is an unbound-variable death, and the hook is on the session critical path.
+  # The rule this file already states applies to ORDER as well as to count — one home, and it has
+  # to come before every reader of it.
+  _fcap="${AGENT_NOTEPAD_COLD_FLOOR_BYTES:-900}"
+  _fsz=0
+  [ -f "$np/PRECOMPACT.md" ] && _fsz="$(wc -c < "$np/PRECOMPACT.md" 2>/dev/null | tr -d ' ')"
+  _fsz="${_fsz:-0}"
+  _fspend=0
+  if [ "$_fsz" -gt 0 ] && [ "$_fcap" -gt 0 ]; then
+    _fspend="$_fsz"
+    [ "$_fspend" -gt "$_fcap" ] && _fspend="$_fcap"
+    # never at the cost of the NOTES reserve
+    if [ "$_fspend" -gt $(( _budget - _reserve_notes )) ]; then
+      _fspend=$(( _budget - _reserve_notes ))
+      [ "$_fspend" -lt 0 ] && _fspend=0
+    fi
+  fi
   printf '\n### ⛔ WHAT IS BELOW, AND WHAT IS NOT\n\n'
+  # Announced from the SAME _fspend the emitter uses, per the one-decision-one-home rule that the
+  # DIGEST block below states and that this file has already been bitten by twice.
+  if [ "${_fspend:-0}" -gt 0 ]; then
+    if [ "${_fsz:-0}" -le "${_fspend:-0}" ]; then
+      printf '  0. SESSION FLOOR — INLINED IN FULL below (%s bytes): what the session that wrote it\n' "$_fsz"
+      printf '     was doing at the moment it ended.  %s\n' "$np/PRECOMPACT.md"
+    else
+      printf '  0. SESSION FLOOR — CUT: %s of %s bytes below. ⛔ OPEN IT for the rest:  %s\n' "$_fspend" "$_fsz" "$np/PRECOMPACT.md"
+    fi
+    # ⛔ SAY HOW OLD IT IS, BECAUSE THIS LINE USED TO CLAIM MORE THAN THE FILE SUPPORTS. It read
+    # "what the PREVIOUS SESSION was doing", which is true after a /clear and FALSE after a
+    # restart: `pre-compact.sh` writes a floor only for SessionEnd reason=clear (the guard that
+    # stops a near-empty transcript destroying a good one), so a restart writes NO floor and the
+    # reader is served the last CLEAR's — measured 2026-09-20, two sessions and 40 minutes back.
+    # ⚠️ SAME DEFECT CLASS AS THE ONE FIXED TWO COMMITS AGO: an announcement asserting more than
+    # the artifact supports. There it was "already in your context" for a handoff that was not;
+    # here it is "the previous session" for a floor that is older than that. ⛔ A STALE ARTIFACT
+    # IS NOT ABSENT — it is wrong AND present, and it is still served, which is harder to notice.
+    # The session id cannot decide this (it differs from the current one on BOTH paths). Age can:
+    # a /clear writes the floor 20-29 ms before SessionStart, a restart minutes or hours earlier.
+    # ⚠️ `date -r <file>` is GNU. On BSD/macOS -r means "seconds since epoch", so it FAILS on a
+    # path — hence the `stat -f %m` second try. ⛔ AND THE UNKNOWN CASE IS ANNOUNCED, NOT ASSUMED
+    # FRESH: the first draft fell back to "now", which makes the age 0 and the warning silently
+    # never fire. A warning that cannot fire is indistinguishable from one that is absent, and
+    # this file would have shipped it to every macOS install without a single failing test.
+    _fmt="$(date -r "$np/PRECOMPACT.md" +%s 2>/dev/null || stat -f %m "$np/PRECOMPACT.md" 2>/dev/null || true)"
+    case "$_fmt" in
+      ''|*[!0-9]*)
+        printf '     ⚠️ AGE UNREADABLE here — may predate the session that just ended; see its header.\n' ;;
+      *)
+        _fage=$(( $(date +%s) - _fmt ))
+        # ⚠️ ONE LINE, DELIBERATELY. The framing is NOT inside _total, so anything printed here is
+        # an UNBUDGETED consumer of the same field the documents are rationed out of — the exact
+        # shape of the overspend fixed two commits ago. Measured: the two-line draft took this
+        # notepad's field from 9,928 to ~10,078, back into the unverified (10,000, 10,500] band.
+        # It fires only on the restart path, and a worst case that only happens sometimes is still
+        # the worst case a hard cap is judged by.
+        if [ "$_fage" -gt 120 ]; then
+          printf '     ⚠️ WRITTEN %s MIN AGO — NOT the session that just ended; a restart writes no floor.\n' "$(( _fage / 60 ))"
+        fi ;;
+    esac
+  fi
   # _hf, _hsz and _hcap come from _cold_budget, which ran at top level. They used to be computed
   # HERE, inside this subshell, which is why part 2 could not agree with part 1 about anything.
   if [ -n "$_hf" ]; then
@@ -617,9 +701,21 @@ combined="$(
   # ⚠️ THE FRAMING IS NOT IN THE TOTAL AND IT IS NOT SMALL. Headings, the orientation block, the
   # next-action quote (up to 600 bytes), the other-notepads list, every OMITTED / TRUNCATED notice:
   # measured at ~3,800 bytes with a pathological NOTES.md in the suite (6,600 for documents put
-  # the field at 10,110). 6,300 for the documents keeps that worst case under 10,000. The handoff
-  # cap is 4,096 so a full-size handoff plus the NOTES reserve still fits: 4,096 + 1,200 + 3,800.
+  # the field at 10,110). The handoff cap is 4,096 so a full-size handoff plus the NOTES reserve
+  # still fits: 4,096 + 1,200 + 3,800.
   # Under-spending by a KB is a cost; over-spending by one byte is a 2 KB preview and no restore.
+  #
+  # ⛔ 6,300 → 6,100, MEASURED 2026-09-20. The line above used to end "6,300 for the documents
+  # keeps that worst case under 10,000" and ITS OWN ARITHMETIC REFUTES IT: 6,300 + 3,800 = 10,100.
+  # On the real notepad, framing measured 3,754 and the field came out at 10,054.
+  # ⚠️ THAT IS NOT SAFE JUST BECAUSE IT IS UNDER 10,240. The cap was measured as an INTERVAL —
+  # 10,000 arrived, 10,500 did not (`9834b409`) — so everything in (10,000, 10,500] is UNVERIFIED,
+  # and 10,054 sits inside it. 10 KiB is the best guess at the ceiling, never an observation.
+  # ⚠️ The failure is not graceful: one byte over and the WHOLE field becomes a 2 KB preview, so
+  # the right target is the largest value actually OBSERVED to arrive (~9,900, `2fc96e95`), not
+  # the smallest believed to fail. 6,100 + 3,800 = 9,900. It costs NOTES.md 200 cold bytes and
+  # buys delivery certainty — and against a floor, those 200 bytes were never the binding
+  # constraint on what NOTES.md carries; ORDER is (`a3af5e14`).
   #
   # ⚠️ NOTES.md GETS A RESERVED SLICE. It is emitted LAST (its top is the useful part, and it grows
   # without limit), and last meant it was the one always OMITTED. Reserving 1,200 bytes means the
@@ -632,10 +728,35 @@ combined="$(
   # file got announced as too large directly above its own full inline (eso laptop, 2026-09-08).
   # Two homes for one number is the defect; the arithmetic was never the hard part.
   _minslice="${AGENT_NOTEPAD_MIN_USEFUL_SLICE:-2000}"
+  # ⛔ THE FLOOR IS FIRST IN THE CHAIN, AND ON THIS PATH IT OUTRANKS DIGEST AND THE MANIFEST.
+  # ADDED with the SessionEnd(clear) wiring: until then nothing wrote a floor before a /clear and
+  # nothing read one on a cold start, so both halves were missing and each one alone is useless.
+  #
+  # ⚠️ WHY IT RANKS HIGHER HERE THAN ON THE COMPACTION PATH. After a compaction a summary carries
+  # the orientation and the floor is a safety net UNDER it. After a /clear there is no summary at
+  # all — the floor is the only record of what was in flight. Same file, different worth, because
+  # what survives alongside it is different.
+  #
+  # ⚠️ IT IS CAPPED SMALLER THAN COMPACTION'S 1,500. The cold field is tighter: the documents
+  # budget is 6,300 and a real restore was measured filling ~8,830 of the ~9,600 hook cap once
+  # framing is counted, so the true headroom is ~800 bytes, not 1,500. A number that fits one
+  # path is not a number that fits the other — which is why this is its own knob and not a reuse
+  # of _COMPACT_FLOOR_MAX.
+  #
+  # ⚠️ THIS IS A NEW CONSUMER AT THE FRONT OF AN ORDERED BUDGET, so it is paid for by whoever is
+  # LAST — the trap this file already records one block down ("fixing one greedy consumer in a
+  # priority chain just moves the waste one step down"). Here it lands on DIGEST and the manifest,
+  # both of which already degrade to pointers through the verdicts below. NOTES.md is protected:
+  # _nleft clamps to _reserve_notes regardless of what the earlier consumers spent.
+  #
+  # ⛔ AND THE INVARIANT THAT MUST NOT MOVE: cold part 2 starts at _notes_floor, which is
+  # _reserve_notes and does NOT depend on _budget or on anything spent here. So adding this
+  # consumer cannot shift part 2's start and cannot open a GAP — the failure that is invisible by
+  # construction. A test pins it; do not "optimise" _notes_floor to track the real cut.
   _dsz=0
   [ -f "$np/DIGEST.md" ] && _dsz="$(wc -c < "$np/DIGEST.md" 2>/dev/null | tr -d ' ')"
   _dsz="${_dsz:-0}"
-  _dleft=$(( _budget - _reserve_notes ))
+  _dleft=$(( _budget - _fspend - _reserve_notes ))
   _digest_mode=omit ; _dspend=0
   if [ "$_dsz" -gt 0 ]; then
     if [ "$_dleft" -le 512 ]; then
@@ -671,7 +792,7 @@ combined="$(
     _msz="$(jq -c '{repos: [ (.repos // [])[] | {name, path, remote, branch, role, note} | with_entries(select(.value != null)) ]}' "$np/repos.manifest.json" 2>/dev/null | wc -c | tr -d ' ')"
   fi
   _msz="${_msz:-0}"
-  _mleft=$(( _budget - _dspend - _reserve_notes ))
+  _mleft=$(( _budget - _fspend - _dspend - _reserve_notes ))
   _manifest_mode=omit ; _mspend=0
   if [ "$_mraw" -gt 0 ]; then
     if [ "$_mleft" -le 512 ]; then
@@ -701,7 +822,7 @@ combined="$(
     # to the reserve and happened to be the right answer for the wrong reason. With pointer
     # verdicts in play that accident stops holding, and a recomputation would disagree with the
     # emitter -- which is the exact defect the 2026-09-08 comment above this block records.
-    _pre=$(( ${_dspend:-0} + ${_mspend:-0} ))
+    _pre=$(( ${_fspend:-0} + ${_dspend:-0} + ${_mspend:-0} ))
     # DIGEST and the manifest may not spend into the NOTES reserve, so NOTES gets at least it.
     _nleft=$(( _budget - _pre ))
     [ "$_nleft" -lt "$_reserve_notes" ] && _nleft="$_reserve_notes"
@@ -815,6 +936,27 @@ combined="$(
   # That is a property of the template, not a law — if that layout changes, this ordering has
   # to be revisited rather than trusted.
   # Reads the ONE verdict computed with the budget above; it does not decide again.
+  # ⛔ THE FLOOR IS EMITTED FIRST — ahead of DIGEST, the manifest and NOTES. It is the smallest
+  # document here and the only one describing THIS machine's last few minutes rather than the
+  # objective in general. On a restore after /clear it is the only such record that exists.
+  if [ "${_fspend:-0}" -gt 0 ]; then
+    printf '\n\n### SESSION FLOOR — %s\n\n' "$np/PRECOMPACT.md"
+    _compact_chunk "$np/PRECOMPACT.md" 0 "$_fspend"
+    [ "${_fsz:-0}" -gt "${_fspend:-0}" ] && printf '\n[floor CUT at ~%s of %s bytes; open the file for the rest]\n' "$_fspend" "$_fsz"
+    # ⛔ THE FLOOR MUST RECORD WHAT IT SPENT. _emit_bounded derives every later document's slice
+    # from `_budget - _spent - reserve`, so a consumer that emits without adding to _spent is
+    # INVISIBLE to the ordered budget and every document after it is handed bytes that are
+    # already gone. MEASURED 2026-09-20, the first live /clear after this branch was wired:
+    # the verdict above said _digest_mode=omit (_dleft=179), the emitter recomputed 1,079 from a
+    # _spent still at 0, and DIGEST.md took 1,079 UNBUDGETED bytes. Field: 10,818 against a cap
+    # measured at 10 KiB (Engram `9834b409`) — so the whole of part 1 was replaced by a 2 KB
+    # preview. ⚠️ THE OVERSPEND DESTROYS MORE THAN IT TAKES: 1,079 bytes of DIGEST cost the
+    # handoff, the floor and the head of NOTES.md — everything the restore exists to deliver.
+    # ⚠️ It also silently broke the announcement/emission contract this file states twice: the
+    # banner promised NOTES.md 1,379 bytes (from _pre, which DOES count the floor) and the
+    # emitter delivered 1,200. Two homes for one number, exactly as recorded three blocks up.
+    _spent=$(( _spent + _fspend ))
+  fi
   if [ "$_digest_mode" = "pointer" ]; then
     printf '\n\n### DIGEST.md (cross-scope, derived) — POINTER ONLY, %s bytes NOT injected\n' "$_dsz"
     printf '  Deliberate: only %s bytes of budget remained, and a slice that small ends\n' "$_dleft"
@@ -861,7 +1003,53 @@ combined="$(
     _emit_manifest
   fi
   _emit_bounded "$np/NOTES.md"            "NOTES.md"
-)"
+); }
+
+combined="$(_build_combined)"
+
+# ⛔ THE BACKSTOP: MEASURE THE FIELD, DO NOT PREDICT IT.
+#
+# `_total` budgets the DOCUMENTS. The framing — headings, the orientation block, the 600-byte
+# next-action quote, one line per OMITTED/TRUNCATED verdict — is NOT in it, varies per notepad,
+# and on 2026-09-20 grew 159 bytes purely because NOTES.md was edited. So `_total` was tuned
+# THREE TIMES in one session (6300 → 6100 → 6000), each time correct for the notepad in front of
+# me and a guess for every other one. ⚠️ A CONSTANT CHASED REPEATEDLY IS NOT A CONSTANT; it is a
+# measurement nobody is taking. This takes it: build, measure, and if the field is over the
+# ceiling, hand back the overage and build again.
+#
+# ⛔ WHAT IT MAY NEVER TOUCH — `_reserve_notes`. The cold part 2 runs in a SEPARATE PROCESS with
+# the unmodified environment, and starts at `_notes_floor` = `_reserve_notes`. If a second pass
+# shrank that, part 1 would end before part 2 begins and the bytes between would be delivered by
+# NEITHER hook, with nothing announcing it — the silent-loss failure this file calls invisible by
+# construction. So the retry floor is `_hoff + _reserve_notes + 1`: enough that `_budget` stays
+# strictly above the reserve and the `-ge` clamp inside `_cold_budget` can never fire. Part 1 then
+# still delivers at least `_reserve_notes`, so the worst case is a repeated byte, never a gap.
+#
+# ⚠️ CEILING, not the cap. 10,240 is the best guess at the harness limit; (10,000, 10,500] was
+# never verified. 9,920 is the largest payload OBSERVED to arrive whole (this notepad, the
+# 2026-09-21 restore, read back out of the delivered context). Aim at what was seen to work.
+_CEILING="${AGENT_NOTEPAD_FIELD_CEILING:-9900}"
+_pass=0
+while [ "${#combined}" -gt "$_CEILING" ] && [ "$_pass" -lt 2 ]; do
+  _pass=$(( _pass + 1 ))
+  _floor_total=$(( _hoff + _reserve_notes + 1 ))
+  _new_total=$(( _total - ( ${#combined} - _CEILING ) - 16 ))
+  [ "$_new_total" -lt "$_floor_total" ] && _new_total="$_floor_total"
+  # Nothing left to give: say so in the transcript rather than spinning or silently overflowing.
+  if [ "$_new_total" -ge "$_total" ]; then break; fi
+  AGENT_NOTEPAD_TOTAL_BYTES="$_new_total" _cold_budget "$np"
+  combined="$(_build_combined)"
+done
+if [ "${#combined}" -gt "$_CEILING" ]; then
+  # ⚠️ ANNOUNCE THE OVERFLOW RATHER THAN SHIPPING IT QUIETLY. If the harness does drop this
+  # payload the reader never sees this line — but if it squeaks through, the next session is told
+  # its restore was not guaranteed, which is the only warning anyone can act on.
+  _over_len="${#combined}"
+  combined="$combined
+[⚠️ THIS RESTORE IS $_over_len BYTES, OVER THE $_CEILING-BYTE CEILING, AND COULD NOT BE TRIMMED
+ FURTHER WITHOUT MOVING THE NOTES.md RESERVE THAT COLD PART 2 STARTS FROM — which would open a
+ silent gap. It may arrive as a ~2 KB preview instead. Shrink the newest handoff or NOTES.md.]"
+fi
 
 # --- emit the dual-field SessionStart JSON contract ------------------------
 # jq safely encodes the payload (newlines, quotes, backticks).
