@@ -515,6 +515,48 @@ is_stall "$(stall "l10-$$" "$TX/l10.jsonl" false DF_STALL_GUARD=off)" \
   && bad "L10: DF_STALL_GUARD=off disables it" "it fired anyway" \
   || ok "L10: DF_STALL_GUARD=off turns the stall guard off"
 
+echo "=== M: EVERY session keeps operator-todo.md, and keeps it in shape (operator ruling 2026-09-22) ==="
+TOOL="$T1/plugins/df-governed/bin/df-operator-todo"
+MP="$TMPDIR/mnp"; mkdir -p "$MP/sub"; printf '# NOTES\n' > "$MP/NOTES.md"
+pfire() { # pfire <session> <transcript> <cwd> [extra env...]
+  local s="$1" t="$2" c="$3"; shift 3
+  printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s"}' "$s" "$t" "$c" \
+    | scrub_dispatch_env DF_OPERATOR_TODO_BIN="$TOOL" "$@" python3 "$HOOK" 2>/dev/null; }
+notshape() { case "$1" in *"NOT IN SHAPE"*) return 0;; *) return 1;; esac; }
+
+M1="$(pfire "page1-$$" "$TX/work1.jsonl" "$MP/sub")"
+[ -f "$MP/operator-todo.md" ] && ok "M1: a notepad session with no page gets one created" \
+                              || bad "M1: page created" "no page at $MP/operator-todo.md"
+notshape "$M1" && bad "M1: a fresh page is clean — no block" "$M1" || ok "M1: a fresh page is clean — no block"
+
+printf '\nI did a lot of work today and here is the story.\n' >> "$MP/operator-todo.md"
+M2="$(pfire "page2-$$" "$TX/work1.jsonl" "$MP")"
+notshape "$M2" && ok "M2: narration on the page BLOCKS the stop" || bad "M2: narration blocks" "$M2"
+case "$M2" in *'"decision": "block"'*) ok "M2: and it is a block, not a hint";; *) bad "M2: is a block" "$M2";; esac
+case "$M2" in *"outside any item"*) ok "M2: the reason carries the lint finding";; *) bad "M2: carries lint" "$M2";; esac
+
+M3="$(pfire "page2-$$" "$TX/work2.jsonl" "$MP")"
+notshape "$M3" && bad "M3: the SAME page version is not re-nagged" "$M3" || ok "M3: the same page version is not re-nagged"
+
+"$TOOL" --file "$MP/operator-todo.md" add --id m4 --category credential --task "Sign in" --why "only you" --do "claude auth login" >/dev/null 2>&1
+M4="$(pfire "page2-$$" "$TX/work1.jsonl" "$MP")"
+notshape "$M4" && bad "M4: a rewritten, clean page passes" "$M4" || ok "M4: once the page is rewritten clean, no block"
+
+printf '\nmore narration\n' >> "$MP/operator-todo.md"
+M5="$(pfire "page5-$$" "$TX/text.jsonl" "$MP")"
+notshape "$M5" && bad "M5: a text-only turn never forces a page fix" "$M5" || ok "M5: a text-only turn never forces a page fix (cost)"
+M6="$(pfire "page6-$$" "$TX/work1.jsonl" "$MP" DF_OPERATOR_PAGE_CHECK=off)"
+notshape "$M6" && bad "M6: DF_OPERATOR_PAGE_CHECK=off" "$M6" || ok "M6: DF_OPERATOR_PAGE_CHECK=off turns it off"
+printf '#!/bin/sh\nexit 2\n' > "$TMPDIR/oldtool"; chmod +x "$TMPDIR/oldtool"
+M7="$(printf '{"session_id":"page7-%s","transcript_path":"%s","cwd":"%s"}' "$$" "$TX/work1.jsonl" "$MP" \
+      | scrub_dispatch_env DF_OPERATOR_TODO_BIN="$TMPDIR/oldtool" python3 "$HOOK" 2>/dev/null)"
+notshape "$M7" && bad "M7: an old tool with no lint fails OPEN" "$M7" || ok "M7: an installed tool with no lint fails OPEN — never a forced turn"
+# ⛔ CONTROL for M7: the same page with the real tool MUST block, or M7 proves nothing.
+M8="$(pfire "page8-$$" "$TX/work1.jsonl" "$MP")"
+notshape "$M8" && ok "M8: CONTROL — the same page with the real tool does block" || bad "M8: control blocks" "$M8"
+M9="$(pfire "page9-$$" "$TX/work1.jsonl" "$TMPDIR")"
+notshape "$M9" && bad "M9: outside a notepad, nothing" "$M9" || ok "M9: outside a notepad there is no page check"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"

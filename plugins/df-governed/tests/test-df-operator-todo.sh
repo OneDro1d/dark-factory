@@ -38,7 +38,7 @@ contains "B: do present" "gh auth refresh" "$OUT"
 contains "B: lands under the async heading" "Async — the loop continues" "$OUT"
 
 echo "=== C: --blocking lands in the blocking section ==="
-"$SCRIPT" --file "$F" add --id c1 --category decision --task "Decide the tier" --why "a decision you have not made" --do "reply T1 or T2" --blocking >/dev/null 2>&1
+"$SCRIPT" --file "$F" add --id c1 --category decision --task "Decide the tier" --why "a decision you have not made" --do "reply T1 or T2" --option "T1: every org gets it" --option "T2: only this estate gets it" --recommend "T1, because it is generic" --blocking >/dev/null 2>&1
 OUT="$(sed -n '/Blocking/,/## Async/p' "$F")"
 contains "C: blocking item under the blocking heading" "Decide the tier" "$OUT"
 absent   "C: async item NOT under blocking" "Rotate the key" "$OUT"
@@ -91,8 +91,8 @@ contains "I: empty queue is stated" "empty" "$OUT"
 contains "I: file still says nothing blocking" "Nothing blocking" "$(cat "$F")"
 
 echo "=== J: --blocking-only filters ==="
-"$SCRIPT" --file "$F" add --id j1 --category decision --task "async thing" --why "a decision" --do "x" >/dev/null 2>&1
-"$SCRIPT" --file "$F" add --id j2 --category decision --task "blocking thing" --why "a decision" --do "y" --blocking >/dev/null 2>&1
+"$SCRIPT" --file "$F" add --id j1 --category decision --task "async thing" --why "a decision" --do "x" --option "A: one way" --option "B: the other" --recommend "A" >/dev/null 2>&1
+"$SCRIPT" --file "$F" add --id j2 --category decision --task "blocking thing" --why "a decision" --do "y" --option "A: one way" --option "B: the other" --recommend "A" --blocking >/dev/null 2>&1
 OUT="$("$SCRIPT" --file "$F" list --blocking-only 2>&1)"
 contains "J: blocking shown" "blocking thing" "$OUT"
 absent   "J: async hidden" "async thing" "$OUT"
@@ -154,11 +154,106 @@ contains "O1 it says it created the page" "created" "$OUT"
 BODY="$(cat "$FO/operator-todo.md" 2>/dev/null)"
 contains "O2 the page carries the admission rule" "EVERY LINE HERE IS AN ACTION WAITING ON YOU" "$BODY"
 contains "O2 and states the queue is empty" "Nothing blocking" "$BODY"
-"$SCRIPT" --file "$FO/operator-todo.md" add --id o3 --category decision --task "keep me" --why "w" --do "d" >/dev/null 2>&1
+"$SCRIPT" --file "$FO/operator-todo.md" add --id o3 --category decision --task "keep me" --why "w" --do "d" --option "A: a" --option "B: b" --recommend "A" >/dev/null 2>&1
 BEFORE="$(cat "$FO/operator-todo.md")"
 OUT="$("$SCRIPT" --file "$FO/operator-todo.md" init 2>&1)"
 contains "O3 a second init says already present" "already present" "$OUT"
 eq "O3 and leaves an existing page byte-identical" "$(cat "$FO/operator-todo.md")" "$BEFORE"
+
+echo "== P: a DECISION carries its options, what each one means, and a recommendation"
+# Operator ruling 2026-09-22: "When decisions are needed, the ask should be in plain English, with
+# options, implications, consequences of each choice and recommendation." A decision without them
+# hands the operator the analysis as well as the choice.
+FP="$T/dec.md"
+OUT="$("$SCRIPT" --file "$FP" add --id p1 --category decision --task "Pick one" --why "w" --do "say A or B" 2>&1)"; RC=$?
+eq "P1 a decision with no options is refused (rc 2)" "$RC" "2"
+contains "P1 the refusal says what is missing" "--option" "$OUT"
+[ ! -f "$FP" ] && ok "P1 and nothing was written" || bad "P1 nothing written" "file exists"
+OUT="$("$SCRIPT" --file "$FP" add --id p2 --category decision --task "Pick one" --why "w" --do "say A or B" --option "A: x" --recommend "A" 2>&1)"; RC=$?
+eq "P2 ONE option is not a choice (rc 2)" "$RC" "2"
+OUT="$("$SCRIPT" --file "$FP" add --id p3 --category decision --task "Pick one" --why "w" --do "say A or B" --option "A: x" --option "B: y" 2>&1)"; RC=$?
+eq "P3 options without a recommendation are refused (rc 2)" "$RC" "2"
+"$SCRIPT" --file "$FP" add --id p4 --category decision --task "Keep the gate on the laptop?" \
+  --why "a risk only you can accept" --do "say A or B" \
+  --option "A — copy the list here: I can gate and merge alone; the list now lives on two machines" \
+  --option "B — leave it: every merge waits for the laptop" \
+  --recommend "A, because merges stop waiting on a second machine" >/dev/null 2>&1
+BODY="$(cat "$FP")"
+contains "P4 option A is on the page" "copy the list here" "$BODY"
+contains "P4 option B is on the page" "every merge waits for the laptop" "$BODY"
+contains "P4 the recommendation is labelled" "**Recommendation:** A, because" "$BODY"
+OUT="$("$SCRIPT" --file "$FP" list 2>&1)"
+contains "P5 list round-trips the options" "every merge waits for the laptop" "$OUT"
+"$SCRIPT" --file "$FP" add --id p6 --category credential --task "other" --why "w" --do "d" >/dev/null 2>&1
+contains "P6 a later add keeps the decision's option lines" "copy the list here" "$(cat "$FP")"
+
+echo "== Q: an item is an ask, not an essay — every field has a cap"
+FQ="$T/cap.md"
+LONG="$(printf 'x%.0s' $(seq 1 900))"
+OUT="$("$SCRIPT" --file "$FQ" add --id q1 --category credential --task "t" --why "w" --do "$LONG" 2>&1)"; RC=$?
+eq "Q1 an over-long --do is refused (rc 2)" "$RC" "2"
+contains "Q1 and it names the field" "--do" "$OUT"
+[ ! -f "$FQ" ] && ok "Q1 nothing was written" || bad "Q1 nothing written" "file exists"
+
+echo "== R: re-adding keeps the FIRST raised date — no dated trail of rewrites"
+FR="$T/raised.md"
+printf '# Operator TODO\n\n## ⛔ Blocking — the loop is stopped until you do these\n\n_Nothing blocking. The loop is not waiting on you._\n\n## Async — the loop continues without these\n\n- [ ] `r1` — **old** · _yours because:_ **credential** — w · _do:_ d · _raised 2026-01-02_\n' > "$FR"
+"$SCRIPT" --file "$FR" add --id r1 --category credential --task "new wording" --why "w" --do "d" >/dev/null 2>&1
+BODY="$(cat "$FR")"
+contains "R1 the original date survives" "_raised 2026-01-02_" "$BODY"
+N="$(grep -o '_raised [0-9-]*_' "$FR" | grep -c .)"
+eq "R1 and there is exactly one date" "$N" "1"
+
+echo "== S: lint — only OPEN items, no narration, no history"
+FS="$T/lint.md"
+"$SCRIPT" --file "$FS" add --id s0 --category credential --task "Sign in" --why "only you can" --do "claude auth login" >/dev/null 2>&1
+OUT="$("$SCRIPT" --file "$FS" lint 2>&1)"; RC=$?
+eq "S0 a page written by the tool is clean (rc 0)" "$RC" "0"
+cp "$FS" "$FS.bak"
+printf '\nSome narration a session appended about what it did.\n' >> "$FS"
+OUT="$("$SCRIPT" --file "$FS" lint 2>&1)"; RC=$?
+eq "S1 stray text outside an item fails (rc 1)" "$RC" "1"
+contains "S1 and says it is outside any item" "outside any item" "$OUT"
+cp "$FS.bak" "$FS"
+printf -- '- [x] `s2` — **finished thing** · _yours because:_ **approval** — w · _do:_ d\n' >> "$FS"
+OUT="$("$SCRIPT" --file "$FS" lint 2>&1)"; RC=$?
+eq "S2 a ticked item fails (rc 1)" "$RC" "1"
+contains "S2 and says closed items are deleted" "closed" "$OUT"
+cp "$FS.bak" "$FS"
+sed -i.x 's/_do:_ claude auth login/_do:_ claude auth login ✅ RE-CHECKED 2026-09-18, still true/' "$FS"
+OUT="$("$SCRIPT" --file "$FS" lint 2>&1)"; RC=$?
+eq "S3 a history trail inside an item fails (rc 1)" "$RC" "1"
+contains "S3 and names the item" "s0" "$OUT"
+cp "$FS.bak" "$FS"
+printf -- '- [ ] `s4` — **Pick** · _yours because:_ **decision** — w · _do:_ say A or B · _raised 2026-09-22_\n' >> "$FS"
+OUT="$("$SCRIPT" --file "$FS" lint 2>&1)"; RC=$?
+eq "S4 a hand-written decision with no options fails (rc 1)" "$RC" "1"
+contains "S4 and says what a decision needs" "options" "$OUT"
+cp "$FS.bak" "$FS"
+BIG="$(printf 'y%.0s' $(seq 1 1600))"
+printf -- '- [ ] `s5` — **%s** · _yours because:_ **access** — w · _do:_ d\n' "$BIG" >> "$FS"
+OUT="$("$SCRIPT" --file "$FS" lint 2>&1)"; RC=$?
+eq "S5 an over-long item fails (rc 1)" "$RC" "1"
+# ⛔ CONTROL, run against a case that MUST hit: a real pre-ruling page, full of re-check trails.
+FC="$T/control.md"
+cat > "$FC" <<'CTRL'
+# Operator TODO
+
+## ⛔ Blocking — the loop is stopped until you do these
+
+- [ ] `merge-all-scope` — **two PRs** · _yours because:_ x · _do:_ y
+  ✅ **#212, #213, #214 and #215 ARE MERGED** — the clause that used to sit here is gone. · _raised 2026-09-20, extended same day, stack closed 2026-09-21_
+
+## Async — the loop continues without these
+
+_Nothing queued._
+CTRL
+OUT="$("$SCRIPT" --file "$FC" lint 2>&1)"; RC=$?
+eq "S6 CONTROL: a real pre-ruling page fails lint" "$RC" "1"
+
+echo "== T: a missing page lints as MISSING, never as clean"
+OUT="$("$SCRIPT" --file "$T/absent.md" lint 2>&1)"; RC=$?
+eq "T1 rc is 2 on a missing page" "$RC" "2"
 
 printf 'passed %s  failed %s\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %s\n' "$((PASS+FAIL))"

@@ -59,6 +59,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -136,6 +138,71 @@ def open_item_count(start=None):
     except Exception:
         pass
     return None
+
+
+PAGE = """⛔ operator-todo.md IS NOT IN SHAPE. Fix it before you stop.
+
+Operator ruling 2026-09-22: every session keeps this page, and it holds ONLY OPEN items for the
+human. A decision is asked in plain English, with the options, what each one means and what
+follows from it, and a recommendation. No closed items, no narration, no history.
+
+How: rewrite each item with `df-operator-todo add` (the same --id replaces it; a decision takes
+two or more --option and one --recommend). Close finished ones with `df-operator-todo done`.
+History goes to NOTES.md or git, never onto the page. Then `df-operator-todo lint` must say clean.
+
+{lint}"""
+
+
+def _find_notepad(start):
+    d = os.path.abspath(start)
+    for _ in range(12):
+        if os.path.isfile(os.path.join(d, "NOTES.md")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+    return None
+
+
+def operator_page_problem(session_id, cwd):
+    """Every session in a notepad keeps an operator-todo.md, and keeps it in shape (operator
+    ruling 2026-09-22). Creates the page if absent; returns the block text if `lint` finds defects
+    in a version of the page this session has not already been told about, else None.
+
+    Once per PAGE VERSION (mtime+size), not once per stop: a page the session has not touched
+    since the last nag is not re-nagged, and a fix — any rewrite — is re-checked at once.
+    ⚠️ FAILS OPEN, deliberately the opposite of the rest of this hook: an old tool with no `lint`
+    (rc 2), a missing tool, a timeout — all None. A page check that errors must not become a
+    forced turn on every stop fleet-wide."""
+    try:
+        notepad = _find_notepad(cwd or os.getcwd())
+        tool = os.environ.get("DF_OPERATOR_TODO_BIN") or shutil.which("df-operator-todo")
+        if not notepad or not tool:
+            return None
+        page = os.path.join(notepad, "operator-todo.md")
+        if not os.path.isfile(page):
+            subprocess.run([tool, "--file", page, "init"], capture_output=True, timeout=10)
+            return None
+        st = os.stat(page)
+        sig = "%d:%d" % (st.st_mtime_ns, st.st_size)
+        mark = _state_path(session_id or "nosession", ".page")
+        if os.path.exists(mark):
+            with open(mark) as f:
+                if f.read().strip() == sig:
+                    return None
+        r = subprocess.run([tool, "--file", page, "lint"], capture_output=True, text=True, timeout=10)
+        os.makedirs(os.path.dirname(mark), exist_ok=True)
+        with open(mark, "w") as f:
+            f.write(sig)
+        if r.returncode != 1:
+            return None
+        out = r.stdout
+        if len(out) > 3000:
+            out = out[:3000] + "\n… (cut; run `df-operator-todo lint` for the rest)"
+        return PAGE.format(lint=out.rstrip())
+    except Exception:
+        return None
 
 
 def already_fired(session_id):
@@ -423,6 +490,7 @@ def brief_due(session_id, now=None):
 
 def main():
     sid = ""
+    cwd = ""
     stop_hook_active = False
     transcript = ""
     final_text = ""
@@ -432,6 +500,7 @@ def main():
         stop_hook_active = bool(event.get("stop_hook_active"))
         transcript = event.get("transcript_path") or ""
         final_text = event.get("last_assistant_message") or ""
+        cwd = event.get("cwd") or ""
     except Exception:
         pass  # a malformed event must not block the turn
 
@@ -501,6 +570,13 @@ def main():
         print("{}")
         return
     final_text = final_text or tail_text
+
+    # The operator page, checked on working turns only (a text-only turn changed nothing). It
+    # outranks the completeness prose: a page the operator cannot read is the more concrete defect.
+    page = None if os.environ.get("DF_OPERATOR_PAGE_CHECK") == "off" else operator_page_problem(sid, cwd)
+    if page:
+        print(json.dumps({"decision": "block", "reason": page}))
+        return
 
     n = open_item_count()
     if already_fired(sid):
