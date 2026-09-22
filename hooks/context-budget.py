@@ -799,17 +799,21 @@ def main():
         fired = marker + ".cleared"
         disarmed = marker + ".disarmed"
         try:
-            if os.path.exists(fired) or os.path.exists(disarmed):
+            if os.path.exists(disarmed):
                 allow()
             armed_at = os.path.getmtime(marker)
         except OSError:
             allow()
+        # CLAIM the fire atomically. The kit wires this hook at project AND user level under two
+        # spellings, so Claude Code runs BOTH copies, in parallel, on one stop. A check-then-create
+        # let both through: `/clear` was typed twice and two helpers each typed the resume
+        # (measured live 2026-09-22T02:55:13Z and :16Z). O_EXCL lets exactly one copy proceed.
+        try:
+            os.close(os.open(fired, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        except OSError:
+            allow()   # the other copy holds the claim (or has already fired)
         outcome = _autoclear(event, armed_at)
         if outcome is None:
-            try:
-                open(fired, "w").close()
-            except OSError:
-                pass
             # Checkpoint, then CONTINUE: without this the new session sits at an empty prompt.
             # `_autoclear` just proved both the pane and the notepad exist, so neither is None.
             root = _notepad_root(event.get("cwd") or "")
@@ -819,6 +823,12 @@ def main():
             # The keys are already in the pane; the clear happens as this turn ends. Blocking
             # here would start a turn that is about to be discarded.
             allow()
+        # Refused: nothing was typed, so RELEASE the claim — a retryable refusal must be able to
+        # fire on a later stop, and a disarm is recorded by its own marker, not by this one.
+        try:
+            os.unlink(fired)
+        except OSError:
+            pass
         if reentry:
             # A refusal is reported by BLOCKING, which re-entry may not do. Change nothing — no
             # disarm either — so the next clean stop retries and, if it still refuses, says why.

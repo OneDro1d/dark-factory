@@ -437,6 +437,37 @@ TUI_EOF
   [ -e "$W/home/.claude/state/context-budget/sJ10.e0" ] && bad "J10: no marker on re-entry" "marker written" \
                                                         || ok "J10: and writes no arm marker"
 
+  # ⛔ J12 — TWO WIRINGS, ONE FIRE. The kit wires this hook at project level (for `claude -p
+  # --setting-sources project`) AND at user level, under different spellings (`${HOME}/…` vs the
+  # absolute path), so Claude Code does not dedupe them and runs BOTH, in parallel, on one stop.
+  # Phase 2 checked `.cleared` then created it — not atomic — so both fired and both spawned a
+  # helper: the resume was TYPED TWICE. Measured live 2026-09-22T02:55Z (session cd07b14e).
+  P12="$(newpane j12 "bash $TUI")"; wait_shown "$P12" $'\342\235\257' || true
+  mtime "$W/wnp/PRECOMPACT.md" -600
+  RS12=(TMUX="$SOCK,0,0" TMUX_PANE="$P12" DF_CONTEXT_RESUME_SETTLE=0.5 DF_CONTEXT_RESUME_CLEAR_WAIT=8 DF_CONTEXT_RESUME_READY_WAIT=8)
+  ac sJ12 "$W/i.jsonl" "$W/wnp" "${RS12[@]}" >/dev/null           # phase 1: arms
+  mtime "$W/wnp/NOTES.md" 3000
+  ac sJ12 "$W/i.jsonl" "$W/wnp" "${RS12[@]}" >/dev/null &         # phase 2, wiring A
+  ac sJ12 "$W/i.jsonl" "$W/wnp" "${RS12[@]}" >/dev/null &         # phase 2, wiring B, same instant
+  wait
+  # The helpers are still waiting for the floor here, so this count is not a timing race. In the
+  # fake TUI a second helper's resume can be lost to timing; live (02:55:13 and :16) both landed.
+  N12H="$(pgrep -f -- "--resume-after-clear $P12 " | grep -c .)"
+  [ "$N12H" = "1" ] && ok "J12: exactly ONE resume helper is spawned" \
+                    || bad "J12: one resume helper" "spawned $N12H"
+  wait_shown "$P12" "GOT: /clear" || true
+  touch "$W/wnp/PRECOMPACT.md"
+  wait_shown "$P12" "GOT: Autoclear just cleared" || true
+  sleep 3                                                          # a second helper would land here
+  # Count KEYSTROKES, not lines: two racing fires interleave into ONE line, `GOT: /clear/clear`.
+  # Only in GOT lines — the tty also echoes the typed input after the ❯.
+  N12C="$(shown "$P12" | grep '^GOT:' | grep -oF '/clear' | grep -c .)"
+  N12R="$(shown "$P12" | grep '^GOT:' | grep -oF 'Autoclear just cleared' | grep -c .)"
+  [ "$N12C" = "1" ] && ok "J12: two parallel wirings type /clear exactly ONCE" \
+                    || bad "J12: /clear typed once" "typed $N12C times"
+  [ "$N12R" = "1" ] && ok "J12: ...and the resume exactly ONCE" \
+                    || bad "J12: resume typed once" "typed $N12R times"
+
   # J11 — the resume is TYPED, so it must be ONE line: in literal typing a newline IS Enter. A custom
   # text with a newline has to arrive as a single submitted line, never cut in half at the newline.
   P11="$(newpane j11 "bash $TUI")"; wait_shown "$P11" $'\342\235\257' || true
