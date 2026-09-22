@@ -566,6 +566,28 @@ _build_combined() { (
   else
     printf '  (none found among the scanned roots)\n'
   fi
+  # ---- Engram: ONE LINE, and the restraint is the design ---------------------------------
+  # The durable-memory anchor for this notepad, so a cold session knows the store exists and how
+  # to query it. `df-engram` refreshes .df/engram-recall.txt locally on every write; this reads
+  # THAT FILE — no network, no token, nothing added to startup latency.
+  #
+  # ⛔ ONLY THE HEAD LINE, NOT THE RECORD LIST. The cache also holds the newest record titles, and
+  # M-ENGRAM's DESIGN.md §7 budgeted ~400 bytes here to inject them. They are not injected, because
+  # THIS payload is the most contended in the estate: NOTES.md is already being crowded out of it,
+  # and 400 bytes of titles buys them at NOTES.md's expense. A cold agent does not need five
+  # titles; it needs to know the store is there and what to type. The titles stay one `cat` away.
+  # ⚠️ Emitted on the startup/resume path only. The compaction payload (_P1) is built separately
+  # and deliberately carries floor + handoff + NOTES only — a pointer is not a caveat, so it does
+  # not earn a place there.
+  # ⛔ THE HEAD LINE ONLY, AND ITS COST WAS MEASURED, NOT ESTIMATED. A two-line version of this
+  # block cost 319 bytes and took every one of them out of NOTES.md's slice (the announced cut
+  # moved from 2227 to 1908 bytes on this notepad). One line carries the anchor id, the staleness
+  # caveat, the live command and the path — everything a cold session needs to reach the store.
+  # `df-engram` owns the wording, so there is one home for it and this hook just prints it.
+  if [ -f "$np/.df/engram-recall.txt" ]; then
+    printf '\n### DURABLE MEMORY (Engram)\n'
+    head -1 "$np/.df/engram-recall.txt" | sed 's/^/  /'
+  fi
   # ⛔ THE PAYLOAD MUST FIT, OR NONE OF IT ARRIVES. MEASURED 2026-09-05 on a REAL /clear.
   #
   # The harness externalises an oversized hook payload to a file and injects only a ~2 KB

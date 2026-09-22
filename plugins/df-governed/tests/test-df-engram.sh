@@ -323,6 +323,56 @@ contains "O: the source dates the graph re-measurement" "re-measured 2026-09-22"
 contains "O: and names the stale finding it supersedes" "dde3d4fd" "$(cat "$CLI")"
 contains "O: and keeps the falsifiable field that ended the false green" "graph_contributed" "$(cat "$CLI")"
 
+echo "=== P0: ⛔ with no --relates-query the SECOND leg still runs, from the body ==="
+# This was a real defect, found because the cache test counted hub searches and got 1 where it
+# expected 2: with --relates-query unset, `two_leg_search` was handed None and quietly ran ONE
+# leg — so only keyword neighbours were ever linked, which is the precise failure the two-query
+# design exists to prevent, reintroduced by an unset default.
+: > "$DFE_LOG"
+DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" write --title "P0 finding" \
+  --kind knowledge --collection loom-behaviors \
+  --body "A PARAPHRASE sentence taken straight from the body. And a second sentence after it." \
+  >/dev/null 2>&1
+N_P0="$(grep -c 'engram_search ' "$DFE_LOG" || true)"
+eq "P0: two searches ran with no --relates-query given" "$N_P0" "2"
+linked RELATES_TO "$V_ID" && ok "P0: and the vector-leg neighbour IS linked from the body text" \
+                          || bad "P0: body fallback" "the paraphrase leg found nothing"
+
+echo "=== P: the SessionStart recall line is a LOCAL CACHE, refreshed on write ==="
+# ⛔ WHY A FILE AND NOT A SEARCH. DESIGN.md §7 had SessionStart CALL Engram for this line. Measured
+# 2026-09-22: one search costs 2.5-4.9 s, and the line needs two legs plus a graph query — ~10 s
+# added to EVERY session start, on the restore path, for a line that is usually not read. Worse,
+# SessionStart runs in a hook whose environment may not carry the token at all, so the feature
+# would fail exactly where it is least debuggable.
+#   The cache costs nothing at startup, needs no token, and is refreshed by the tool that already
+#   knows the answer. What it CANNOT do is show another session's writes until this notepad writes
+#   again — an acceptable trade, and stated in the file itself so no reader mistakes it for live.
+: > "$DFE_LOG"
+RC_F="$NPA/.df/engram-recall.txt"
+DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" write --title "P newest finding" \
+  --kind knowledge --collection loom-behaviors --body "the most recent thing written" >/dev/null 2>&1
+[ -f "$RC_F" ] && ok "P: the cache file is written" || bad "P: cache" "missing $RC_F"
+RCB="$(cat "$RC_F" 2>/dev/null)"
+contains "P: it carries the notepad anchor id" "aaaaaaaa" "$RCB"
+contains "P: and the newest record's title" "P newest finding" "$RCB"
+contains "P: and says it is a cache, not a live read" "cache" "$RCB"
+N_RC="$(wc -c < "$RC_F" | tr -d ' ')"
+[ "$N_RC" -le 600 ] && ok "P: it stays inside the restore budget ($N_RC bytes)" \
+                    || bad "P: budget" "$N_RC bytes — it will crowd out NOTES.md"
+N_NET="$(grep -c 'engram_search' "$DFE_LOG" || true)"
+eq "P: ⛔ refreshing the cache costs NO extra hub call" "$N_NET" "2"
+
+echo "=== Q: ⛔ the cache can never break the write it follows ==="
+# The record is the promise. A cache is a convenience, and a convenience that can fail a write is
+# a liability — so this proves the write still succeeds when the cache cannot be written at all.
+chmod 500 "$NPA/.df" 2>/dev/null
+OUT="$(DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" write --title "Q finding" \
+        --kind knowledge --collection loom-behaviors --body "written with the cache dir read-only" 2>&1)"
+eq "Q: the write still exits 0" "$?" "0"
+chmod 700 "$NPA/.df" 2>/dev/null
+FQ="$(grep -l 'Q finding' "$NPA"/pending-engram/*.md | head -1)"
+contains "Q: and the record is still recorded as written" "status: written" "$(cat "$FQ")"
+
 printf 'passed %s  failed %s\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %s\n' "$((PASS+FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1

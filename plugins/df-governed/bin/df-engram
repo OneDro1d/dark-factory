@@ -361,6 +361,22 @@ def _hits(res):
     return out
 
 
+def first_sentence(text, n=220):
+    """A fallback paraphrase for the vector leg, taken from the body.
+
+    ⛔ WITHOUT THIS THE TOOL HALF-SEARCHES IN SILENCE. When `--relates-query` was omitted the
+    second leg simply did not run, so only keyword neighbours were ever linked — the exact failure
+    the two-query design exists to prevent, reintroduced by an unset default. A caller's own
+    paraphrase is still better; this only makes the floor non-broken. Caught by a test that
+    expected two hub searches and counted one."""
+    body = re.sub(r"[#*`>|\-]+", " ", (text or "").strip())
+    body = re.sub(r"\s+", " ", body).strip()
+    if not body:
+        return None
+    m = re.search(r"^(.{40,%d}?[.!?])\s" % n, body)
+    return (m.group(1) if m else body[:n]) or None
+
+
 def two_leg_search(query_kw, query_vec, collection, limit=10):
     """⛔ TWO queries, because the legs fire separately (see the module docstring). Returns the
     UNION, best score per id, ordered by score. One query finds about half of these."""
@@ -414,12 +430,74 @@ def wire_record(notepad, doc_id, a, mission, relates_query, title, collection):
     return " ".join(parts)
 
 
+RECALL_CACHE = "engram-recall.txt"
+RECALL_BUDGET = int(os.environ.get("DF_ENGRAM_RECALL_BUDGET", "400"))
+
+
+def refresh_recall_cache(notepad, limit=5, budget=RECALL_BUDGET):
+    """The line SessionStart injects: the notepad anchor, then the newest records written FROM
+    this notepad. Ids and titles, never content.
+
+    ⛔ THIS IS A LOCAL FILE, NOT A SEARCH, AND THAT IS DELIBERATE. DESIGN.md §7 had SessionStart
+    query Engram for this. Measured 2026-09-22: one search is 2.5-4.9 s and the line needs two
+    legs plus a graph query — ~10 s on EVERY session start, on the restore path, for a line that
+    is usually not read; and the hook's environment may not carry the token at all, so it would
+    fail where it is least debuggable. The tool that writes a record already knows the answer, so
+    it writes the line then. What this CANNOT show is another session's writes until this notepad
+    writes again — which is why the file says so on its first line.
+
+    ⛔ IT CAN NEVER FAIL THE WRITE IT FOLLOWS. The record is the promise; this is a convenience."""
+    try:
+        anchors = read_anchors(notepad)
+        np_a = anchors.get("notepad") or {}
+        # ⛔ ONE LINE, AND EVERY WORD IN IT IS PAYING RENT. This is what SessionStart injects, out
+        # of the most contended payload in the estate: the first version cost 319 bytes and took
+        # them straight out of NOTES.md's slice (measured — the NOTES cut moved from 2227 to 1908).
+        # So it carries exactly four things: the anchor id, that it is a CACHE and not a live read,
+        # the command that IS live, and where the full list sits.
+        head = (f"Engram {(np_a.get('id') or '-')[:8]} anchors `{np_a.get('name') or '?'}` · cache, "
+                f"not live · `df-engram recall \"<topic>\"` · .df/{RECALL_CACHE}")
+        rows, qdir = [], os.path.join(notepad, QUEUE)
+        if os.path.isdir(qdir):
+            for name in os.listdir(qdir):
+                if not name.endswith(".md"):
+                    continue
+                try:
+                    front, _b = read_front(os.path.join(qdir, name))
+                except Exception:
+                    continue
+                if front.get("status") != "written" or not front.get("id"):
+                    continue
+                rows.append((float(front.get("created") or 0), front["id"], front.get("title") or ""))
+        rows.sort(reverse=True)
+        out, used = [head], len(head) + 1
+        for _c, rid, title in rows[:limit]:
+            line = f"  {rid[:8]}  {title}"
+            if len(line) > 90:
+                line = line[:87] + "..."
+            if used + len(line) + 1 > budget:
+                break
+            out.append(line)
+            used += len(line) + 1
+        if len(out) > 1:
+            out.append("  (`df-engram recall \"<topic>\"` reads the hub itself)")
+        p = os.path.join(notepad, ".df", RECALL_CACHE)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+        os.replace(tmp, p)
+    except Exception:
+        pass          # ⛔ never let a cache refresh disturb a written record
+
+
 def cmd_anchor(a, notepad):
     np_id, created, note = ensure_notepad_anchor(notepad, a)
     if not np_id:
         sys.stderr.write(f"df-engram: the notepad anchor was NOT recorded — {note}\n"
                          "Nothing was written to disk, so a later run retries cleanly.\n")
         return 3
+    refresh_recall_cache(notepad)
     print(f"df-engram: notepad anchor {np_id} ({note}) -> {anchor_path(notepad)}")
     if a.mission:
         m_id, _c, m_note = ensure_mission_anchor(notepad, a.mission, a)
@@ -487,9 +565,11 @@ def cmd_write(a, notepad):
         write_front(path, front, body_with_key)
         # The record exists now. The graph is a SECOND concern: it must not be able to undo that,
         # and it must not be able to fail quietly either.
-        front["links"] = wire_record(notepad, res["id"], a, a.mission, a.relates_query,
+        front["links"] = wire_record(notepad, res["id"], a, a.mission,
+                                     a.relates_query or first_sentence(body),
                                      a.title, a.collection)
         write_front(path, front, body_with_key)
+        refresh_recall_cache(notepad)
         print(f"df-engram: written {res['id']} -> {a.collection} ({path})")
         print(f"  links: {front['links']}")
         if "FAILED" in front["links"]:
@@ -539,7 +619,7 @@ def cmd_reconcile(a, notepad):
             front["status"], front["id"] = "written", found
             write_front(path, front, body)
             front["links"] = wire_record(notepad, found, a, front.get("mission"),
-                                         None, front.get("title") or "",
+                                         first_sentence(body), front.get("title") or "",
                                          front.get("collection"))
             write_front(path, front, body)
             print(f"df-engram: {name} DID land as {found} — recorded, not rewritten.")
@@ -555,7 +635,7 @@ def cmd_reconcile(a, notepad):
             front["status"], front["id"] = "written", res["id"]
             write_front(path, front, body)
             front["links"] = wire_record(notepad, res["id"], a, front.get("mission"),
-                                         None, front.get("title") or "",
+                                         first_sentence(body), front.get("title") or "",
                                          front.get("collection"))
             write_front(path, front, body)
             print(f"df-engram: {name} retried and written as {res['id']}.")
@@ -564,6 +644,7 @@ def cmd_reconcile(a, notepad):
             print(f"df-engram: {name} still UNPROVEN — {TIMEOUT_NOTE}")
     if not touched:
         print("df-engram: nothing old enough to reconcile.")
+    refresh_recall_cache(notepad)
     return 0
 
 
