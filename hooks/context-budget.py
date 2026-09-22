@@ -704,7 +704,21 @@ def main():
 
     # A Stop hook that already blocked is re-entered with this flag set.
     # Never block twice in a row -- that is an infinite loop, not a policy.
-    if event.get("stop_hook_active"):
+    #
+    # ⛔ BUT IN AUTOCLEAR MODE THE RE-ENTRY STOP IS EXACTLY WHEN PHASE 2 MUST RUN, and returning here
+    # was the bug the operator reported as "sessions get ready to clear, but something stops before
+    # clearing". Phase 1 BLOCKS, so the stop that ends the checkpoint turn is always a re-entry.
+    # With the old early return, phase 2 was never evaluated there; it waited for the NEXT clean
+    # stop, and an autonomous session that has just checkpointed has no next turn — it goes idle
+    # saying it is "ready for autoclear" and sits until something external prompts it. MEASURED
+    # 2026-09-22 on a real session: armed, checkpoint on disk, then idle for 240 s, no clear.
+    # (The 5 min – 2 h arm-to-clear delays measured earlier were the wait for that outside prompt,
+    # which I had first called "working as designed".)
+    # So re-entry is carried forward, and only the BLOCKING paths are closed to it: phase 2 may FIRE
+    # (it types /clear and ALLOWS — no block, so no loop), but may not arm, and may not refuse with
+    # a block. Every other mode keeps the old early return untouched.
+    reentry = bool(event.get("stop_hook_active"))
+    if reentry and os.environ.get("DF_CONTEXT_GATE_MODE", "checkpoint") != "autoclear":
         allow()
 
     transcript = event.get("transcript_path") or ""
@@ -760,6 +774,8 @@ def main():
         if armed and mode != "autoclear":
             allow()
         if not armed:
+            if reentry:
+                allow()   # arming BLOCKS, and a re-entry stop may never block
             open(marker, "w").close()
     except OSError:
         allow()
@@ -789,6 +805,10 @@ def main():
                 _schedule_resume(pane, root, marker + ".resumed")
             # The keys are already in the pane; the clear happens as this turn ends. Blocking
             # here would start a turn that is about to be discarded.
+            allow()
+        if reentry:
+            # A refusal is reported by BLOCKING, which re-entry may not do. Change nothing — no
+            # disarm either — so the next clean stop retries and, if it still refuses, says why.
             allow()
         reason, retryable = outcome
         try:

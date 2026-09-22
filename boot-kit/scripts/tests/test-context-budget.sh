@@ -393,6 +393,50 @@ TUI_EOF
   wait_shown "$P7" "GOT: Autoclear just cleared" && ok "J7: and that detached helper still delivered the resume" \
                                                  || bad "J7: detached helper delivered" "$(shown "$P7" | tail -3)"
 
+  # ⛔ J8 — THE OPERATOR'S "gets ready to clear, but something stops before clearing". Phase 1
+  # BLOCKS, so the stop ending the checkpoint turn is ALWAYS a re-entry (stop_hook_active=true).
+  # The old early return skipped phase 2 there, so an autonomous session that had just
+  # checkpointed went idle "ready for autoclear" and never cleared. Measured live 2026-09-22.
+  acr() {  # like ac, but a RE-ENTRY stop
+    local s="$1" t="$2" c="$3"; shift 3
+    printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","stop_hook_active":true}' "$s" "$t" "$c" \
+      | env -u DF_CONTEXT_THRESHOLD -u DF_CONTEXT_WINDOW -u DF_CONTEXT_GATE \
+            -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u TMUX -u TMUX_PANE -u DF_CONTEXT_AUTOCLEAR_DRYRUN \
+            HOME="$W/home" DF_CONTEXT_GATE_MODE=autoclear "$@" python3 "$GATE"
+  }
+  P8="$(newpane j8 "bash $TUI")"; wait_shown "$P8" $'\342\235\257' || true
+  mtime "$W/wnp/PRECOMPACT.md" -600
+  RS8=(TMUX="$SOCK,0,0" TMUX_PANE="$P8" DF_CONTEXT_RESUME_SETTLE=0.5 DF_CONTEXT_RESUME_CLEAR_WAIT=8 DF_CONTEXT_RESUME_READY_WAIT=8)
+  O8A="$(ac sJ8 "$W/i.jsonl" "$W/wnp" "${RS8[@]}")"               # a clean stop: phase 1 arms + BLOCKS
+  case "$O8A" in *"AUTOCLEAR IS ARMED"*) ok "J8: a clean stop arms and blocks (phase 1)";; *) bad "J8: phase 1 arms" "$O8A";; esac
+  mtime "$W/wnp/NOTES.md" 2400                                    # the checkpoint turn writes NOTES
+  O8B="$(acr sJ8 "$W/i.jsonl" "$W/wnp" "${RS8[@]}")"              # ...and ends: a RE-ENTRY stop
+  blocked "$O8B" && bad "J8: re-entry never blocks" "$O8B" || ok "J8: the re-entry stop does not block (no loop)"
+  wait_shown "$P8" "GOT: /clear" && ok "J8: the RE-ENTRY stop that ends the checkpoint turn FIRES the clear" \
+                                 || bad "J8: re-entry fires phase 2" "$(shown "$P8" | tail -3)"
+  touch "$W/wnp/PRECOMPACT.md"
+  wait_shown "$P8" "GOT: Autoclear just cleared" && ok "J8: ...and the session is resumed" \
+                                                 || bad "J8: resumed after a re-entry fire" "$(shown "$P8" | tail -3)"
+
+  # J9 — re-entry with the checkpoint NOT on disk: a refusal would block, so it must ALLOW and
+  # change nothing (no disarm), leaving the next clean stop to retry and explain.
+  P9="$(newpane j9 "bash $TUI")"; wait_shown "$P9" $'\342\235\257' || true
+  RS9=(TMUX="$SOCK,0,0" TMUX_PANE="$P9")
+  ac sJ9 "$W/i.jsonl" "$W/wnp" "${RS9[@]}" >/dev/null             # arms
+  mtime "$W/wnp/NOTES.md" -3600                                   # checkpoint NOT written
+  O9="$(acr sJ9 "$W/i.jsonl" "$W/wnp" "${RS9[@]}")"
+  blocked "$O9" && bad "J9: re-entry refusal must not block" "$O9" || ok "J9: re-entry + stale checkpoint: allowed, never blocked"
+  sleep 1; shown "$P9" | grep -qF "GOT: /clear" && bad "J9: no clear without a checkpoint" "it cleared" \
+                                               || ok "J9: and no clear is typed without the checkpoint on disk"
+  [ -e "$W/home/.claude/state/context-budget/sJ9.e0.disarmed" ] && bad "J9: a re-entry refusal must not disarm" "disarmed" \
+                                                                 || ok "J9: nor is it disarmed — the next clean stop retries"
+
+  # J10 — re-entry on a session that was NEVER armed must not arm it: arming blocks.
+  O10="$(acr sJ10 "$W/i.jsonl" "$W/wnp" TMUX="$SOCK,0,0" TMUX_PANE="$P9")"
+  blocked "$O10" && bad "J10: re-entry never arms" "$O10" || ok "J10: a re-entry stop never ARMS (arming would block)"
+  [ -e "$W/home/.claude/state/context-budget/sJ10.e0" ] && bad "J10: no marker on re-entry" "marker written" \
+                                                        || ok "J10: and writes no arm marker"
+
   unwire_floor
   tmux -S "$SOCK" kill-server 2>/dev/null || true
 fi
