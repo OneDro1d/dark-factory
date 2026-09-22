@@ -486,7 +486,8 @@ def main():
     # turn, so placed after "no work, no firing" it could never fire. Inside a stop chain it fires
     # only when the continuation made tool calls — `last_turn` walks back to the last real prompt,
     # and the previous nudge is recorded as one, so `did_work` here means work SINCE the nudge.
-    intent = announced_intent(final_text)
+    # Off switch: a fleet-wide hook that forces turns needs one that is not "revert the file".
+    intent = None if os.environ.get("DF_STALL_GUARD") == "off" else announced_intent(final_text)
     if intent and not _autoclear_owns_this_stop(sid) and (not stop_hook_active or did_work is True):
         if not _stall_already_nudged(sid, final_text):
             print(json.dumps({"decision": "block", "reason": STALL.format(phrase=intent)}))

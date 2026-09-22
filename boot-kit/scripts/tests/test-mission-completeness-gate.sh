@@ -508,6 +508,13 @@ L9="$(printf '{"session_id":"l9-%s","transcript_path":"%s"}' "$$" "$TX/l1.jsonl"
 is_stall "$L9" && bad "L9: headless -p is released" "it blocked a worker" \
                || ok "L9: a headless (sdk-cli) worker is never blocked"
 
+# L10 — the off switch is real. Fresh session, the operator's exact case, guard disabled: silent.
+# (L1 is the control: the same transcript with the switch absent DOES block.)
+mkt "$TX/l10.jsonl" "The design is settled. Now I will build the parser."
+is_stall "$(stall "l10-$$" "$TX/l10.jsonl" false DF_STALL_GUARD=off)" \
+  && bad "L10: DF_STALL_GUARD=off disables it" "it fired anyway" \
+  || ok "L10: DF_STALL_GUARD=off turns the stall guard off"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"
