@@ -538,7 +538,7 @@ case "$M2" in *"outside any item"*) ok "M2: the reason carries the lint finding"
 M3="$(pfire "page2-$$" "$TX/work2.jsonl" "$MP")"
 notshape "$M3" && bad "M3: the SAME page version is not re-nagged" "$M3" || ok "M3: the same page version is not re-nagged"
 
-"$TOOL" --file "$MP/operator-todo.md" add --id m4 --category credential --task "Sign in" --why "only you" --do "claude auth login" >/dev/null 2>&1
+"$TOOL" --file "$MP/operator-todo.md" add --id m4 --category credential --task "Sign in" --why "only you" --step "Run: claude auth login" --do "claude auth login" >/dev/null 2>&1
 M4="$(pfire "page2-$$" "$TX/work1.jsonl" "$MP")"
 notshape "$M4" && bad "M4: a rewritten, clean page passes" "$M4" || ok "M4: once the page is rewritten clean, no block"
 

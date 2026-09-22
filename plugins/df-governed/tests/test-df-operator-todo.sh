@@ -29,7 +29,7 @@ echo "=== A: executable and self-describing ==="
 OUT="$("$SCRIPT" --help 2>&1)"; contains "A: --help mentions the file" "operator-todo" "$OUT"
 
 echo "=== B: add records an async item by default ==="
-OUT="$("$SCRIPT" --file "$F" add --id b1 --category credential --task "Rotate the key" --why "a credential only you hold" --do "gh auth refresh" 2>&1)"
+OUT="$("$SCRIPT" --file "$F" add --id b1 --category credential --task "Rotate the key" --why "a credential only you hold" --step "Open a terminal and run the command below" --do "gh auth refresh" 2>&1)"
 contains "B: says async" "async" "$OUT"
 OUT="$(cat "$F")"
 contains "B: task text present" "Rotate the key" "$OUT"
@@ -44,7 +44,7 @@ contains "C: blocking item under the blocking heading" "Decide the tier" "$OUT"
 absent   "C: async item NOT under blocking" "Rotate the key" "$OUT"
 
 echo "=== D: re-adding an id UPDATES in place and MOVES section — never duplicates ==="
-"$SCRIPT" --file "$F" add --id b1 --category credential --task "Rotate the key" --why "still yours" --do "gh auth refresh" --blocking >/dev/null 2>&1
+"$SCRIPT" --file "$F" add --id b1 --category credential --task "Rotate the key" --why "still yours" --step "Open a terminal and run the command below" --do "gh auth refresh" --blocking >/dev/null 2>&1
 N="$(grep -c '`b1`' "$F")"
 eq "D: exactly one entry for the id" "$N" "1"
 OUT="$(sed -n '/Blocking/,/## Async/p' "$F")"
@@ -71,7 +71,7 @@ absent "F: nothing struck through" "~~" "$(cat "$F")"
 contains "F: tells the reader where history IS" "History is in git" "$OUT"
 
 echo "=== G: done --verified <evidence> also removes ==="
-"$SCRIPT" --file "$F" add --id g1 --category irreversible --task "Merge PR 7" --why "a merge you are blocked from" --do "gh pr merge 7" >/dev/null 2>&1
+"$SCRIPT" --file "$F" add --id g1 --category irreversible --task "Merge PR 7" --why "a merge you are blocked from" --step "Open https://github.com/o/r/pull/7 and click Merge" --do "gh pr merge 7" >/dev/null 2>&1
 OUT="$("$SCRIPT" --file "$F" done --id g1 --verified "gh pr view 7 --json state -> MERGED" 2>&1)"; rc=$?
 eq "G: rc is 0" "$rc" "0"
 contains "G: echoes the evidence" "MERGED" "$OUT"
@@ -131,7 +131,7 @@ case "$OUT" in
   *) bad "N2 the refusal lists the closed set" "$OUT" ;;
 esac
 "$SCRIPT" --file "$FN" add --id n3 --category credential --task "Sign in on the box" \
-  --why "an interactive login only you can complete" --do "run claude and sign in" >/dev/null 2>&1
+  --why "an interactive login only you can complete" --step "Run claude and follow the sign-in link" --do "run claude and sign in" >/dev/null 2>&1
 BODY="$(cat "$FN")"
 case "$BODY" in
   *"_yours because:_ **credential**"*) ok "N3 the category is rendered on the line, auditable at a glance" ;;
@@ -184,13 +184,13 @@ contains "P4 option B is on the page" "every merge waits for the laptop" "$BODY"
 contains "P4 the recommendation is labelled" "**Recommendation:** A, because" "$BODY"
 OUT="$("$SCRIPT" --file "$FP" list 2>&1)"
 contains "P5 list round-trips the options" "every merge waits for the laptop" "$OUT"
-"$SCRIPT" --file "$FP" add --id p6 --category credential --task "other" --why "w" --do "d" >/dev/null 2>&1
+"$SCRIPT" --file "$FP" add --id p6 --category credential --task "other" --why "w" --step "s" --do "d" >/dev/null 2>&1
 contains "P6 a later add keeps the decision's option lines" "copy the list here" "$(cat "$FP")"
 
 echo "== Q: an item is an ask, not an essay — every field has a cap"
 FQ="$T/cap.md"
 LONG="$(printf 'x%.0s' $(seq 1 900))"
-OUT="$("$SCRIPT" --file "$FQ" add --id q1 --category credential --task "t" --why "w" --do "$LONG" 2>&1)"; RC=$?
+OUT="$("$SCRIPT" --file "$FQ" add --id q1 --category credential --task "t" --why "w" --step "s" --do "$LONG" 2>&1)"; RC=$?
 eq "Q1 an over-long --do is refused (rc 2)" "$RC" "2"
 contains "Q1 and it names the field" "--do" "$OUT"
 [ ! -f "$FQ" ] && ok "Q1 nothing was written" || bad "Q1 nothing written" "file exists"
@@ -198,7 +198,7 @@ contains "Q1 and it names the field" "--do" "$OUT"
 echo "== R: re-adding keeps the FIRST raised date — no dated trail of rewrites"
 FR="$T/raised.md"
 printf '# Operator TODO\n\n## ⛔ Blocking — the loop is stopped until you do these\n\n_Nothing blocking. The loop is not waiting on you._\n\n## Async — the loop continues without these\n\n- [ ] `r1` — **old** · _yours because:_ **credential** — w · _do:_ d · _raised 2026-01-02_\n' > "$FR"
-"$SCRIPT" --file "$FR" add --id r1 --category credential --task "new wording" --why "w" --do "d" >/dev/null 2>&1
+"$SCRIPT" --file "$FR" add --id r1 --category credential --task "new wording" --why "w" --step "s" --do "d" >/dev/null 2>&1
 BODY="$(cat "$FR")"
 contains "R1 the original date survives" "_raised 2026-01-02_" "$BODY"
 N="$(grep -o '_raised [0-9-]*_' "$FR" | grep -c .)"
@@ -206,7 +206,7 @@ eq "R1 and there is exactly one date" "$N" "1"
 
 echo "== S: lint — only OPEN items, no narration, no history"
 FS="$T/lint.md"
-"$SCRIPT" --file "$FS" add --id s0 --category credential --task "Sign in" --why "only you can" --do "claude auth login" >/dev/null 2>&1
+"$SCRIPT" --file "$FS" add --id s0 --category credential --task "Sign in" --why "only you can" --step "Run: claude auth login" --do "claude auth login" >/dev/null 2>&1
 OUT="$("$SCRIPT" --file "$FS" lint 2>&1)"; RC=$?
 eq "S0 a page written by the tool is clean (rc 0)" "$RC" "0"
 cp "$FS" "$FS.bak"
@@ -250,6 +250,30 @@ _Nothing queued._
 CTRL
 OUT="$("$SCRIPT" --file "$FC" lint 2>&1)"; RC=$?
 eq "S6 CONTROL: a real pre-ruling page fails lint" "$RC" "1"
+
+echo "== U: an operator ACTION carries step-by-step instructions (operator ruling 2026-09-22)"
+# "If I need to create a github token, I want to see a brief step by step instruction: click
+# here, run this command, etc." A --do sentence says WHAT; the steps say HOW.
+FU="$T/steps.md"
+OUT="$("$SCRIPT" --file "$FU" add --id u1 --category credential --task "Create a GitHub token" --why "only you can" --do "make a token" 2>&1)"; RC=$?
+eq "U1 an action with no --step is refused (rc 2)" "$RC" "2"
+contains "U1 the refusal asks for the steps" "--step" "$OUT"
+[ ! -f "$FU" ] && ok "U1 and nothing was written" || bad "U1 nothing written" "file exists"
+"$SCRIPT" --file "$FU" add --id u2 --category credential --task "Create a GitHub token for the gate" --why "only you can" \
+  --step "Open https://github.com/settings/tokens?type=beta and click Generate new token" \
+  --step "Name it publish-gate, repository access: only OneDro1d/dark-factory, permission Commit statuses: read and write" \
+  --step "Click Generate, then run: gh auth login --with-token and paste it" >/dev/null 2>&1
+BODY="$(cat "$FU")"
+contains "U2 step 1 is numbered on the page" "  1. Open https://github.com/settings/tokens" "$BODY"
+contains "U2 step 3 is numbered on the page" "  3. Click Generate" "$BODY"
+OUT="$("$SCRIPT" --file "$FU" lint 2>&1)"; RC=$?
+eq "U3 an action with steps lints clean" "$RC" "0"
+"$SCRIPT" --file "$FU" add --id u4 --category approval --task "other" --why "w" --step "Say 'go'" >/dev/null 2>&1
+contains "U4 a later add keeps the earlier item's steps" "  2. Name it publish-gate" "$(cat "$FU")"
+printf -- '- [ ] `u5` — **Hand-written** · _yours because:_ **access** — w · _do:_ do the thing · _raised 2026-09-22_\n' >> "$FU"
+OUT="$("$SCRIPT" --file "$FU" lint 2>&1)"; RC=$?
+eq "U5 a hand-written action with no steps fails lint (rc 1)" "$RC" "1"
+contains "U5 and names what is missing" "numbered steps" "$OUT"
 
 echo "== T: a missing page lints as MISSING, never as clean"
 OUT="$("$SCRIPT" --file "$T/absent.md" lint 2>&1)"; RC=$?

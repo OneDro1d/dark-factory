@@ -144,10 +144,12 @@ PAGE = """⛔ operator-todo.md IS NOT IN SHAPE. Fix it before you stop.
 
 Operator ruling 2026-09-22: every session keeps this page, and it holds ONLY OPEN items for the
 human. A decision is asked in plain English, with the options, what each one means and what
-follows from it, and a recommendation. No closed items, no narration, no history.
+follows from it, and a recommendation. An action (a token, a login, a merge) carries numbered
+step-by-step instructions: the URL to open, what to click, the exact command, what they should see.
+No closed items, no narration, no history.
 
 How: rewrite each item with `df-operator-todo add` (the same --id replaces it; a decision takes
-two or more --option and one --recommend). Close finished ones with `df-operator-todo done`.
+two or more --option and one --recommend; an action takes one --step per step). Close finished ones with `df-operator-todo done`.
 History goes to NOTES.md or git, never onto the page. Then `df-operator-todo lint` must say clean.
 
 {lint}"""
