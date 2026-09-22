@@ -347,27 +347,27 @@ def _fire_clear(pane):
 #      clear executes (the interlock above already refuses to fire without that writer). An mtime
 #      newer than the spawn is unforgeable; a timer is a guess.
 #   2. THE PROMPT IS READY AND STABLE. The LAST `❯` line is empty, continuously, for SETTLE seconds.
-#      This is nuntius-relay's production rule (pkg/tmuxsession inputLineEmpty), ported rather than
-#      re-invented: a human's half-typed draft ("❯ HALF-TYPED") and the permission menu ("❯ 1. Yes",
-#      which reuses the glyph) both have text after the glyph, so both fail it.
+#      This rule is ported from a tmux message-injection relay already proven in production, rather
+#      than re-invented: a human's half-typed draft ("❯ HALF-TYPED") and the permission menu
+#      ("❯ 1. Yes", which reuses the glyph) both have text after the glyph, so both fail it. The
+#      real prompt is "❯" + NBSP (U+00A0), measured — which is why NBSP counts as whitespace.
 #   3. STILL READY AT THE LAST MOMENT. Re-checked immediately before delivering. Never trust a read
 #      across the gap between deciding and doing.
 # ⚠️ FAILS CLOSED. If any proof never arrives it types NOTHING and records why. Typing into a pane
 # in an unknown state is worse than a session that waits for a human, which is today's behaviour.
 # ⚠️ THE PANE IS THE ONE THIS HOOK INHERITED (TMUX_PANE), never one found by listing -- see
 # `_tmux_pane`. On a shared box a listed pane can be a stranger's session.
-# ⚠️ Residual race, accepted: nuntius-relay also injects into idle panes. It re-checks the input line
-# right before injecting too, and a pasted-then-submitted prompt is non-empty then busy, so the
-# window is the ~0.3 s between paste and Enter.
+# ⚠️ Residual race, accepted: a message-injection relay may also type into idle panes. It re-checks the input line
+# right before injecting too, and a typed-then-submitted prompt is non-empty then busy, so the
+# window is the ~0.3 s between typing and Enter.
 RESUME_TEXT = (
     "Autoclear just cleared this session's context to free the window. Resume the mission from the "
     "restored notepad above: read the newest handoff and NOTES.md, then take the ONE next action. "
     "Do not re-derive state, and do not stop to ask unless you reach a genuine hard stop.")
-RESUME_BUFFER = "df-autoresume"
 
 
 def _input_line_empty(pane_text):
-    """nuntius-relay's rule: the LAST line starting with `❯` (after left-trim) has nothing after the
+    """The ported relay rule: the LAST line starting with `❯` (after left-trim) has nothing after the
     glyph but whitespace or NBSP. No `❯` line at all is NOT empty -- it is not a prompt."""
     last = None
     for line in pane_text.split("\n"):
@@ -389,12 +389,21 @@ def _capture(pane):
 
 
 def _deliver(pane, text):
-    """Bracketed paste, then Enter as a separate keystroke -- nuntius-relay's delivery. A literal
-    send-keys would submit at the first embedded newline."""
-    subprocess.run(["tmux", "load-buffer", "-b", RESUME_BUFFER, "-"], input=text, text=True,
-                   check=True, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", RESUME_BUFFER, "-t", pane],
-                   check=True, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    """TYPE it, as the user would — literal send-keys, then Enter as a separate keystroke.
+
+    ⛔ NOT bracketed paste, though the relay it was ported from uses it and this helper first did. MEASURED on a
+    real session 2026-09-22: a bracketed paste reaches the model wrapped in <pasted_content>, and
+    Claude Code's own system prompt tells every session to follow instructions inside pasted
+    content ONLY where the user's own message asks it to. A resume that IS the whole message has no
+    such message around it. Haiku followed it anyway; one pasted instruction in the same trials
+    was refused outright as a prompt injection, and the fleet runs Opus, which reads that rule more
+    strictly. A resume that works on one model and is correctly declined by another is a latent
+    failure. Typed text is recorded as a plain user message (measured, same session type).
+    ⚠️ ONE LINE, always: in literal typing a newline IS Enter and would submit early, which is the
+    only reason to paste. Any whitespace run, newlines included, collapses to one space."""
+    line = " ".join((text or "").split())
+    subprocess.run(["tmux", "send-keys", "-t", pane, "-l", line], check=True, timeout=10,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.3)
     subprocess.run(["tmux", "send-keys", "-t", pane, "Enter"], check=True, timeout=10,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -710,10 +719,14 @@ def main():
     # clearing". Phase 1 BLOCKS, so the stop that ends the checkpoint turn is always a re-entry.
     # With the old early return, phase 2 was never evaluated there; it waited for the NEXT clean
     # stop, and an autonomous session that has just checkpointed has no next turn — it goes idle
-    # saying it is "ready for autoclear" and sits until something external prompts it. MEASURED
-    # 2026-09-22 on a real session: armed, checkpoint on disk, then idle for 240 s, no clear.
-    # (The 5 min – 2 h arm-to-clear delays measured earlier were the wait for that outside prompt,
-    # which I had first called "working as designed".)
+    # saying it is "ready for autoclear" and sits until something external prompts it. The 5 min –
+    # 2 h arm-to-clear delays measured across the fleet fit that: each was the wait for an outside
+    # prompt. I first called it "working as designed".
+    # ⚠️ EVIDENCE, stated exactly: the proof is test J8 (red on the old code, real pane). A live run
+    # I first cited here — "armed, idle 240 s, no clear" — was CONFOUNDED: that scratch session was
+    # launched without TMUX_PANE, so it had no actuator and could not have cleared under either
+    # version. The clean live run came after the fix: armed 02:34:16, FIRED 02:34:38 on the
+    # re-entry stop, floor 02:34:39, resumed 02:34:42.
     # So re-entry is carried forward, and only the BLOCKING paths are closed to it: phase 2 may FIRE
     # (it types /clear and ALLOWS — no block, so no loop), but may not arm, and may not refuse with
     # a block. Every other mode keeps the old early return untouched.

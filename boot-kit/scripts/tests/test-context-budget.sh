@@ -437,6 +437,16 @@ TUI_EOF
   [ -e "$W/home/.claude/state/context-budget/sJ10.e0" ] && bad "J10: no marker on re-entry" "marker written" \
                                                         || ok "J10: and writes no arm marker"
 
+  # J11 — the resume is TYPED, so it must be ONE line: in literal typing a newline IS Enter. A custom
+  # text with a newline has to arrive as a single submitted line, never cut in half at the newline.
+  P11="$(newpane j11 "bash $TUI")"; wait_shown "$P11" $'\342\235\257' || true
+  mtime "$W/rnp/PRECOMPACT.md" -600
+  T0="$(now)"; ( sleep 1; touch "$W/rnp/PRECOMPACT.md" ) &
+  DF_CONTEXT_AUTOCLEAR_RESUME_TEXT=$'FIRST-HALF\nSECOND-HALF' helper "$P11" "$W/rnp" "$T0" "$W/j11.rec"; wait
+  wait_shown "$P11" "GOT: FIRST-HALF SECOND-HALF" \
+    && ok "J11: a multi-line resume text is typed as ONE line and submitted once" \
+    || bad "J11: resume collapsed to one line" "$(shown "$P11" | tail -4)"
+
   unwire_floor
   tmux -S "$SOCK" kill-server 2>/dev/null || true
 fi
