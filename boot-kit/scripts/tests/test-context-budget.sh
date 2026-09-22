@@ -365,6 +365,34 @@ TUI_EOF
   touch "$W/wnp/PRECOMPACT.md"; sleep 2
   shown "$P6" | grep -qF "GOT: Autoclear" && bad "J6: RESUME=0 is off" "$(shown "$P6" | tail -3)" \
                                           || ok "J6: DF_CONTEXT_AUTOCLEAR_RESUME=0 fires the clear and resumes nothing"
+  # ⛔ J7 — THE HOOK MUST NOT WAIT FOR ITS OWN HELPER. Claude Code reads a hook's stdout through a
+  # PIPE and waits for EOF. A detached child that still holds that pipe keeps it open, and the Stop
+  # hook hangs for the child's whole life — this estate has lost 14 min to 15 h exactly so (Engram
+  # `ab66cd75`, `26c19661`: "& is not a detach under a group-waiting hook harness"). J5 redirected
+  # to /dev/null, which cannot see that failure. Here the output is captured through $( ) — a pipe,
+  # the way the harness reads it — and the call is timed while the helper is still alive.
+  P7="$(newpane j7 "bash $TUI")"; wait_shown "$P7" $'\342\235\257' || true
+  mtime "$W/wnp/PRECOMPACT.md" -600
+  RS7=(TMUX="$SOCK,0,0" TMUX_PANE="$P7" DF_CONTEXT_RESUME_CLEAR_WAIT=20 DF_CONTEXT_RESUME_READY_WAIT=20)
+  ac sJ7 "$W/i.jsonl" "$W/wnp" "${RS7[@]}" >/dev/null
+  mtime "$W/wnp/NOTES.md" 1800
+  T_START="$(now)"
+  OUT7="$(ac sJ7 "$W/i.jsonl" "$W/wnp" "${RS7[@]}")"            # PIPE capture, like the harness
+  T_TOOK="$(python3 -c "import sys,time; print('%.1f' % (time.time()-float(sys.argv[1])))" "$T_START")"
+  HELPER_ALIVE="$(pgrep -f -- "--resume-after-clear $P7 " >/dev/null && echo yes || echo no)"
+  if python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 5 else 1)" "$T_TOOK"; then
+    ok "J7: the hook returned in ${T_TOOK}s through a PIPE — it does not wait for its helper"
+  else
+    bad "J7: hook returns without waiting for its helper" "took ${T_TOOK}s — a harness would HANG"
+  fi
+  # CONTROL: the helper must still be running, or "returned fast" proves nothing — a helper that
+  # died at once would also return fast.
+  [ "$HELPER_ALIVE" = "yes" ] && ok "J7: CONTROL — the helper was still alive after the hook returned (really detached)" \
+                              || bad "J7: CONTROL — helper alive after the hook returned" "no helper process found"
+  touch "$W/wnp/PRECOMPACT.md"
+  wait_shown "$P7" "GOT: Autoclear just cleared" && ok "J7: and that detached helper still delivered the resume" \
+                                                 || bad "J7: detached helper delivered" "$(shown "$P7" | tail -3)"
+
   unwire_floor
   tmux -S "$SOCK" kill-server 2>/dev/null || true
 fi
