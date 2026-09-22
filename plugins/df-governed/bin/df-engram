@@ -44,12 +44,60 @@ import sys
 import time
 
 QUEUE = "pending-engram"
-HUB = os.environ.get("DF_ENGRAM_HUB", "https://synapse.onedroid.ai/hub/onedroid-qr7wz7/mcp")
-TOKEN_VAR = "SYNAPSE_ONEDROID_PAT"
+# ⛔ NO ESTATE ENDPOINT IS HARDCODED HERE, and this is not style. Tier 1 is PUBLIC and generic; a
+# hub URL carries an estate's private id. The first version of this file did hardcode one as a
+# default and the publish gate's P4 caught it before the merge — which is the gate working, and a
+# reminder that "just a default" is how an identifier reaches a public repo.
+# Resolution order: DF_ENGRAM_HUB · the server named by DF_ENGRAM_SERVER in the nearest .mcp.json ·
+# the only server there, when there is exactly one. Anything else refuses and says what to set.
+TOKEN_VAR_DEFAULT = "SYNAPSE_ENGRAM_PAT"
 KEY_MARK = "ENGRAM-KEY"
 MIN_AGE = float(os.environ.get("DF_ENGRAM_MIN_AGE", "120"))
 TIMEOUT_NOTE = ("a timeout proves nothing either way — parked UNPROVEN, not retried. "
                 "Run `df-engram reconcile` on a later turn.")
+
+
+def _mcp_servers(start):
+    """The nearest .mcp.json, walking up. Returns {name: {url, headers}} or {}."""
+    d = os.path.abspath(start)
+    for _ in range(12):
+        p = os.path.join(d, ".mcp.json")
+        if os.path.isfile(p):
+            try:
+                with open(p, encoding="utf-8") as f:
+                    return json.load(f).get("mcpServers") or {}
+            except Exception:
+                return {}
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return {}
+
+
+def resolve_hub():
+    """(url, token_var) or (None, reason). The token VARIABLE NAME is read from the config's
+    Authorization header (`Bearer ${VAR}`), never the value — so nothing here holds a secret."""
+    env_hub = os.environ.get("DF_ENGRAM_HUB")
+    token_var = os.environ.get("DF_ENGRAM_TOKEN_VAR")
+    servers = _mcp_servers(os.getcwd())
+    name = os.environ.get("DF_ENGRAM_SERVER")
+    entry = None
+    if name and name in servers:
+        entry = servers[name]
+    elif not name and len(servers) == 1:
+        entry = next(iter(servers.values()))
+    if entry and not env_hub:
+        env_hub = entry.get("url")
+    if entry and not token_var:
+        auth = (entry.get("headers") or {}).get("Authorization", "")
+        m = re.search(r"\$\{?([A-Z0-9_]+)\}?", auth)
+        if m:
+            token_var = m.group(1)
+    if not env_hub:
+        return None, ("no Engram endpoint: set DF_ENGRAM_HUB, or DF_ENGRAM_SERVER to a server in "
+                      "the nearest .mcp.json (found: %s)" % (", ".join(sorted(servers)) or "none"))
+    return env_hub, (token_var or TOKEN_VAR_DEFAULT)
 
 
 def find_notepad(start):
@@ -121,10 +169,13 @@ def call(tool, args):
             return True, json.loads(r.stdout)
         except Exception:
             return False, r.stdout.strip()
-    token = os.environ.get(TOKEN_VAR)
+    hub, token_var = resolve_hub()
+    if not hub:
+        return False, token_var          # the reason, when hub is None
+    token = os.environ.get(token_var)
     if not token:
-        return False, f"{TOKEN_VAR} is not set in this environment"
-    cmd = ["curl", "-sS", "-m", "90", "-X", "POST", HUB,
+        return False, f"{token_var} is not set in this environment"
+    cmd = ["curl", "-sS", "-m", "90", "-X", "POST", hub,
            "-H", f"Authorization: Bearer {token}",
            "-H", "Accept: application/json, text/event-stream",
            "-H", "Content-Type: application/json",
@@ -158,13 +209,16 @@ def cmd_write(a, notepad):
              "status": "PENDING", "created": str(int(time.time())), "mission": a.mission}
     # THE FILE FIRST. Everything after this can fail without losing the finding.
     write_front(path, front, body_with_key)
-    if not os.environ.get("DF_ENGRAM_TRANSPORT") and not os.environ.get(TOKEN_VAR):
-        front["status"] = "UNPROVEN"
-        write_front(path, front, body_with_key)
-        sys.stderr.write(
-            f"df-engram: {TOKEN_VAR} is not set, so nothing was sent.\n"
-            f"The finding is QUEUED at {path} — run `df-engram reconcile` from a session that has it.\n")
-        return 3
+    if not os.environ.get("DF_ENGRAM_TRANSPORT"):
+        hub, token_var = resolve_hub()
+        if not hub or not os.environ.get(token_var):
+            front["status"] = "UNPROVEN"
+            write_front(path, front, body_with_key)
+            why = token_var if not hub else f"{token_var} is not set in this environment"
+            sys.stderr.write(
+                f"df-engram: nothing was sent — {why}.\n"
+                f"The finding is QUEUED at {path} — run `df-engram reconcile` from a session that has it.\n")
+            return 3
     okc, res = call("engram-prod__engram_write",
                     {"collection": a.collection, "title": a.title, "kind": a.kind,
                      "content": body_with_key})

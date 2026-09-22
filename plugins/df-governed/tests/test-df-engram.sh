@@ -102,11 +102,21 @@ contains "E: it says why it waited" "too recent" "$OUT"
 FE="$(grep -l 'E finding' "$NP"/pending-engram/*.md | head -1)"
 contains "E: still UNPROVEN" "status: UNPROVEN" "$(cat "$FE")"
 
-echo "=== F: no token, no silent no-op ==="
-OUT="$(env -u DF_ENGRAM_TRANSPORT -u SYNAPSE_ONEDROID_PAT "$CLI" --notepad "$NP" write --title "F" \
-        --kind knowledge --collection loom-behaviors --body "x" 2>&1)"; RC=$?
-[ "$RC" -ne 0 ] && ok "F: it refuses without a token" || bad "F: refuses without a token" "rc=$RC"
-contains "F: and names the variable" "SYNAPSE_ONEDROID_PAT" "$OUT"
+echo "=== F: no endpoint or no token — refuse loudly, and still keep the finding ==="
+OUT="$(cd "$T" && env -u DF_ENGRAM_TRANSPORT -u DF_ENGRAM_HUB -u DF_ENGRAM_SERVER "$CLI" --notepad "$NP" \
+        write --title "F" --kind knowledge --collection loom-behaviors --body "x" 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "F: it refuses with nothing configured" || bad "F: refuses" "rc=$RC"
+contains "F: and names what to set" "DF_ENGRAM_HUB" "$OUT"
+OUT2="$(cd "$T" && env -u DF_ENGRAM_TRANSPORT -u DF_ENGRAM_TOKEN_VAR DF_ENGRAM_HUB=https://example.invalid/mcp \
+        "$CLI" --notepad "$NP" write --title "F2" --kind knowledge --collection loom-behaviors --body "x" 2>&1)"
+contains "F: with a hub but no token it names the token variable" "is not set" "$OUT2"
+
+echo "=== G: ⛔ Tier 1 is PUBLIC — no estate endpoint may be hardcoded here ==="
+# The first version of this file defaulted HUB to a real hub URL carrying an estate's private id.
+# The publish gate's P4 caught it before merge. This keeps it caught HERE, where it is cheaper.
+HITS="$(grep -nE 'https?://[a-z0-9.-]+' "$CLI" | grep -v 'example\.invalid' | grep -c . || true)"
+eq "G: the source hardcodes no endpoint" "$HITS" "0"
+contains "G: it resolves one from the environment instead" "DF_ENGRAM_SERVER" "$(cat "$CLI")"
 FF="$(grep -l '^title: F$' "$NP"/pending-engram/*.md 2>/dev/null | head -1)"
 [ -n "$FF" ] && ok "F: the finding is still QUEUED on disk — never lost to a missing token" \
              || bad "F: queued anyway" "no file"
