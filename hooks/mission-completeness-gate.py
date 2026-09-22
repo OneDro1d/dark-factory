@@ -54,6 +54,8 @@ after 9 consecutive blocks. Measured on this hook, the day it shipped.
 
 Pure-Python, reads stdin, never raises. A Stop hook that errors would block the turn.
 """
+import glob
+import hashlib
 import json
 import os
 import re
@@ -175,6 +177,135 @@ DEFERRAL = re.compile(
     r"not (?:yet )?(?:done|finished)|deferred|out of scope|separate (?:pr|change|ticket)|"
     r"later|todo|to do next|recommend(?:ed)? next|worth a separate|not in this pr)\b",
     re.IGNORECASE)
+
+
+# ---- STALL GUARD: a turn that ENDS on an announced action it did not take (2026-09-21) -----------
+#
+# ⛔ THE GAP THIS CLOSES IS THIS FILE'S OWN. "No work, no firing" (above) returns `{}` on any turn
+# with no tool calls — and "Now I'll build feature X" followed by the end of the turn is exactly
+# such a turn. A turn that DID work and then ends "now I'll build Y" slipped too: "I'll build" is
+# not DEFERRAL language, and the brief form is throttled to 30 minutes. The operator reported
+# sessions stopping mid-mission this way with open items left.
+#
+# ⛔ RE-CHECK CONDITION (the rule every gate here states first): fires only when the closing text
+# announces an undone first-person action; ONCE per distinct text; and inside a stop chain
+# (`stop_hook_active`) ONLY if the continuation made tool calls — i.e. it is progressing, not
+# spinning. No progress -> release. Same text -> release. Claude Code's 9-consecutive-block cap is
+# the backstop, not the design.
+#
+# ⛔ PRECISION IS THE WHOLE CONSTRAINT, because a firing costs a full model turn (the 1,355/day
+# incident above). BACKTESTED on this estate's real transcripts, 2026-09-21, modelling the true
+# Stop condition (turn's last block is TEXT; harness entries recorded as `user` mid-turn excluded):
+#   tune    451 turn ends -> 2 fires, both genuine stalls; 21 future-phrase ends let through, all
+#           correctly (external waits, conditionals, operator handoffs)
+#   holdout 657 turn ends -> 7 fires, CLEAN: 2 stalls, 2 ambiguous, 3 false — every false one a
+#           commitment tied to a SCHEDULED pass in a tick-driven session. That rule was then added,
+#           so the holdout is CONTAMINATED from here: 3 fires, 2 stalls, 1 ambiguous.
+#   overall fire rate 0.45% of real turn ends. There was no clean third set (one transcript
+#   store). Recall has no labelled ground truth — humans here rarely type a bare "continue".
+# ⚠️ The strongest single tell is a message whose RAW text ends on a colon: it was introducing a
+# tool call that never came. RAW, because "Your test:" + a code block is the commonest legitimate
+# ending there is, and stripping the fence first would turn it into a colon.
+_COMMIT = re.compile(
+    r"(?:^|[.!:;\n]\s*|\b(?:now|next|then|so|ok(?:ay)?|first|right)[,]?\s+)"
+    r"(i'?ll|i will|i'm going to|i am going to|let me|going to)\s+([a-z][a-z'-]+)",
+    re.IGNORECASE)
+# After the commitment, verbs that describe WAITING, not doing. Ambiguous ones ("check", "keep",
+# "follow") are DOING by default — "I'll check the logs" is work — and only the phrases in
+# _WAIT_PHRASE count as waiting.
+_WAIT_VERBS = {"wait", "hold", "stop", "pause", "leave", "report", "monitor", "watch", "hear",
+               "ping", "circle", "revisit", "be", "know"}
+_WAIT_PHRASE = re.compile(
+    r"\b(check (?:back|in)|keep (?:an eye|watching|you posted)|follow up (?:when|once|after)|"
+    r"get back to you|let you know|pick (?:this|it) up (?:when|once|after))\b", re.IGNORECASE)
+# Handing a decision or an action to the operator is a legitimate stop.
+_HANDOFF = re.compile(
+    r"\b(let me know|say the word|your call|up to you|if you (?:want|'d like|prefer|agree)|"
+    r"want me to|should i|shall i|do you want|would you like|once you|when you|after you|"
+    r"waiting (?:on|for)|blocked on|need(?:s)? your|your (?:go|approval|decision|confirmation)|"
+    r"on your go|with your go|give me the go|tell me (?:which|whether|if))\b", re.IGNORECASE)
+# A commitment CONDITIONED ON AN EXTERNAL OR SCHEDULED EVENT is a wait: the event is not the
+# agent's to produce ("once the developer returns", "when it fires", "on the next monitor pass").
+_WAIT_EVENT = re.compile(
+    r"\b(?:once|when|after|until|as soon as)\b[^.!?]{0,60}?\b(?:returns?|finish(?:es)?|"
+    r"complete[sd]?|lands?|arrives?|comes? back|pass(?:es)? back|is done|are done|fires?|merges?|"
+    r"(?:is|are|gets?) merged|responds?|repl(?:y|ies)|reports? back|is ready|are ready|wakes?|"
+    r"confirms?|passes|is green|goes green|succeeds|clears)\b|"
+    r"\b(?:on the next tick|at the next tick|nothing else i can do|unless you'?d rather|"
+    r"unless you would rather|whatever \w+ (?:passes|sends|returns|decides))\b|"
+    r"\b(?:on|at|in|by|during|for|to) (?:the |my |its |this )?(?:first|next|following|upcoming|"
+    r"hourly|daily|nightly|scheduled) (?:\w+ ){0,2}(?:pass|tick|run|cycle|check|update|report|"
+    r"sweep|round|poll|iteration|window)\b",
+    re.IGNORECASE)
+_FENCE = re.compile(r"```.*?```", re.DOTALL)
+
+STALL = """⛔ STALLED ON AN ANNOUNCEMENT. Your last message ends with:
+    "{phrase}"
+and the turn ended without doing it. Do it now.
+If it genuinely needs the operator — a decision, an irreversible act, a credential, a merge you
+cannot make — name that one blocker in a line and stop. That is a complete answer, not a stall."""
+
+
+def _closing_paragraph(text):
+    text = _FENCE.sub("", text or "").strip()
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    return paras[-1] if paras else ""
+
+
+def announced_intent(text):
+    """The committed phrase if the message ENDS on an undone first-person action, else None."""
+    para = _closing_paragraph(text)
+    if not para or para.rstrip().endswith("?"):
+        return None
+    if _HANDOFF.search(para) or _WAIT_PHRASE.search(para) or _WAIT_EVENT.search(para):
+        return None
+    if (text or "").rstrip().endswith(":"):
+        return re.split(r"(?<=[.!])\s+", para.strip())[-1][-80:]
+    hit = None
+    for m in _COMMIT.finditer(para):
+        if m.group(2).lower() not in _WAIT_VERBS:
+            hit = m
+    if not hit:
+        return None
+    return para[hit.start(1):hit.start(1) + 80].split("\n")[0]
+
+
+def _autoclear_owns_this_stop(session_id):
+    """True when the context gate has ARMED autoclear for this session. It then owns this stop:
+    phase 2 either fires `/clear` — which would discard a nudged turn's work, unrecorded in the
+    checkpoint — or refuses and asks for the checkpoint itself. Its resume prompt continues the
+    mission after the clear, so a stall nudge here only costs a turn that gets thrown away.
+    Read from the arm marker, which was written on an EARLIER stop — the two Stop hooks run in
+    parallel, so reading anything this stop writes would be a race."""
+    if os.environ.get("DF_CONTEXT_GATE_MODE") != "autoclear":
+        return False
+    d = os.path.join(os.path.expanduser("~"), ".claude", "state", "context-budget")
+    key = str(session_id or "nosession").replace("/", "_")
+    try:
+        for p in glob.glob(os.path.join(glob.escape(d), glob.escape(key) + ".e*")):
+            if re.search(r"\.e\d+$", p) and not (os.path.exists(p + ".cleared")
+                                                 or os.path.exists(p + ".disarmed")):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _stall_already_nudged(session_id, text):
+    """Once per distinct text: records it and returns False the first time, True after."""
+    h = hashlib.sha1((text or "").encode("utf-8", "replace")).hexdigest()
+    try:
+        p = _state_path(session_id or "nosession", ".stall")
+        if os.path.exists(p):
+            with open(p) as f:
+                if f.read().strip() == h:
+                    return True
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as f:
+            f.write(h)
+    except Exception:
+        pass
+    return False
 
 
 def _is_real_prompt(rec):
@@ -346,13 +477,25 @@ def main():
     if os.environ.get("CLAUDE_CODE_ENTRYPOINT") == "sdk-cli":
         return 0
 
+    did_work, tail_text = (None, "")
+    if transcript and os.path.isfile(transcript):
+        did_work, tail_text = last_turn(transcript)
+    final_text = final_text or tail_text
+
+    # ⛔ THE STALL GUARD RUNS BEFORE BOTH RELEASES BELOW, deliberately: the stall IS a text-only
+    # turn, so placed after "no work, no firing" it could never fire. Inside a stop chain it fires
+    # only when the continuation made tool calls — `last_turn` walks back to the last real prompt,
+    # and the previous nudge is recorded as one, so `did_work` here means work SINCE the nudge.
+    intent = announced_intent(final_text)
+    if intent and not _autoclear_owns_this_stop(sid) and (not stop_hook_active or did_work is True):
+        if not _stall_already_nudged(sid, final_text):
+            print(json.dumps({"decision": "block", "reason": STALL.format(phrase=intent)}))
+            return
+
     if stop_hook_active:
         return
 
     # ⛔ NO WORK, NO FIRING. Decided from the transcript when it can be read; see the block above.
-    did_work, tail_text = (None, "")
-    if transcript and os.path.isfile(transcript):
-        did_work, tail_text = last_turn(transcript)
     if did_work is False:
         print("{}")
         return

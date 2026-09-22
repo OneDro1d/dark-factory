@@ -383,6 +383,131 @@ K7="$(fire "throttle-fresh-$$" "$TX/work3.jsonl")"
 case "$K7" in *"OPERATOR-ONLY blocker"*) ok "K: the full gate ignores the throttle";;
   *) bad "K: full gate unthrottled" "$K7";; esac
 
+echo "=== L: STALL GUARD — a turn that ENDS on an announced action it did not take ==="
+# ⛔ The gap is this file's own: "no work, no firing" (J) returns {} on every text-only turn, and
+# "Now I'll build X" + end of turn IS a text-only turn. The operator reported sessions stopping
+# mid-mission exactly so. The negatives below are the REAL false-positive shapes the backtest on
+# this estate's transcripts found (sanitised); a future edit that reintroduces one fails here.
+# mkt <file> <final text> [work]  — a real prompt, optionally a tool call, then the final text
+mkt() { python3 - "$@" <<'PY'
+import json, sys
+path, text = sys.argv[1], sys.argv[2]
+work = len(sys.argv) > 3
+rows = [{"type": "user", "message": {"role": "user", "content": "go"}}]
+if work:
+    rows += [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Edit", "input": {}}]}},
+             {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}]
+rows.append({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+open(path, "w").write("".join(json.dumps(r) + "\n" for r in rows))
+PY
+}
+# chain <file> <first text> <second text> <work-after-nudge:0|1> — announce, get nudged, continue
+chain() { python3 - "$@" <<'PY'
+import json, sys
+path, a, b, work = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == "1"
+rows = [{"type": "user", "message": {"role": "user", "content": "go"}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": a}]}},
+        {"type": "user", "message": {"role": "user", "content": "Stop hook feedback:\nSTALLED ON AN ANNOUNCEMENT"}}]
+if work:
+    rows += [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t2", "name": "Bash", "input": {}}]}},
+             {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t2", "content": "ok"}]}}]
+rows.append({"type": "assistant", "message": {"content": [{"type": "text", "text": b}]}})
+open(path, "w").write("".join(json.dumps(r) + "\n" for r in rows))
+PY
+}
+stall() { # stall <session> <transcript> [stop_hook_active] [extra env...]
+  local s="$1" t="$2" a="${3:-false}"; shift 3 2>/dev/null || shift $#
+  printf '{"session_id":"%s","transcript_path":"%s","stop_hook_active":%s}' "$s" "$t" "$a" \
+    | scrub_dispatch_env env HOME="$TMPDIR/home" "$@" python3 "$HOOK" 2>/dev/null; }
+is_stall() { case "$1" in *"STALLED ON AN ANNOUNCEMENT"*) return 0;; *) return 1;; esac; }
+mkdir -p "$TMPDIR/home"
+
+# L1 — THE OPERATOR'S CASE, verbatim shape: announce, make no tool call, stop. Text-only, so it
+# is exactly what J's "no work, no firing" lets through — this must fire anyway.
+mkt "$TX/l1.jsonl" "The design is settled. Now I will build the parser."
+L1="$(stall "l1-$$" "$TX/l1.jsonl" false)"
+is_stall "$L1" && ok "L1: 'Now I will build X' + stop, NO tool calls — the stall is caught" \
+               || bad "L1: the operator's case is caught" "$(printf '%s' "$L1" | head -c 160)"
+case "$L1" in *'"decision": "block"'*) ok "L1: it BLOCKS the stop (decision=block), not a side note";;
+  *) bad "L1: blocks the stop" "$(printf '%s' "$L1" | head -c 160)";; esac
+case "$L1" in *"will build the parser"*) ok "L1: it quotes the announcement back";;
+  *) bad "L1: quotes the phrase" "$(printf '%s' "$L1" | head -c 160)";; esac
+printf '%s' "$L1" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null \
+  && ok "L1: the block is valid JSON" || bad "L1: valid JSON" "$L1"
+
+# L2 — a turn that DID work, then ends on the next announcement ("I'll" is not DEFERRAL language,
+# and the brief form is throttled, so before this it slipped too)
+mkt "$TX/l2.jsonl" "Edited the config and the tests pass. Next I'll add the migration." work
+is_stall "$(stall "l2-$$" "$TX/l2.jsonl" false)" && ok "L2: a working turn ending on 'Next I'll add X' is caught" \
+                                                 || bad "L2: working turn + announcement caught" "silent"
+
+# L3 — the strongest tell: the raw text ends on a colon, introducing a tool call that never came
+mkt "$TX/l3.jsonl" "Both branches changed the file. Combining the two versions of the file:"
+is_stall "$(stall "l3-$$" "$TX/l3.jsonl" false)" && ok "L3: a message ending on a colon is caught" \
+                                                 || bad "L3: colon ending caught" "silent"
+
+# L4 — NEGATIVES. Each is a real legitimate-stop shape the backtest surfaced. None may fire.
+n=0
+while IFS= read -r neg; do
+  n=$((n+1)); mkt "$TX/l4-$n.jsonl" "$(printf '%b' "$neg")"
+  if is_stall "$(stall "l4-$n-$$" "$TX/l4-$n.jsonl" false)"; then
+    bad "L4: not a stall — $(printf '%b' "$neg" | head -c 60)" "it fired"
+  else ok "L4: not a stall — $(printf '%b' "$neg" | tr '\n' ' ' | head -c 60)"; fi
+done <<'NEGS'
+The setup steps depend on the bridge, so I'll write them once the developer returns.
+The watchdog tick is due at :23, a few minutes out. I'll run it when it fires.
+Pool 8 is idle, so absence is not confirmation. I'll confirm it on the first monitor pass that catches a withdrawal.
+It needs a policy change, so I'll add it to the hourly update by hand.
+I'll wait for the 21:46 timer.
+The docs file I swept in is still there. Say the word and I'll drop it.
+Everything else needs your decisions. I'll run it once you say go.
+Should I build the parser now?
+If the helper fails like this again, I'll keep running the reads myself.
+Your test:\n```bash\nbash run-tests.sh\n```
+Everything is merged and verified.
+NEGS
+
+# ⛔ L5 — THE LOOP BOUND. Nudged, then the continuation did NO work and ended on an announcement
+# again: release. Without this a model that only ever announces is blocked until the harness's
+# 9-consecutive cap force-ends it — the exact failure the G cases record for this hook.
+chain "$TX/l5.jsonl" "Now I'll build the parser." "Now I'll build the parser, starting with the lexer." 0
+L5="$(stall "l5-$$" "$TX/l5.jsonl" true)"
+is_stall "$L5" && bad "L5: nudged + no progress -> RELEASE" "it blocked again" \
+               || ok "L5: LOOP BOUND — nudged, no progress since: the stop is released"
+
+# L6 — progress IS allowed to keep going: nudged, the continuation made tool calls, and ended on
+# a NEW announcement. That is a session moving through a mission, so it is nudged again.
+chain "$TX/l6.jsonl" "Now I'll build the parser." "Built the parser, tests green. Now I'll wire it into the CLI." 1
+is_stall "$(stall "l6-$$" "$TX/l6.jsonl" true)" && ok "L6: nudged, WORKED, new announcement — nudged again (progress)" \
+                                                || bad "L6: progress re-nudges" "silent"
+
+# L7 — once per distinct text: the same announcement at a fresh stop is not re-nudged
+mkt "$TX/l7.jsonl" "Now I'll build the parser."
+stall "l7-$$" "$TX/l7.jsonl" false >/dev/null
+is_stall "$(stall "l7-$$" "$TX/l7.jsonl" false)" && bad "L7: same text is nudged once" "nudged twice" \
+                                                 || ok "L7: the same text is nudged ONCE per session"
+
+# L8 — autoclear ARMED for this session owns the stop: its /clear would discard a nudged turn's
+# work, and its resume prompt continues the mission anyway. The guard steps aside.
+mkdir -p "$TMPDIR/home/.claude/state/context-budget"; : > "$TMPDIR/home/.claude/state/context-budget/l8-$$.e0"
+mkt "$TX/l8.jsonl" "Now I'll build the parser."
+is_stall "$(stall "l8-$$" "$TX/l8.jsonl" false DF_CONTEXT_GATE_MODE=autoclear)" \
+  && bad "L8: armed autoclear owns the stop" "the stall guard fired anyway" \
+  || ok "L8: autoclear ARMED for the session — the stall guard steps aside"
+# CONTROL for L8: the SAME session, once that arm has been spent (.cleared) — the guard is back.
+# Without this, L8 would also pass for a guard that is simply switched off under autoclear.
+: > "$TMPDIR/home/.claude/state/context-budget/l8-$$.e0.cleared"
+is_stall "$(stall "l8-$$" "$TX/l8.jsonl" false DF_CONTEXT_GATE_MODE=autoclear)" \
+  && ok "L8: CONTROL — same session, arm spent (.cleared): the guard fires again" \
+  || bad "L8: CONTROL — guard fires once the arm is spent" "silent"
+
+# L9 — headless workers are released before anything, as every other path here (see G/H):
+# a Stop block in `claude -p` replaces the worker's RESULT with prose, which dispatch reads.
+L9="$(printf '{"session_id":"l9-%s","transcript_path":"%s"}' "$$" "$TX/l1.jsonl" \
+      | scrub_dispatch_env env HOME="$TMPDIR/home" CLAUDE_CODE_ENTRYPOINT=sdk-cli python3 "$HOOK" 2>/dev/null)"
+is_stall "$L9" && bad "L9: headless -p is released" "it blocked a worker" \
+               || ok "L9: a headless (sdk-cli) worker is never blocked"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"
