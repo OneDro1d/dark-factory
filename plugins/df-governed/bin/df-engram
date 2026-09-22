@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""df-engram — write durable knowledge to Engram from a session, without ever losing it.
+
+WHY THIS EXISTS, and it is a measured failure rather than a worry.
+
+The estate wrote to Engram by hand for months. `pending-engram/README.md` in the onedroid notepad
+is the record: NINE `engram_write` calls returned `RPC request timed out`; AT LEAST THREE of them
+had in fact committed; each was read back seconds later, found missing, and retried — so duplicates
+were created and later deleted by hand. The measured lag between a timeout and the document being
+findable is ~60-90 SECONDS.
+
+    ⛔ A TIMEOUT CARRIES NO INFORMATION EITHER WAY. It is not a failure and it is not a success.
+
+Everything below follows from that one sentence:
+
+  1. THE FILE IS WRITTEN FIRST, into <notepad>/pending-engram/. A finding is never lost to a
+     network call, a missing token, or a hub that is down.
+  2. THE BODY CARRIES AN IDEMPOTENCY KEY (`ENGRAM-KEY <sha256>`), which is also in the front
+     matter. It is a nonce, so the keyword leg of search finds it exactly. This is what makes a
+     retry safe: `reconcile` can ask "did MY write land?" instead of guessing.
+  3. A TIMEOUT PARKS AS `UNPROVEN`, NEVER AS FAILED, AND NEVER RETRIES IN THE SAME RUN.
+  4. `reconcile` RESPECTS THE LAG (default 120 s) before it believes an absence.
+
+⚠️ THE HUB'S AGGREGATOR TOOLS ARE NOT USABLE FROM A SCRIPT. Measured 2026-09-22: the bare
+`engram_search` returns Go's `map[...]` stringification wrapping the JSON. The `engram-prod__*`
+tools return clean JSON with the per-leg scores. This calls the latter, always.
+
+⚠️ TWO SEARCHES, NOT ONE, when looking for neighbours to link. Measured the same day: a real query
+returned its top hit with `vector_score 0` (keyword only) while every other hit had `bm25_score 0`
+(vector only). Both legs work; a given document usually rides only one of them, so one query finds
+half the neighbours.
+
+Transport: MCP JSON-RPC over HTTPS to the hub, `Authorization: Bearer $SYNAPSE_ONEDROID_PAT`.
+That variable lives in a SESSION's environment, so this must run in the session's process tree.
+DF_ENGRAM_TRANSPORT=<script> replaces the network call with `<script> <tool> <json-file>` (tests).
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+QUEUE = "pending-engram"
+HUB = os.environ.get("DF_ENGRAM_HUB", "https://synapse.onedroid.ai/hub/onedroid-qr7wz7/mcp")
+TOKEN_VAR = "SYNAPSE_ONEDROID_PAT"
+KEY_MARK = "ENGRAM-KEY"
+MIN_AGE = float(os.environ.get("DF_ENGRAM_MIN_AGE", "120"))
+TIMEOUT_NOTE = ("a timeout proves nothing either way — parked UNPROVEN, not retried. "
+                "Run `df-engram reconcile` on a later turn.")
+
+
+def find_notepad(start):
+    d = os.path.abspath(start)
+    for _ in range(12):
+        if os.path.isfile(os.path.join(d, "NOTES.md")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return None
+
+
+def slug(text, n=60):
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return (s[:n] or "record").strip("-")
+
+
+def key_for(title, body):
+    return hashlib.sha256((title + "\n" + body).encode("utf-8")).hexdigest()[:32]
+
+
+def read_front(path):
+    """front matter (`k: v` lines before the first blank line) + the rest."""
+    front, rest, in_front = {}, [], True
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if in_front:
+                if not line.strip():
+                    in_front = False
+                    continue
+                m = re.match(r"^([a-zA-Z_]+): ?(.*)$", line)
+                if m:
+                    front[m.group(1)] = m.group(2)
+                    continue
+                in_front = False
+            rest.append(line)
+    return front, "\n".join(rest)
+
+
+def write_front(path, front, body):
+    order = ["title", "kind", "collection", "key", "status", "id", "created", "mission"]
+    lines = [f"{k}: {front[k]}" for k in order if front.get(k) is not None]
+    lines += [f"{k}: {v}" for k, v in front.items() if k not in order and v is not None]
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n\n" + body.rstrip("\n") + "\n")
+    os.replace(tmp, path)
+
+
+def call(tool, args):
+    """Returns (ok, parsed_or_text). ok=False means: NOT PROVEN, never 'did not happen'."""
+    transport = os.environ.get("DF_ENGRAM_TRANSPORT")
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": {"name": tool, "arguments": args}}
+    if transport:
+        tmp = os.path.join(os.environ.get("TMPDIR", "/tmp"), "df-engram-args.json")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(args, f)
+        try:
+            r = subprocess.run([transport, tool, tmp], capture_output=True, text=True, timeout=60)
+        except Exception as exc:
+            return False, str(exc)
+        if r.returncode != 0:
+            return False, (r.stderr or r.stdout or "transport failed").strip()
+        try:
+            return True, json.loads(r.stdout)
+        except Exception:
+            return False, r.stdout.strip()
+    token = os.environ.get(TOKEN_VAR)
+    if not token:
+        return False, f"{TOKEN_VAR} is not set in this environment"
+    cmd = ["curl", "-sS", "-m", "90", "-X", "POST", HUB,
+           "-H", f"Authorization: Bearer {token}",
+           "-H", "Accept: application/json, text/event-stream",
+           "-H", "Content-Type: application/json",
+           "-d", json.dumps(payload)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except Exception as exc:
+        return False, str(exc)
+    if r.returncode != 0:
+        return False, (r.stderr or "curl failed").strip()
+    try:
+        d = json.loads(r.stdout)
+        if "error" in d:
+            return False, json.dumps(d["error"])[:300]
+        text = d["result"]["content"][0]["text"]
+        return True, json.loads(text)
+    except Exception:
+        return False, r.stdout[:300]
+
+
+def cmd_write(a, notepad):
+    body = a.body
+    if a.body_file:
+        body = open(a.body_file, encoding="utf-8").read()
+    k = key_for(a.title, body)
+    body_with_key = body.rstrip("\n") + f"\n\n{KEY_MARK} {k}\n"
+    qdir = os.path.join(notepad, QUEUE)
+    os.makedirs(qdir, exist_ok=True)
+    path = os.path.join(qdir, f"{slug(a.title)}-{k[:8]}.md")
+    front = {"title": a.title, "kind": a.kind, "collection": a.collection, "key": k,
+             "status": "PENDING", "created": str(int(time.time())), "mission": a.mission}
+    # THE FILE FIRST. Everything after this can fail without losing the finding.
+    write_front(path, front, body_with_key)
+    if not os.environ.get("DF_ENGRAM_TRANSPORT") and not os.environ.get(TOKEN_VAR):
+        front["status"] = "UNPROVEN"
+        write_front(path, front, body_with_key)
+        sys.stderr.write(
+            f"df-engram: {TOKEN_VAR} is not set, so nothing was sent.\n"
+            f"The finding is QUEUED at {path} — run `df-engram reconcile` from a session that has it.\n")
+        return 3
+    okc, res = call("engram-prod__engram_write",
+                    {"collection": a.collection, "title": a.title, "kind": a.kind,
+                     "content": body_with_key})
+    if okc and isinstance(res, dict) and res.get("id"):
+        front["status"], front["id"] = "written", res["id"]
+        write_front(path, front, body_with_key)
+        print(f"df-engram: written {res['id']} -> {a.collection} ({path})")
+        return 0
+    front["status"] = "UNPROVEN"
+    write_front(path, front, body_with_key)
+    print(f"df-engram: UNPROVEN — {TIMEOUT_NOTE}\n  detail: {str(res)[:200]}\n  queued: {path}")
+    return 0
+
+
+def _hit_id(res, key):
+    """A search result that CONTAINS OUR KEY is proof our write landed. Anything else is not."""
+    if not isinstance(res, dict):
+        return None
+    for r in res.get("results") or []:
+        blob = json.dumps(r)
+        if key in blob:
+            return r.get("document_id") or r.get("id")
+    return None
+
+
+def cmd_reconcile(a, notepad):
+    qdir = os.path.join(notepad, QUEUE)
+    if not os.path.isdir(qdir):
+        print("df-engram: nothing queued.")
+        return 0
+    now, touched = time.time(), 0
+    for name in sorted(os.listdir(qdir)):
+        if not name.endswith(".md"):
+            continue
+        path = os.path.join(qdir, name)
+        front, body = read_front(path)
+        if front.get("status") != "UNPROVEN" or not front.get("key"):
+            continue
+        age = now - float(front.get("created") or 0)
+        if age < MIN_AGE:
+            print(f"df-engram: {name} is too recent ({int(age)}s < {int(MIN_AGE)}s) — "
+                  "an absence this early is a FALSE NEGATIVE, not an absence. Leaving it.")
+            continue
+        touched += 1
+        okc, res = call("engram-prod__engram_search",
+                        {"query": front["key"], "collection": front.get("collection")})
+        found = _hit_id(res, front["key"]) if okc else None
+        if found:
+            front["status"], front["id"] = "written", found
+            write_front(path, front, body)
+            print(f"df-engram: {name} DID land as {found} — recorded, not rewritten.")
+            continue
+        if not okc:
+            print(f"df-engram: {name} — search itself failed ({str(res)[:120]}). Still UNPROVEN.")
+            continue
+        okc, res = call("engram-prod__engram_write",
+                        {"collection": front.get("collection"), "title": front.get("title"),
+                         "kind": front.get("kind") or "knowledge", "content": body})
+        if okc and isinstance(res, dict) and res.get("id"):
+            front["status"], front["id"] = "written", res["id"]
+            write_front(path, front, body)
+            print(f"df-engram: {name} retried and written as {res['id']}.")
+        else:
+            print(f"df-engram: {name} still UNPROVEN — {TIMEOUT_NOTE}")
+    if not touched:
+        print("df-engram: nothing old enough to reconcile.")
+    return 0
+
+
+def main():
+    p = argparse.ArgumentParser(prog="df-engram", description=__doc__.split("\n")[0],
+                                epilog=f"Queue: <notepad>/{QUEUE}/ — the file is written BEFORE the "
+                                       "hub call, so a finding is never lost.")
+    p.add_argument("--notepad", help="notepad root (default: walk up from cwd for NOTES.md)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    w = sub.add_parser("write", help="queue a record, then write it to Engram")
+    w.add_argument("--title", required=True)
+    w.add_argument("--kind", required=True)
+    w.add_argument("--collection", required=True)
+    w.add_argument("--body", default="")
+    w.add_argument("--body-file")
+    w.add_argument("--mission")
+    w.set_defaults(func=cmd_write)
+
+    r = sub.add_parser("reconcile", help="re-probe UNPROVEN writes by their key, after the lag")
+    r.set_defaults(func=cmd_reconcile)
+
+    a = p.parse_args()
+    notepad = a.notepad or find_notepad(os.getcwd())
+    if not notepad:
+        sys.stderr.write("df-engram: no notepad found (walked up for NOTES.md). Use --notepad.\n")
+        return 2
+    return a.func(a, notepad)
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)
