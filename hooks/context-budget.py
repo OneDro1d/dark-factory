@@ -325,6 +325,158 @@ def _fire_clear(pane):
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+# ---- RESUME AFTER THE CLEAR (2026-09-21) ----------------------------------------------------
+#
+# ⛔ WHY THIS EXISTS. autoclear was named "checkpoint, then CONTINUE" and shipped only the
+# checkpoint half: `_fire_clear` typed `/clear` + Enter and stopped. The new session received the
+# whole restore as CONTEXT -- and a SessionStart hook cannot start a turn, so it sat at an empty
+# prompt until a human typed. Measured 2026-09-21: seven clears fired on this box, and the operator
+# reported that none of the sessions resumed their mission afterwards.
+#
+# ⛔ WHY NOT A CRON (the operator's first proposal, rejected on the evidence). A tick fires on a
+# clock, not on the clear: most ticks land on sessions that are busy or deliberately waiting on the
+# operator, so it pushes them past the one natural pause and spends a turn per session per tick. It
+# cannot tell which session owns which mission (`mission-tick` has exactly that defect, Engram
+# `743565ea`). This file is the component that SENDS the clear, so it already knows the moment.
+#
+# ⛔ IT MUST BE DETACHED. `/clear` cannot execute until this Stop hook RETURNS, so the hook can never
+# wait for the new session itself -- it would be waiting for something its own return unblocks.
+#
+# The helper types only when THREE things are proven, each read fresh:
+#   1. THE CLEAR HAPPENED. `SessionEnd(clear)` rewrites the notepad's PRECOMPACT.md the moment the
+#      clear executes (the interlock above already refuses to fire without that writer). An mtime
+#      newer than the spawn is unforgeable; a timer is a guess.
+#   2. THE PROMPT IS READY AND STABLE. The LAST `❯` line is empty, continuously, for SETTLE seconds.
+#      This rule is ported from a tmux message-injection relay already proven in production, rather
+#      than re-invented: a human's half-typed draft ("❯ HALF-TYPED") and the permission menu
+#      ("❯ 1. Yes", which reuses the glyph) both have text after the glyph, so both fail it. The
+#      real prompt is "❯" + NBSP (U+00A0), measured — which is why NBSP counts as whitespace.
+#   3. STILL READY AT THE LAST MOMENT. Re-checked immediately before delivering. Never trust a read
+#      across the gap between deciding and doing.
+# ⚠️ FAILS CLOSED. If any proof never arrives it types NOTHING and records why. Typing into a pane
+# in an unknown state is worse than a session that waits for a human, which is today's behaviour.
+# ⚠️ THE PANE IS THE ONE THIS HOOK INHERITED (TMUX_PANE), never one found by listing -- see
+# `_tmux_pane`. On a shared box a listed pane can be a stranger's session.
+# ⚠️ Residual race, accepted: a message-injection relay may also type into idle panes. It re-checks the input line
+# right before injecting too, and a typed-then-submitted prompt is non-empty then busy, so the
+# window is the ~0.3 s between typing and Enter.
+RESUME_TEXT = (
+    "Autoclear just cleared this session's context to free the window. Resume the mission from the "
+    "restored notepad above: read the newest handoff and NOTES.md, then take the ONE next action. "
+    "Do not re-derive state, and do not stop to ask unless you reach a genuine hard stop.")
+
+
+def _input_line_empty(pane_text):
+    """The ported relay rule: the LAST line starting with `❯` (after left-trim) has nothing after the
+    glyph but whitespace or NBSP. No `❯` line at all is NOT empty -- it is not a prompt."""
+    last = None
+    for line in pane_text.split("\n"):
+        line = line.rstrip("\r")
+        if line.lstrip(" ").startswith("❯"):
+            last = line
+    if last is None:
+        return False
+    rest = last.lstrip(" ")[1:]
+    return rest.strip(" \t ") == ""
+
+
+def _capture(pane):
+    try:
+        return subprocess.run(["tmux", "capture-pane", "-p", "-t", pane], check=True, timeout=10,
+                              capture_output=True, text=True).stdout
+    except Exception:
+        return None
+
+
+def _deliver(pane, text):
+    """TYPE it, as the user would — literal send-keys, then Enter as a separate keystroke.
+
+    ⛔ NOT bracketed paste, though the relay it was ported from uses it and this helper first did. MEASURED on a
+    real session 2026-09-22: a bracketed paste reaches the model wrapped in <pasted_content>, and
+    Claude Code's own system prompt tells every session to follow instructions inside pasted
+    content ONLY where the user's own message asks it to. A resume that IS the whole message has no
+    such message around it. Haiku followed it anyway; one pasted instruction in the same trials
+    was refused outright as a prompt injection, and the fleet runs Opus, which reads that rule more
+    strictly. A resume that works on one model and is correctly declined by another is a latent
+    failure. Typed text is recorded as a plain user message (measured, same session type).
+    ⚠️ ONE LINE, always: in literal typing a newline IS Enter and would submit early, which is the
+    only reason to paste. Any whitespace run, newlines included, collapses to one space."""
+    line = " ".join((text or "").split())
+    subprocess.run(["tmux", "send-keys", "-t", pane, "-l", line], check=True, timeout=10,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(0.3)
+    subprocess.run(["tmux", "send-keys", "-t", pane, "Enter"], check=True, timeout=10,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _resume_after_clear(pane, root, t0, record):
+    """The detached helper's body. Returns the outcome string it also writes to `record`."""
+    clear_wait = float(os.environ.get("DF_CONTEXT_RESUME_CLEAR_WAIT", "60"))
+    ready_wait = float(os.environ.get("DF_CONTEXT_RESUME_READY_WAIT", "120"))
+    settle = float(os.environ.get("DF_CONTEXT_RESUME_SETTLE", "3"))
+    poll = 0.5
+    floor = os.path.join(root, "PRECOMPACT.md")
+
+    def done(outcome):
+        try:
+            with open(record, "w") as fh:
+                fh.write("%s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), outcome))
+        except OSError:
+            pass
+        return outcome
+
+    deadline = time.time() + clear_wait
+    while True:
+        try:
+            if os.path.getmtime(floor) > t0:
+                break
+        except OSError:
+            pass
+        if time.time() >= deadline:
+            return done("SKIPPED clear-not-observed: %s not rewritten within %ss -- typed nothing"
+                        % (floor, clear_wait))
+        time.sleep(poll)
+
+    deadline = time.time() + ready_wait
+    stable_since = None
+    while True:
+        text = _capture(pane)
+        if text is not None and _input_line_empty(text):
+            stable_since = stable_since or time.time()
+            if time.time() - stable_since >= settle:
+                break
+        else:
+            stable_since = None
+        if time.time() >= deadline:
+            return done("SKIPPED prompt-never-ready: no stable empty input line in %s within %ss "
+                        "-- typed nothing" % (pane, ready_wait))
+        time.sleep(poll)
+
+    text = _capture(pane)
+    if text is None or not _input_line_empty(text):
+        return done("SKIPPED prompt-changed: the input line stopped being empty at the last "
+                    "moment -- typed nothing")
+    try:
+        _deliver(pane, os.environ.get("DF_CONTEXT_AUTOCLEAR_RESUME_TEXT") or RESUME_TEXT)
+    except Exception as exc:
+        return done("FAILED delivery: %s" % exc)
+    return done("RESUMED pane %s" % pane)
+
+
+def _schedule_resume(pane, root, record):
+    """Spawn the helper fully detached and return at once. Never raises: a resume that cannot be
+    scheduled leaves today's behaviour (the session waits for a human), which is safe."""
+    if os.environ.get("DF_CONTEXT_AUTOCLEAR_RESUME", "1") == "0":
+        return
+    try:
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), "--resume-after-clear",
+                          pane, root, repr(time.time()), record],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+    except Exception:
+        pass
+
+
 def _autoclear(event, armed_at):
     """Phase 2. Returns None if the clear FIRED, else (reason, retryable).
 
@@ -561,7 +713,25 @@ def main():
 
     # A Stop hook that already blocked is re-entered with this flag set.
     # Never block twice in a row -- that is an infinite loop, not a policy.
-    if event.get("stop_hook_active"):
+    #
+    # ⛔ BUT IN AUTOCLEAR MODE THE RE-ENTRY STOP IS EXACTLY WHEN PHASE 2 MUST RUN, and returning here
+    # was the bug the operator reported as "sessions get ready to clear, but something stops before
+    # clearing". Phase 1 BLOCKS, so the stop that ends the checkpoint turn is always a re-entry.
+    # With the old early return, phase 2 was never evaluated there; it waited for the NEXT clean
+    # stop, and an autonomous session that has just checkpointed has no next turn — it goes idle
+    # saying it is "ready for autoclear" and sits until something external prompts it. The 5 min –
+    # 2 h arm-to-clear delays measured across the fleet fit that: each was the wait for an outside
+    # prompt. I first called it "working as designed".
+    # ⚠️ EVIDENCE, stated exactly: the proof is test J8 (red on the old code, real pane). A live run
+    # I first cited here — "armed, idle 240 s, no clear" — was CONFOUNDED: that scratch session was
+    # launched without TMUX_PANE, so it had no actuator and could not have cleared under either
+    # version. The clean live run came after the fix: armed 02:34:16, FIRED 02:34:38 on the
+    # re-entry stop, floor 02:34:39, resumed 02:34:42.
+    # So re-entry is carried forward, and only the BLOCKING paths are closed to it: phase 2 may FIRE
+    # (it types /clear and ALLOWS — no block, so no loop), but may not arm, and may not refuse with
+    # a block. Every other mode keeps the old early return untouched.
+    reentry = bool(event.get("stop_hook_active"))
+    if reentry and os.environ.get("DF_CONTEXT_GATE_MODE", "checkpoint") != "autoclear":
         allow()
 
     transcript = event.get("transcript_path") or ""
@@ -617,6 +787,8 @@ def main():
         if armed and mode != "autoclear":
             allow()
         if not armed:
+            if reentry:
+                allow()   # arming BLOCKS, and a re-entry stop may never block
             open(marker, "w").close()
     except OSError:
         allow()
@@ -627,19 +799,39 @@ def main():
         fired = marker + ".cleared"
         disarmed = marker + ".disarmed"
         try:
-            if os.path.exists(fired) or os.path.exists(disarmed):
+            if os.path.exists(disarmed):
                 allow()
             armed_at = os.path.getmtime(marker)
         except OSError:
             allow()
+        # CLAIM the fire atomically. The kit wires this hook at project AND user level under two
+        # spellings, so Claude Code runs BOTH copies, in parallel, on one stop. A check-then-create
+        # let both through: `/clear` was typed twice and two helpers each typed the resume
+        # (measured live 2026-09-22T02:55:13Z and :16Z). O_EXCL lets exactly one copy proceed.
+        try:
+            os.close(os.open(fired, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        except OSError:
+            allow()   # the other copy holds the claim (or has already fired)
         outcome = _autoclear(event, armed_at)
         if outcome is None:
-            try:
-                open(fired, "w").close()
-            except OSError:
-                pass
+            # Checkpoint, then CONTINUE: without this the new session sits at an empty prompt.
+            # `_autoclear` just proved both the pane and the notepad exist, so neither is None.
+            root = _notepad_root(event.get("cwd") or "")
+            pane = _tmux_pane()
+            if root and pane:
+                _schedule_resume(pane, root, marker + ".resumed")
             # The keys are already in the pane; the clear happens as this turn ends. Blocking
             # here would start a turn that is about to be discarded.
+            allow()
+        # Refused: nothing was typed, so RELEASE the claim — a retryable refusal must be able to
+        # fire on a later stop, and a disarm is recorded by its own marker, not by this one.
+        try:
+            os.unlink(fired)
+        except OSError:
+            pass
+        if reentry:
+            # A refusal is reported by BLOCKING, which re-entry may not do. Change nothing — no
+            # disarm either — so the next clean stop retries and, if it still refuses, says why.
             allow()
         reason, retryable = outcome
         try:
@@ -662,4 +854,8 @@ def main():
 
 
 if __name__ == "__main__":
+    # The detached resume helper re-enters this same file (one home for the rule it applies).
+    if len(sys.argv) == 6 and sys.argv[1] == "--resume-after-clear":
+        _resume_after_clear(sys.argv[2], sys.argv[3], float(sys.argv[4]), sys.argv[5])
+        sys.exit(0)
     main()
