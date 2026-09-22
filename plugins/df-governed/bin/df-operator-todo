@@ -122,8 +122,12 @@ RAISED_RE = re.compile(r" · _raised (\d{4}-\d{2}-\d{2})_$")
 CAPS = {"task": 200, "why": 400, "do": 600, "option": 400, "recommend": 400, "ref": 300}
 ITEM_CAP = 1500
 HISTORY_RE = re.compile(
-    r"✅|~~|\bre-?(?:checked|measured|probed|tested|raised)\b|\bsuperseded\b|\brewritten\b|"
-    r"\bcorrected\b|\bnarrowed\b|\bused to\b|\bno longer\b|\bwas wrong\b|\bsame day\b|"
+    # The dated forms only: "rewritten 2026-09-15" is a trail, "until it is rewritten" is a step
+    # still to come and "not re-checked from this box" is a caveat. Both of the latter were
+    # flagged by the first version of this pattern on the first real page written with it.
+    r"✅|~~|\b(?:re-?(?:checked|measured|probed|tested|raised)|rewritten|corrected|narrowed|"
+    r"extended)[ ,:]+(?:on )?\d{4}-\d{2}-\d{2}|\bsuperseded\b|"
+    r"\bused to\b|\bwas wrong\b|\bsame day\b|"
     r"\b(?:is|are|was|were) (?:now |already )?(?:merged|closed|done|fixed|resolved)\b",
     re.IGNORECASE)
 DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
