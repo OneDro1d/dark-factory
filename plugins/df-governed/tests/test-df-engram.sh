@@ -11,6 +11,9 @@
 #   as UNPROVEN, never retry in the same run, and reconcile later by an IDEMPOTENCY KEY that is in
 #   the document body — so a retry that finds its own earlier write does not write it twice.
 #
+# Engram itself — what it is and how a machine reaches it — is documented in one place:
+# [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
+#
 # Hermetic: no network. DF_ENGRAM_TRANSPORT names a script the CLI execs instead of curl; the
 # fixtures below play the hub, including the shapes that broke it for real.
 set -uo pipefail

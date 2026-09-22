@@ -30,7 +30,10 @@ returned its top hit with `vector_score 0` (keyword only) while every other hit 
 (vector only). Both legs work; a given document usually rides only one of them, so one query finds
 half the neighbours.
 
-Transport: MCP JSON-RPC over HTTPS to the hub, `Authorization: Bearer $SYNAPSE_ONEDROID_PAT`.
+What Engram is, and how a machine is authorised to reach it, is documented in exactly one place:
+[Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
+
+Transport: MCP JSON-RPC over HTTPS to the hub, with a Bearer token named by the config.
 That variable lives in a SESSION's environment, so this must run in the session's process tree.
 DF_ENGRAM_TRANSPORT=<script> replaces the network call with `<script> <tool> <json-file>` (tests).
 """
