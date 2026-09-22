@@ -69,6 +69,30 @@ entry which simply vanishes reads as one nobody decided. The reconciliation: **t
 git repo**, so every removal is a commit and the full history is in `git log -p operator-todo.md`.
 History lives where history belongs, not on the working page.
 
+⛔ **EVERY SESSION, AND IN SHAPE — operator ruling 2026-09-22.** *"All sessions need to run
+operator-todo.md … When decisions are needed, the ask should be in plain English, with options,
+implications, consequences of each choice and recommendation. Only open items … cleared of closed
+items, any narration or history not relevant to the open issues."* Measured that day: the three
+live pages were 28 KB, 50 KB and 35 KB, items averaging 2.5 KB of "RE-CHECKED …" and "✅ … MERGED"
+trails — none written by this tool; sessions hand-edited them in. So:
+
+- **A decision item is refused without its analysis:** `--category decision` needs two or more
+  `--option "<choice>: <what it means and what follows>"` and one `--recommend "<which, and why>"`.
+- **An action item is refused without its steps** (same day, second ruling: *"if I need to create
+  a github token, I want to see a brief step by step instruction: click here, run this command,
+  etc."*). Every non-decision item needs one or more `--step`, rendered as a numbered list: the
+  URL to open, what to click, the exact command, what they should see when it worked.
+- **Every field has a cap** (task 200, why 400, do 600, option/recommend 400; 1500 per item). The
+  evidence goes in `NOTES.md` or a handoff, pointed at with `--ref`.
+- **A re-add keeps the FIRST raised date** — how long an item has waited is kept; a trail of dates is not.
+- **`df-operator-todo lint`** reads the raw page and fails (rc 1) on text outside an item, a ticked
+  item, a history/status marker inside one, a trail of dates, an over-long item, or a decision
+  without options and a recommendation. A missing page is rc 2 — missing is not clean.
+- **The completeness Stop hook (`hooks/mission-completeness-gate.py`) runs it in every session in a
+  notepad**, not only mission sessions: it creates the page if absent and BLOCKS once per page
+  version when lint fails. It checks on working turns only and fails OPEN (an older installed tool
+  without `lint` never forces a turn). Off switch: `DF_OPERATOR_PAGE_CHECK=off`.
+
 ⚠️ **THE AGENT MAY NOT TICK OFF WORK IT DID NOT WATCH HAPPEN.** `done` refuses without either
 `--verified <evidence>` or `--by-operator`, and the refusal is tested (`test-df-operator-todo.sh`
 case E). An agent that removes an item because it assumes the human got to it produces the one

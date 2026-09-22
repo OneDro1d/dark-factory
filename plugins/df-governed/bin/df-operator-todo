@@ -107,6 +107,36 @@ EMPTY_BLOCKING = "_Nothing blocking. The loop is not waiting on you._"
 EMPTY_ASYNC = "_Nothing queued._"
 
 ENTRY_RE = re.compile(r"^- \[ \] `(?P<id>[^`]+)` — (?P<rest>.*)$")
+CLOSED_RE = re.compile(r"^\s*- \[[xX]\]")
+# A decision's choices, one indented line each, under its entry line. The only continuation
+# lines the page admits: anything else indented under an item is narration and fails lint.
+OPTION_P = "  - **Option:** "
+RECOMMEND_P = "  - **Recommendation:** "
+# An operator ACTION's how-to, one numbered line per step (operator ruling 2026-09-22, second
+# half: "if I need to create a github token, I want to see a brief step by step instruction:
+# click here, run this command, etc."). A `--do` sentence left him to work out the clicks himself.
+STEP_RE = re.compile(r"^  \d+\. ")
+MAX_STEPS = 10
+RAISED_RE = re.compile(r" · _raised (\d{4}-\d{2}-\d{2})_$")
+
+# Operator ruling 2026-09-22: "only open items should be present in the file. It should be
+# cleared of closed items, any narration or history not relevant to the open issues." Measured
+# that day: three live pages at 28 KB, 50 KB and 35 KB, one 11-item page averaging 2.5 KB per
+# item, each item a trail of "RE-CHECKED …", "✅ … ARE MERGED", "corrected …". The tool never
+# wrote those; sessions hand-edited them in. So the caps bind at `add` AND `lint` reads the page.
+CAPS = {"task": 200, "why": 400, "do": 600, "option": 400, "recommend": 400, "ref": 300,
+        "step": 300}
+ITEM_CAP = 1500
+HISTORY_RE = re.compile(
+    # The dated forms only: "rewritten 2026-09-15" is a trail, "until it is rewritten" is a step
+    # still to come and "not re-checked from this box" is a caveat. Both of the latter were
+    # flagged by the first version of this pattern on the first real page written with it.
+    r"✅|~~|\b(?:re-?(?:checked|measured|probed|tested|raised)|rewritten|corrected|narrowed|"
+    r"extended)[ ,:]+(?:on )?\d{4}-\d{2}-\d{2}|\bsuperseded\b|"
+    r"\bused to\b|\bwas wrong\b|\bsame day\b|"
+    r"\b(?:is|are|was|were) (?:now |already )?(?:merged|closed|done|fixed|resolved)\b",
+    re.IGNORECASE)
+DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 
 
 def find_notepad(start):
@@ -134,10 +164,11 @@ def todo_path(explicit=None):
 
 
 def parse(path):
-    """Return (blocking, async_) as lists of (id, rest). Unknown lines outside the two sections
-    are dropped on rewrite — the file is generated, and a hand-edited line that the parser
-    cannot round-trip would be silently corrupted instead. Deleting a whole `- [ ]` line by hand
-    IS supported and is the documented way for a human to close an item."""
+    """Return (blocking, async_) as lists of (id, rest, extra), where `extra` is the entry's
+    option/recommendation lines. Unknown lines outside the two sections are dropped on rewrite —
+    the file is generated, and a hand-edited line that the parser cannot round-trip would be
+    silently corrupted instead. Deleting a whole `- [ ]` item by hand IS supported and is the
+    documented way for a human to close an item."""
     if not os.path.isfile(path):
         return [], []
     blocking, async_, cur = [], [], None
@@ -152,15 +183,26 @@ def parse(path):
                 continue
             m = ENTRY_RE.match(line)
             if m and cur is not None:
-                cur.append((m.group("id"), m.group("rest")))
+                cur.append((m.group("id"), m.group("rest"), []))
+                continue
+            if cur and (line.startswith((OPTION_P, RECOMMEND_P)) or STEP_RE.match(line)):
+                cur[-1][2].append(line)
     return blocking, async_
+
+
+def _lines(entries):
+    out = []
+    for i, r, extra in entries:
+        out.append(f"- [ ] `{i}` — {r}")
+        out.extend(extra)
+    return "\n".join(out)
 
 
 def render(blocking, async_):
     out = [HEADER, "", BLOCKING_H, ""]
-    out.append("\n".join(f"- [ ] `{i}` — {r}" for i, r in blocking) if blocking else EMPTY_BLOCKING)
+    out.append(_lines(blocking) if blocking else EMPTY_BLOCKING)
     out += ["", ASYNC_H, ""]
-    out.append("\n".join(f"- [ ] `{i}` — {r}" for i, r in async_) if async_ else EMPTY_ASYNC)
+    out.append(_lines(async_) if async_ else EMPTY_ASYNC)
     out.append("")
     return "\n".join(out)
 
@@ -170,19 +212,63 @@ def write(path, blocking, async_):
         f.write(render(blocking, async_))
 
 
+def _refuse(msg):
+    sys.stderr.write("df-operator-todo: " + msg + "\n")
+    return 2
+
+
 def cmd_add(a):
+    options = a.option or []
+    steps = a.step or []
+    if a.category == "decision" and (len(options) < 2 or not a.recommend):
+        return _refuse(
+            "a decision needs at least two --option \"<choice>: <what it means and what follows>\" "
+            "and one --recommend \"<which, and why>\".\nA decision without them hands the operator "
+            "the analysis as well as the choice (operator ruling 2026-09-22).")
+    if a.category != "decision" and not steps:
+        return _refuse(
+            "an operator action needs its steps: one --step per action, in plain English, in "
+            "order — the page to open (full URL), what to click, the exact command to run, what "
+            "to paste where, and what they should see when it worked.\nA sentence saying WHAT to "
+            "do leaves the operator to work out HOW (operator ruling 2026-09-22).")
+    if a.category == "decision" and not a.do and not steps:
+        return _refuse("a decision needs --do: how to answer (e.g. \"Reply A or B\").")
+    if len(steps) > MAX_STEPS:
+        return _refuse(f"{len(steps)} steps; the cap is {MAX_STEPS}. Link a runbook with --ref.")
+    fields = [("task", a.task), ("why", a.why), ("do", a.do or ""), ("ref", a.ref or ""),
+              ("recommend", a.recommend or "")] + [("option", o) for o in options] \
+        + [("step", s) for s in steps]
+    for name, val in fields:
+        if len(val) > CAPS[name]:
+            return _refuse(
+                f"--{name} is {len(val)} characters; the cap is {CAPS[name]}. An item is an ask, "
+                "not an essay: put the evidence in NOTES.md or a handoff and point at it with --ref.")
+        if "\n" in val:
+            return _refuse(f"--{name} contains a newline; every field is one line.")
     path = todo_path(a.file)
     blocking, async_ = parse(path)
+    # The FIRST raised date is kept on a re-add: how long an item has waited is the one piece of
+    # history the operator needs, and a trail of "rewritten …, re-checked …" dates is not.
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    rest = f"**{a.task}** · _yours because:_ **{a.category}** — {a.why} · _do:_ {a.do}"
+    for i, r, _ in blocking + async_:
+        m = RAISED_RE.search(r)
+        if i == a.id and m:
+            stamp = m.group(1)
+    rest = f"**{a.task}** · _yours because:_ **{a.category}** — {a.why}"
+    if a.do:
+        rest += f" · _do:_ {a.do}"
     if a.ref:
         rest += f" · _ref:_ {a.ref}"
     rest += f" · _raised {stamp}_"
+    extra = [OPTION_P + o for o in options]
+    if a.recommend:
+        extra.append(RECOMMEND_P + a.recommend)
+    extra += [f"  {n}. {s}" for n, s in enumerate(steps, 1)]
     # An id is unique across BOTH sections: re-adding with a changed --blocking must MOVE the
     # entry, not leave a stale twin in the other section saying the opposite about urgency.
     blocking = [e for e in blocking if e[0] != a.id]
     async_ = [e for e in async_ if e[0] != a.id]
-    (blocking if a.blocking else async_).append((a.id, rest))
+    (blocking if a.blocking else async_).append((a.id, rest, extra))
     write(path, blocking, async_)
     print(f"operator-todo: {'BLOCKING' if a.blocking else 'async'} item `{a.id}` recorded -> {path}")
 
@@ -236,9 +322,88 @@ def cmd_list(a):
         print("operator-todo: empty — the operator owes nothing.")
         return 0
     for label, items in (("BLOCKING", blocking), ("async", async_)):
-        for i, r in items:
+        for i, r, extra in items:
             print(f"[{label}] {i} :: {r}")
+            for x in extra:
+                print("    " + x.strip())
     return 0
+
+
+def lint_page(path):
+    """Return the page's defects as a list of strings ([] = clean), or None if there is no page.
+
+    Reads the RAW file, not the parse: the parser drops what it cannot round-trip, and what it
+    drops (narration, a ticked item, an indented status note) is exactly what this looks for."""
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        raw = f.read().split("\n")
+    problems, items, in_comment, cur = [], [], False, None
+    allowed = {"# Operator TODO", EMPTY_BLOCKING, EMPTY_ASYNC, ""}
+    for n, line in enumerate(raw, 1):
+        if in_comment:
+            in_comment = "-->" not in line
+            continue
+        if line.lstrip().startswith("<!--"):
+            in_comment = "-->" not in line
+            continue
+        if CLOSED_RE.match(line):
+            problems.append(f"line {n}: a ticked (closed) item — closed items are DELETED, not ticked")
+            cur = None
+            continue
+        m = ENTRY_RE.match(line)
+        if m:
+            cur = {"id": m.group("id"), "text": m.group("rest"), "options": 0, "rec": 0,
+                   "steps": 0, "decision": "_yours because:_ **decision**" in line}
+            items.append(cur)
+            continue
+        if cur is not None and STEP_RE.match(line):
+            cur["text"] += " " + line
+            cur["steps"] += 1
+            continue
+        if cur is not None and line.startswith((OPTION_P, RECOMMEND_P)):
+            cur["text"] += " " + line
+            cur["options" if line.startswith(OPTION_P) else "rec"] += 1
+            continue
+        if line.strip() == "":
+            continue
+        if line.startswith((BLOCKING_H, ASYNC_H)) or line.strip() in allowed:
+            cur = None
+            continue
+        problems.append(f"line {n}: text outside any item (narration or history): {line.strip()[:80]!r}")
+    for it in items:
+        where = f"`{it['id']}`"
+        hit = HISTORY_RE.search(it["text"])
+        if hit:
+            problems.append(f"{where}: carries history/status ({hit.group(0)!r}) — keep only what is still open")
+        if len(set(DATE_RE.findall(it["text"]))) > 2:
+            problems.append(f"{where}: carries a trail of dates — keep one raised date")
+        if len(it["text"]) > ITEM_CAP:
+            problems.append(f"{where}: {len(it['text'])} characters; the cap is {ITEM_CAP}")
+        if it["decision"] and (it["options"] < 2 or it["rec"] < 1):
+            problems.append(f"{where}: a decision needs two or more options, each with what it means, "
+                            "and a recommendation")
+        if not it["decision"] and it["steps"] < 1:
+            problems.append(f"{where}: an operator action needs numbered steps in plain English — "
+                            "the URL to open, what to click, the exact command, what they should see")
+    return problems
+
+
+def cmd_lint(a):
+    path = todo_path(a.file)
+    problems = lint_page(path)
+    if problems is None:
+        sys.stderr.write(f"df-operator-todo: no page at {path} — missing is not clean.\n")
+        return 2
+    if not problems:
+        print(f"operator-todo: clean — only open items, in shape -> {path}")
+        return 0
+    print(f"operator-todo: {len(problems)} problem(s) in {path}")
+    for p in problems:
+        print("  - " + p)
+    print("Rewrite each item with `df-operator-todo add` (same --id replaces it); delete what is "
+          "closed. History belongs in git and NOTES.md, never on this page.")
+    return 1
 
 
 def main():
@@ -252,10 +417,19 @@ def main():
     a.add_argument("--category", required=True, choices=sorted(CATEGORIES),
                    help="the operator-only thing this needs; if none fits, the item is YOURS")
     a.add_argument("--why", required=True, help="why that category applies, in this case")
-    a.add_argument("--do", required=True, dest="do", help="the exact command, PR number or URL")
+    a.add_argument("--do", dest="do", help="decision: how to answer; action: an optional one-line summary")
+    a.add_argument("--step", action="append",
+                   help="action items, 1+ in order: one plain-English step each — the URL to open, "
+                        "what to click, the exact command, what they should see")
     a.add_argument("--ref")
+    a.add_argument("--option", action="append",
+                   help="decision only, 2+: \"<choice>: <what it means and what follows>\"")
+    a.add_argument("--recommend", help="decision only: which option, and why")
     a.add_argument("--blocking", action="store_true")
     a.set_defaults(func=cmd_add)
+
+    li = sub.add_parser("lint", help="check the page holds only open items, in shape")
+    li.set_defaults(func=cmd_lint)
 
     d = sub.add_parser("done", help="remove a finished task (no history kept in the file)")
     d.add_argument("--id", required=True)
