@@ -93,6 +93,11 @@ _BEARER = re.compile(r"(\b[Bb]earer\s+)[A-Za-z0-9._~+/-]{12,}=*")
 _SECRET_KEY = r"[A-Za-z0-9_.-]*(?:token|secret|password|passwd|passphrase|api[_-]?key|apikey|private[_-]?key|access[_-]?key|client[_-]?secret|credentials?)"
 _JSON_KV = re.compile(r'("' + _SECRET_KEY + r'"\s*:\s*")([^"\\]{8,})(")', re.I)
 _ASSIGN_KV = re.compile(r"(?<![A-Za-z0-9_])(" + _SECRET_KEY + r")(\s*=\s*[\"']?)([^\s\"'&;]{8,})", re.I)
+# YAML / properties: `password: <value>`, which a Secret manifest and a values.yaml both use.
+# Requires start-of-line (plus indent) so a prose colon mid-sentence is not a match.
+_YAML_KV = re.compile(r"(?m)^(\s*-?\s*[\"']?)(" + _SECRET_KEY + r")([\"']?\s*:\s+)([^\s#][^\n#]{7,}?)(\s*)$", re.I)
+# a value that is CODE, not a credential: a call, an index, a member access, a template hole.
+_CODE_VALUE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*\s*\(|^\w+(\.\w+)+$|\$\{|\{\{|<%|os\.environ|process\.env")
 # keys that end in "token" but hold pagination state, not credentials — masking them breaks paging
 _NOT_SECRET_KEY = re.compile(r"page|cursor|continuation|next|count|type|usage|limit|max|input|output|total", re.I)
 
@@ -104,7 +109,13 @@ _SECRET_NAME = re.compile(
     r"TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY|CREDENTIAL|(?:^|_)PAT(?:$|_)|(?:^|_)KEY$",
     re.I,
 )
-_NOT_SECRET_NAME = re.compile(r"^(?:SSH_AUTH_SOCK|GPG_AGENT_INFO|.*_KEY_ID|.*_KEYRING|.*_TOKEN_FILE|.*_KEY_FILE|.*_PATH)$", re.I)
+# ⚠️ a name that DESCRIBES a secret is not a secret. `SECRET_STORE_KIND=kubernetes` put the word
+# "kubernetes" on the mask list, so it vanished from every command's output thereafter. The suffix
+# is the tell: a KIND, a TYPE or a NAME names the thing, it is not the thing.
+_NOT_SECRET_NAME = re.compile(
+    r"^(?:SSH_AUTH_SOCK|GPG_AGENT_INFO|.*_KEY_ID|.*_KEYRING|.*_TOKEN_FILE|.*_KEY_FILE|.*_PATH"
+    r"|.*_(?:KIND|TYPE|MODE|NAME|PROVIDER|BACKEND|SCHEME|FORMAT|ALGO|ALGORITHM|METHOD|SOURCE|STRATEGY|ENABLED|VERSION|URL|URI|HOST|ENDPOINT|REGION|TTL|EXPIRY|LENGTH|ROTATION))$",
+    re.I)
 
 
 def _looks_like_value(v):
@@ -165,6 +176,8 @@ class Redactor:
         s = _BEARER.sub(lambda m: m.group(1) + REDACTED, s)
         s = _JSON_KV.sub(lambda m: m.group(0) if _skip_kv(m.group(1), m.group(2)) else m.group(1) + REDACTED + m.group(3), s)
         s = _ASSIGN_KV.sub(lambda m: m.group(0) if _skip_kv(m.group(1), m.group(3)) else m.group(1) + m.group(2) + REDACTED, s)
+        s = _YAML_KV.sub(lambda m: m.group(0) if _skip_kv(m.group(2), m.group(4))
+                         else m.group(1) + m.group(2) + m.group(3) + REDACTED + m.group(5), s)
         return s
 
     def block(self, s):
@@ -181,6 +194,11 @@ def _skip_kv(key, val):
     if _NOT_SECRET_KEY.search(key.rsplit("_", 1)[0] if key.lower().endswith("token") else ""):
         return True
     if REDACTED in val or val.startswith(("${", "$", "<", "EV[", "{{", "/", "./", "~/")) or val.isdigit():
+        return True
+    # ⚠️ source code that MENTIONS a secret-named identifier is not a credential. Masking
+    # `token = generateToken(user)` corrupts the file a reviewer is reading, and teaches the
+    # reader that [REDACTED] means nothing in particular.
+    if _CODE_VALUE.search(val.strip().strip("\"'")):
         return True
     return False
 
@@ -214,13 +232,41 @@ MSG = {
     "vault": "This prints secret values. Read one field with -field=<key> and pipe it straight into its consumer (vault kv get -field=<key> <path> | kubectl create secret generic <name> --from-file=<key>=/dev/stdin), or check existence with vault kv metadata get <path>.",
     "az": "This prints the secret value. Names only: az keyvault secret list --vault-name <kv> --query '[].name' -o tsv .",
     "op": "This prints the secret to the terminal. Pipe it into its consumer, write it with --out-file, or use op run -- <cmd>, which injects secrets as env and masks them in output.",
+    "aws": "This prints the secret value. Pipe it straight into its consumer, or list without values: aws secretsmanager list-secrets --query 'SecretList[].Name' --output text . For SSM, drop --with-decryption or read one parameter into the consumer.",
+    "gcloud": "This prints the secret value. Pipe it straight into its consumer, or list without values: gcloud secrets list --format='value(name)' . Versions only: gcloud secrets versions list <secret>.",
+    "helm": "A release's values carry whatever was passed in, passwords included. Names only: helm get values <release> -o json | jq 'paths(scalars) | join(\".\")' . The rendered manifest without values: helm get manifest <release>.",
+    "git-credential": "This prints the stored password or token for a host. To check that a credential exists, use the helper's own listing (e.g. gh auth status, without -t); never fill it to a terminal.",
+    "cred-file": "This file holds credentials in plain text. Read the part you need without the values: for ~/.aws/credentials use aws configure list-profiles; for ~/.kube/config use kubectl config get-contexts; for ~/.docker/config.json use jq '.auths | keys'; for ~/.netrc use cut -d' ' -f1,2.",
 }
+# a stage that merely PRINTS what it is given is not a consumer: piping into it still puts the
+# value in the transcript, so `… | cat` must not buy an exemption that a bare command would not get.
+PRINTERS = {"cat", "tee", "less", "more", "head", "tail", "bat", "batcat", "nl", "tac", "xxd",
+            "od", "hexdump", "strings", "pr", "fold", "rev", "column", "view"}
 READERS = {"cat", "less", "more", "head", "tail", "bat", "batcat", "nl", "tac", "strings", "xxd", "od",
            "hexdump", "grep", "egrep", "fgrep", "rg", "ag", "sed", "awk", "gawk", "sort", "uniq", "base64", "jq", "yq"}
 WRAPPERS = {"sudo", "command", "exec", "time", "nohup", "nice", "stdbuf", "doas"}
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "fish"}
-DOTENV = re.compile(r"(?:^|/)\.env(?:$|[.\-_][^/]*$)")
+DOTENV = re.compile(r"(?:^|/)(?:\.env(?:$|[.\-_][^/]*$)|\.envrc$)")
 DOTENV_SAFE = re.compile(r"(?:example|sample|template|dist|defaults?|schema)$", re.I)
+# ⚠️ `.env.ts` is TypeScript that READS the environment and `.env-guide.md` is documentation.
+# Neither holds a value, and denying them is the kind of false positive that gets a guard
+# switched off. A data extension (.env.json, .env.yaml) is NOT here: those do hold values.
+DOTENV_SOURCE = re.compile(r"\.(?:ts|tsx|js|jsx|mjs|cjs|md|mdx|rst|txt|go|py|rb|rs|java|kt|php|c|h|cpp|sh|bash|zsh)$", re.I)
+# files whose whole purpose is to hold credentials
+CRED_FILE = re.compile(
+    r"(?:^|/)(?:\.netrc|_netrc|\.pgpass|\.my\.cnf"
+    r"|\.aws/credentials|\.docker/config\.json|\.kube/config"
+    r"|\.config/gh/hosts\.yml|\.npmrc|\.pypirc)$")
+STDOUTS = {"/dev/stdout", "/dev/fd/1", "-", "/proc/self/fd/1"}
+
+
+def _is_stdout(p):
+    return p in STDOUTS
+
+
+def _dotenv_path(p):
+    """True when p is a dotenv file that actually holds values."""
+    return bool(DOTENV.search(p)) and not DOTENV_SAFE.search(p) and not DOTENV_SOURCE.search(p)
 
 
 def _tokens(cmd):
@@ -258,7 +304,28 @@ def _structure(cmd):
             i += 2 if nxt not in ("&",) else 3
             continue
         elif t in ("<", "<<", "<<<"):
+            # ⚠️ `cat < .env` reads the file WITHOUT naming it in argv. Dropping the target here
+            # (what #209 did) made redirection a way to read any denied file. Keep it as a path.
+            if t == "<" and i + 1 < len(toks):
+                argv.append(toks[i + 1])
             i += 2
+            continue
+        elif not argv and t and t[0] in "({":
+            # `(env)` lexes as ONE token, because parens are not punctuation to shlex. In COMMAND
+            # position a paren or brace is grouping, never a name — but only there: awk's
+            # '{print $1}' is an argument and must survive untouched, which is why this is
+            # guarded on argv being empty.
+            t = t.lstrip("({")
+            while t and t[-1] in ")}":
+                t = t[:-1]
+            if t:
+                argv.append(t)
+            i += 1
+            continue
+        elif t in ("(", ")", "{", "}"):
+            # grouping only: `(env)` and `{ env; }` run the same command. #209 parsed the paren
+            # as the command name and saw nothing.
+            i += 1
             continue
         else:
             argv.append(t)
@@ -277,7 +344,17 @@ def _strip_prefix(argv):
         elif a[0] in WRAPPERS:
             a = a[1:]
         elif a[0] == "timeout" and len(a) > 1:
-            a = a[2:] if not a[1].startswith("-") else a[1:]
+            # ⚠️ `timeout -s KILL 10 env`: #209 dropped only the flag, then read `-s` as the
+            # command and stopped. Skip the options WITH their values, then the duration.
+            rest = a[1:]
+            while rest and rest[0].startswith("-"):
+                if rest[0] in ("-s", "--signal", "-k", "--kill-after") and len(rest) > 1:
+                    rest = rest[2:]
+                elif "=" in rest[0] or rest[0] in ("--preserve-status", "--foreground", "-f"):
+                    rest = rest[1:]
+                else:
+                    rest = rest[2:] if len(rest) > 1 else rest[1:]
+            a = rest[1:] if rest else rest  # drop the duration
         elif a[0] == "env":
             rest = a[1:]
             while rest and (rest[0].startswith("-") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", rest[0])):
@@ -298,7 +375,12 @@ def _names_only(stage):
     if not argv:
         return False
     j = " ".join(argv)
-    if argv[0] == "cut" and re.search(r"-d\s*=|-d\s*'='|--delimiter=?=", j) and re.search(r"-f\s*1\b|--fields=?1\b", j):
+    # ⚠️ the field list must be EXACTLY 1. `-f1,2` and `-f1-3` keep the value as well, and #209's
+    # `-f\s*1\b` matched both because \b sits happily before a comma.
+    if argv[0] == "cut" and re.search(r"-d\s*=|-d\s*'='|--delimiter=?=", j) and re.search(r"-f\s*1(?![0-9,\-])|--fields=?1(?![0-9,\-])", j):
+        return True
+    # a stage that prints only a COUNT cannot leak a value: `printenv | wc -l`.
+    if argv[0] == "wc" and argv[1:] and all(t in ("-l", "-w", "-c", "--lines", "--words", "--bytes") for t in argv[1:]):
         return True
     if argv[0] in ("awk", "gawk") and re.search(r"-F\s*=|-F'='", j) and re.search(r"print \$1\s*}", j):
         return True
@@ -320,6 +402,58 @@ def _opt(argv, *names):
     return None
 
 
+# options that take a SEPARATE value: the value is not an operand, whatever it looks like.
+# ⚠️ `kubectl get -n kube-system secret …` was ALLOWED by #209, because the first non-dash token
+# is the namespace. Reading an option's value as the resource is how a deny list quietly stops
+# denying — the command still names `secret`, one position further along.
+_KUBECTL_VALUE_OPTS = {"-n", "--namespace", "-o", "--output", "-l", "--selector", "--field-selector",
+                       "--context", "--kubeconfig", "--as", "--as-group", "--template", "--cluster",
+                       "--user", "--server", "--token", "--chunk-size", "--sort-by"}
+_SSH_VALUE_OPTS = {"-i", "-p", "-o", "-l", "-F", "-J", "-b", "-c", "-D", "-E", "-e", "-I", "-L",
+                   "-m", "-O", "-Q", "-R", "-S", "-W", "-w"}
+
+
+def _first_operand(argv, value_opts=_KUBECTL_VALUE_OPTS):
+    """The first token that is a real operand, skipping options and the values they consume."""
+    i = 0
+    while i < len(argv):
+        t = argv[i]
+        if t == "--":
+            i += 1
+            continue
+        if t.startswith("-"):
+            i += 2 if (t in value_opts and "=" not in t) else 1
+            continue
+        return t
+    return ""
+
+
+def _operands(argv, value_opts):
+    """Every operand, in order, with option values skipped."""
+    out, i = [], 0
+    while i < len(argv):
+        t = argv[i]
+        if t.startswith("-") and t != "--":
+            i += 2 if (t in value_opts and "=" not in t) else 1
+            continue
+        if t != "--":
+            out.append(t)
+        i += 1
+    return out
+
+
+# a jsonpath / custom-columns template that touches only metadata prints NAMES, which is the
+# safe form this guard recommends. Denying it is how people learn to switch the guard off.
+def _template_is_names_only(tpl):
+    """True when a jsonpath/custom-columns template never reaches secret material."""
+    if ".data" in tpl or "data[" in tpl:
+        return False
+    refs = re.findall(r"\.[A-Za-z_][A-Za-z0-9_.]*", tpl)
+    if not refs:
+        return False
+    return all(r.startswith((".metadata", ".items", ".kind", ".apiVersion", ".type")) for r in refs)
+
+
 def _kubectl(argv):
     if "get" not in argv:
         if "create" in argv and "secret" in argv:
@@ -327,8 +461,9 @@ def _kubectl(argv):
             return "kubectl" if fmt.split("=")[0] in ("yaml", "json") else None
         return None
     rest = argv[argv.index("get") + 1:]
-    res = next((t for t in rest if not t.startswith("-")), "")
-    kinds = {r.split("/")[0].lower() for r in res.split(",")}
+    res = _first_operand(rest)
+    # ⚠️ `secrets.v1.` is the same resource: kubectl accepts <resource>.<version>.<group>.
+    kinds = {r.split("/")[0].split(".")[0].lower() for r in res.split(",")}
     if not kinds & {"secret", "secrets"}:
         return None
     joined = " ".join(argv)
@@ -339,6 +474,9 @@ def _kubectl(argv):
     kind = fmt.split("=", 1)[0]
     if kind in ("name", "wide"):
         return None
+    if kind in ("jsonpath", "jsonpath-as-json", "custom-columns", "custom-columns-file") and "=" in fmt:
+        if _template_is_names_only(fmt.split("=", 1)[1]):
+            return None
     if kind.startswith("go-template") and "=" in fmt:
         tpl = fmt.split("=", 1)[1]
         m = re.search(r"range\s+\$(\w+)\s*,\s*\$(\w+)\s*:=\s*\.data\b", tpl)
@@ -366,12 +504,58 @@ def _rule_for(argv, piped, redirected):
     if c == "eval":
         return deny_reason(" ".join(a[1:]), nested=True)
     if c == "ssh":
-        cmdargs = [t for t in a[1:] if not t.startswith("-")][1:]
-        return deny_reason(" ".join(cmdargs), nested=True) if cmdargs else None
-    if c == "kubectl":
-        if "exec" in a and "--" in a:
-            return deny_reason(shlex.join(a[a.index("--") + 1:]), nested=True)
+        # ⚠️ option VALUES are not the host: `ssh -i key host env` gave #209 the operand list
+        # ["key","host","env"], so it read the remote command as "host env" and found nothing.
+        cmdargs = _operands(a[1:], _SSH_VALUE_OPTS)[1:]
+        return deny_reason(shlex.join(cmdargs), nested=True) if cmdargs else None
+    if c in ("kubectl", "k", "oc", "kubectl.exe"):
+        if "exec" in a:
+            # `--` is conventional, not required: `kubectl exec pod env` runs env just the same.
+            if "--" in a:
+                rest = a[a.index("--") + 1:]
+            else:
+                rest = _operands(a[a.index("exec") + 1:], _KUBECTL_VALUE_OPTS)[1:]
+            return deny_reason(shlex.join(rest), nested=True) if rest else None
         return _kubectl(a)
+    if c in ("docker", "podman", "nerdctl") and "exec" in a:
+        rest = _operands(a[a.index("exec") + 1:], {"-e", "--env", "-u", "--user", "-w", "--workdir"})[1:]
+        return deny_reason(shlex.join(rest), nested=True) if rest else None
+    if c == "ps":
+        # `ps eww` prints each process's ENVIRONMENT — but ONLY in BSD syntax, where flags carry
+        # no dash. In UNIX syntax `-e` means "every process" and prints no environment at all, so
+        # `ps -ef` is the most ordinary invocation there is and must stay allowed.
+        val_opts = {"-o", "-O", "--format", "-p", "--pid", "--ppid", "-u", "-U", "--user",
+                    "-g", "-G", "--group", "-s", "--sid", "-t", "--tty", "-C", "--sort"}
+        skip = False
+        for t in a[1:]:
+            if skip:
+                skip = False
+                continue
+            if t in val_opts:
+                skip = True
+                continue
+            # a BSD flag cluster: letters only, no dash. `-o pid,etime` is a VALUE, not flags.
+            if not t.startswith("-") and re.fullmatch(r"[a-zA-Z]+", t) and "e" in t:
+                return "proc-environ"
+        return None
+    if c == "aws":
+        sub = _operands(a[1:], {"--region", "--profile", "--output", "--secret-id", "--query"})
+        if sub[:2] == ["secretsmanager", "get-secret-value"] or sub[:2] == ["ssm", "get-parameter"] \
+           or sub[:2] == ["ssm", "get-parameters"] or sub[:2] == ["ssm", "get-parameters-by-path"]:
+            return "aws"
+        return None
+    if c == "gcloud":
+        sub = _operands(a[1:], {"--secret", "--project", "--format"})
+        if sub[:3] == ["secrets", "versions", "access"]:
+            return "gcloud"
+        return None
+    if c == "helm":
+        sub = _operands(a[1:], {"-n", "--namespace", "--kubeconfig", "-o", "--output"})
+        if sub[:2] == ["get", "values"] or sub[:2] == ["get", "all"]:
+            return "helm"
+        return None
+    if c == "git" and a[1:3] == ["credential", "fill"]:
+        return "git-credential"
     if c == "gh":
         if a[1:3] == ["auth", "token"]:
             return "gh-token"
@@ -379,6 +563,12 @@ def _rule_for(argv, piped, redirected):
             return "gh-token"
         return None
     if c == "printenv":
+        # ⚠️ `printenv NAME` prints ONE variable. Denying `printenv HOME` and `printenv PATH`
+        # teaches people that the guard is noise, and a guard people route around protects
+        # nothing. A secret-NAMED variable is still denied — that is D6c/H1a2.
+        names = [t for t in a[1:] if not t.startswith("-")]
+        if names:
+            return "env" if any(_SECRET_NAME.search(n) and not _NOT_SECRET_NAME.match(n) for n in names) else None
         return "env"
     if c in ("set", "export", "declare", "typeset") and (len(a) == 1 or a[1:] in (["-p"], ["-x"], ["-px"], ["-xp"])):
         return "env" if c != "set" or len(a) == 1 else None
@@ -404,13 +594,24 @@ def _rule_for(argv, piped, redirected):
                 return "vault"
             return None if (piped or redirected) else "vault"
         return None
-    if c == "az" and a[1:4] == ["keyvault", "secret", "show"]:
-        return "az"
+    if c == "az" and a[1:3] == ["keyvault", "secret"]:
+        if a[3:4] == ["show"]:
+            return "az"
+        # `--file /dev/stdout` turns a download into a print.
+        if a[3:4] == ["download"] and _is_stdout(_opt(a, "-f", "--file") or ""):
+            return "az"
+        return None
     if c == "op":
         if a[1:2] == ["read"] and not (piped or redirected or "--out-file" in a or "-o" in a):
             return "op"
         if a[1:3] == ["item", "get"] and "--reveal" in a:
             return "op"
+        return None
+    if c in ("cp", "install", "mv") and len(a) >= 3:
+        # `cp .env /dev/stdout` is a read dressed as a copy.
+        src, dst = a[1:-1], a[-1]
+        if _is_stdout(dst) and any(_dotenv_path(p) or CRED_FILE.search(p) for p in src if not p.startswith("-")):
+            return "dotenv"
         return None
     if c in READERS:
         paths = [t for t in a[1:] if not t.startswith("-")]
@@ -418,8 +619,10 @@ def _rule_for(argv, piped, redirected):
             return "proc-environ"
         if c in ("grep", "egrep", "fgrep", "rg") and re.search(r"(?:^|\s)-[a-zA-Z]*[clLq]", joined):
             return None
-        if any(DOTENV.search(p) and not DOTENV_SAFE.search(p) for p in paths):
+        if any(_dotenv_path(p) for p in paths):
             return "dotenv"
+        if any(CRED_FILE.search(p) for p in paths):
+            return "cred-file"
     return None
 
 
@@ -431,13 +634,30 @@ def deny_reason(cmd, nested=False):
         return _raw_fallback(cmd)
     for stages in pipelines:
         for idx, (argv, redir) in enumerate(stages):
-            nxt = stages[idx + 1] if idx + 1 < len(stages) else None
-            key = _rule_for(argv, piped=nxt is not None, redirected=redir)
+            rest = stages[idx + 1:]
+            nxt = rest[0] if rest else None
+            # ⚠️ `doctl apps spec get … | cat` is not "piped into a consumer", it is printed.
+            # #209 treated ANY pipe as a consumer, so appending `| cat` lifted the deny.
+            consumed = bool(rest) and not all(
+                (s[0] and os.path.basename(_strip_prefix(s[0])[0][0] if _strip_prefix(s[0])[0] else s[0][0]) in PRINTERS)
+                for s in rest)
+            key = _rule_for(argv, piped=consumed, redirected=redir)
             if key in ("env",) and nxt is not None and _names_only(nxt):
+                continue
+            if key == "kubectl" and nxt is not None and _keys_only(nxt):
                 continue
             if key:
                 return key
     return None
+
+
+def _keys_only(stage):
+    """True when the next stage keeps only the KEY names of a JSON object (`jq '.data|keys'`)."""
+    argv = stage[0]
+    if not argv or os.path.basename(argv[0]) not in ("jq", "yq"):
+        return False
+    prog = " ".join(t for t in argv[1:] if not t.startswith("-"))
+    return bool(re.search(r"\|\s*keys(_unsorted)?\b", prog)) and ".data." not in prog and "values" not in prog
 
 
 def _raw_fallback(cmd):
