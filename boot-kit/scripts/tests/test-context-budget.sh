@@ -261,6 +261,114 @@ OUT="$(gate sI7 "$W/i.jsonl")"
 blocked "$OUT" && bad "I7: checkpoint mode still fires once per crossing" "$OUT" || ok "I7: checkpoint mode still fires once per crossing"
 unwire_floor
 
+echo "=== J: RESUME after the clear — a REAL tmux pane, on a PRIVATE server ==="
+# ⛔ WHY REAL TMUX. Every case in I stops at a dry run, so no test had ever sent a key. The resume's
+# whole job is typing into a live input line: a mocked `tmux` would prove the code calls a
+# function, not that text arrives and is submitted. Here a fake TUI echoes what it receives, and
+# the assertion is on what is ON THE SCREEN.
+# ⛔ ISOLATION IS ASSERTED, NOT ASSUMED. This suite usually runs inside tmux, next to live agent
+# sessions. A scratch pane id like %3 can exist on the real server too, so a leaked command would
+# type into a stranger's session. Every tmux call below goes to a socket this suite creates, via
+# TMUX (which tmux honours when no -S/-L is given) — and J0 proves the server holds nothing else.
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "  SKIP J: tmux not installed — the resume is untested on this runner"
+else
+  SOCK="$W/tmux.sock"
+  TUI="$W/tui.sh"
+  # A fake Claude Code prompt: draw `❯ `, read one line, echo it back, repeat.
+  cat > "$TUI" <<'TUI_EOF'
+while true; do printf '\n\342\235\257 '; IFS= read -r line || exit 0; printf 'GOT: %s\n' "$line"; done
+TUI_EOF
+  # A prompt that is NOT empty: a human draft or a permission menu occupies the input line.
+  printf 'printf "\\n\\342\\235\\257 %%s" "$1"; sleep 60\n' > "$W/busy.sh"
+  tx() { TMUX="$SOCK,0,0" tmux "$@"; }
+  newpane() { tmux -S "$SOCK" new-session -d -s "$1" -x 160 -y 40 "$2"; tmux -S "$SOCK" list-panes -t "$1" -F '#{pane_id}'; }
+  shown() { tx capture-pane -p -t "$1" 2>/dev/null; }
+  wait_shown() { local i; for i in $(seq 1 40); do shown "$1" | grep -qF -- "$2" && return 0; sleep 0.25; done; return 1; }
+  helper() {  # helper <pane> <notepad> <t0> <record>
+    env TMUX="$SOCK,0,0" DF_CONTEXT_RESUME_SETTLE=0.5 DF_CONTEXT_RESUME_CLEAR_WAIT=4 \
+        DF_CONTEXT_RESUME_READY_WAIT=4 python3 "$GATE" --resume-after-clear "$@"
+  }
+  now() { python3 -c 'import time; print(repr(time.time()))'; }
+  mkdir -p "$W/rnp"; printf '# NOTES\n' > "$W/rnp/NOTES.md"; printf 'old floor\n' > "$W/rnp/PRECOMPACT.md"
+  mtime "$W/rnp/PRECOMPACT.md" -600
+
+  P1="$(newpane j1 "bash $TUI")"
+  # J0 — the private server holds exactly the pane this suite made, and nothing live.
+  NS="$(tmux -S "$SOCK" list-panes -a -F '#{pane_id}' | wc -l | tr -d ' ')"
+  [ "$NS" = "1" ] && ok "J0: ISOLATION — the private tmux server holds only this suite's pane" \
+                  || bad "J0: ISOLATION — private server holds only our pane" "saw $NS panes"
+  wait_shown "$P1" $'\342\235\257' || true
+
+  # J1 — the clear is observed (floor rewritten after the spawn), the prompt is empty and stable:
+  # the resume text ARRIVES in the pane and is SUBMITTED (the TUI echoes it after Enter).
+  T0="$(now)"; ( sleep 1; touch "$W/rnp/PRECOMPACT.md" ) &
+  helper "$P1" "$W/rnp" "$T0" "$W/j1.rec"; wait
+  wait_shown "$P1" "GOT: Autoclear just cleared" \
+    && ok "J1: REAL pane — the resume text arrived and was submitted with Enter" \
+    || bad "J1: resume text arrived and was submitted" "$(shown "$P1" | tail -5)"
+  grep -q '^.* RESUMED ' "$W/j1.rec" && ok "J1: the outcome is recorded as RESUMED" \
+                                     || bad "J1: outcome recorded" "$(cat "$W/j1.rec" 2>&1)"
+
+  # ⛔ J2 — CONTROL: the clear never happened (floor untouched). It must type NOTHING. Without this
+  # case J1 would also pass for a helper that ignores the floor and types on a timer.
+  P2="$(newpane j2 "bash $TUI")"; wait_shown "$P2" $'\342\235\257' || true
+  mtime "$W/rnp/PRECOMPACT.md" -600
+  helper "$P2" "$W/rnp" "$(now)" "$W/j2.rec"
+  shown "$P2" | grep -qF "GOT:" && bad "J2: no clear observed — typed nothing" "$(shown "$P2" | tail -3)" \
+                                || ok "J2: CONTROL — no clear observed, so it typed NOTHING"
+  grep -q 'clear-not-observed' "$W/j2.rec" && ok "J2: and it says why" || bad "J2: says why" "$(cat "$W/j2.rec" 2>&1)"
+
+  # J3 — a HUMAN DRAFT is in the input line. Never type over it, never clear it.
+  P3="$(newpane j3 "bash $W/busy.sh HALF-TYPED-BY-A-HUMAN")"; wait_shown "$P3" "HALF-TYPED" || true
+  T0="$(now)"; ( sleep 1; touch "$W/rnp/PRECOMPACT.md" ) &
+  helper "$P3" "$W/rnp" "$T0" "$W/j3.rec"; wait
+  shown "$P3" | grep -qF "Autoclear" && bad "J3: a human draft is never typed over" "$(shown "$P3" | tail -3)" \
+                                     || ok "J3: a human's half-typed draft is left alone"
+  grep -q 'prompt-never-ready' "$W/j3.rec" && ok "J3: and it says the prompt was never ready" \
+                                           || bad "J3: says why" "$(cat "$W/j3.rec" 2>&1)"
+
+  # J4 — the permission menu reuses the ❯ glyph ("❯ 1. Yes"). It is not an empty prompt.
+  P4="$(newpane j4 "bash $W/busy.sh '1. Yes'")"; wait_shown "$P4" "1. Yes" || true
+  T0="$(now)"; ( sleep 1; touch "$W/rnp/PRECOMPACT.md" ) &
+  helper "$P4" "$W/rnp" "$T0" "$W/j4.rec"; wait
+  shown "$P4" | grep -qF "Autoclear" && bad "J4: a permission menu is not a prompt" "$(shown "$P4" | tail -3)" \
+                                     || ok "J4: the permission menu (❯ 1. Yes) is not mistaken for a prompt"
+
+  # ⛔ J5 — THE WIRING, end to end through the real hook, with REAL keys (no dry run). The pure
+  # helper passing J1 proves nothing about whether the Stop hook ever SPAWNS it — the tested-core,
+  # untested-wiring shape (Engram `fdf3e309`). Armed, checkpoint fresh, floor wired: the hook must
+  # type /clear into the pane AND leave a detached helper that resumes once the clear is observed.
+  wire_floor
+  mkdir -p "$W/wnp"; printf '# NOTES\n' > "$W/wnp/NOTES.md"; printf 'old\n' > "$W/wnp/PRECOMPACT.md"
+  mtime "$W/wnp/PRECOMPACT.md" -600
+  P5="$(newpane j5 "bash $TUI")"; wait_shown "$P5" $'\342\235\257' || true
+  RS=(TMUX="$SOCK,0,0" TMUX_PANE="$P5" DF_CONTEXT_RESUME_SETTLE=0.5 DF_CONTEXT_RESUME_CLEAR_WAIT=8 DF_CONTEXT_RESUME_READY_WAIT=8)
+  ac sJ5 "$W/i.jsonl" "$W/wnp" "${RS[@]}" >/dev/null           # phase 1: arms
+  mtime "$W/wnp/NOTES.md" 600                                   # the checkpoint lands
+  ac sJ5 "$W/i.jsonl" "$W/wnp" "${RS[@]}" >/dev/null           # phase 2: fires for real
+  wait_shown "$P5" "GOT: /clear" && ok "J5: WIRING — the hook typed /clear into the real pane" \
+                                 || bad "J5: hook typed /clear" "$(shown "$P5" | tail -4)"
+  touch "$W/wnp/PRECOMPACT.md"                                  # SessionEnd(clear) writes the floor
+  wait_shown "$P5" "GOT: Autoclear just cleared" \
+    && ok "J5: WIRING — the hook's detached helper then resumed the session" \
+    || bad "J5: detached helper resumed" "$(shown "$P5" | tail -4)"
+
+  # J6 — DF_CONTEXT_AUTOCLEAR_RESUME=0 is a real off switch: /clear still fires, no resume follows.
+  P6="$(newpane j6 "bash $TUI")"; wait_shown "$P6" $'\342\235\257' || true
+  mtime "$W/wnp/PRECOMPACT.md" -600
+  RS6=(TMUX="$SOCK,0,0" TMUX_PANE="$P6" DF_CONTEXT_AUTOCLEAR_RESUME=0)
+  ac sJ6 "$W/i.jsonl" "$W/wnp" "${RS6[@]}" >/dev/null
+  mtime "$W/wnp/NOTES.md" 1200
+  ac sJ6 "$W/i.jsonl" "$W/wnp" "${RS6[@]}" >/dev/null
+  wait_shown "$P6" "GOT: /clear" || true
+  touch "$W/wnp/PRECOMPACT.md"; sleep 2
+  shown "$P6" | grep -qF "GOT: Autoclear" && bad "J6: RESUME=0 is off" "$(shown "$P6" | tail -3)" \
+                                          || ok "J6: DF_CONTEXT_AUTOCLEAR_RESUME=0 fires the clear and resumes nothing"
+  unwire_floor
+  tmux -S "$SOCK" kill-server 2>/dev/null || true
+fi
+
 echo
 echo "passed $PASS  failed $FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"

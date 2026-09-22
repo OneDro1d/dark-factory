@@ -325,6 +325,149 @@ def _fire_clear(pane):
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+# ---- RESUME AFTER THE CLEAR (2026-09-21) ----------------------------------------------------
+#
+# ⛔ WHY THIS EXISTS. autoclear was named "checkpoint, then CONTINUE" and shipped only the
+# checkpoint half: `_fire_clear` typed `/clear` + Enter and stopped. The new session received the
+# whole restore as CONTEXT -- and a SessionStart hook cannot start a turn, so it sat at an empty
+# prompt until a human typed. Measured 2026-09-21: seven clears fired on this box, and the operator
+# reported that none of the sessions resumed their mission afterwards.
+#
+# ⛔ WHY NOT A CRON (the operator's first proposal, rejected on the evidence). A tick fires on a
+# clock, not on the clear: most ticks land on sessions that are busy or deliberately waiting on the
+# operator, so it pushes them past the one natural pause and spends a turn per session per tick. It
+# cannot tell which session owns which mission (`mission-tick` has exactly that defect, Engram
+# `743565ea`). This file is the component that SENDS the clear, so it already knows the moment.
+#
+# ⛔ IT MUST BE DETACHED. `/clear` cannot execute until this Stop hook RETURNS, so the hook can never
+# wait for the new session itself -- it would be waiting for something its own return unblocks.
+#
+# The helper types only when THREE things are proven, each read fresh:
+#   1. THE CLEAR HAPPENED. `SessionEnd(clear)` rewrites the notepad's PRECOMPACT.md the moment the
+#      clear executes (the interlock above already refuses to fire without that writer). An mtime
+#      newer than the spawn is unforgeable; a timer is a guess.
+#   2. THE PROMPT IS READY AND STABLE. The LAST `❯` line is empty, continuously, for SETTLE seconds.
+#      This is nuntius-relay's production rule (pkg/tmuxsession inputLineEmpty), ported rather than
+#      re-invented: a human's half-typed draft ("❯ HALF-TYPED") and the permission menu ("❯ 1. Yes",
+#      which reuses the glyph) both have text after the glyph, so both fail it.
+#   3. STILL READY AT THE LAST MOMENT. Re-checked immediately before delivering. Never trust a read
+#      across the gap between deciding and doing.
+# ⚠️ FAILS CLOSED. If any proof never arrives it types NOTHING and records why. Typing into a pane
+# in an unknown state is worse than a session that waits for a human, which is today's behaviour.
+# ⚠️ THE PANE IS THE ONE THIS HOOK INHERITED (TMUX_PANE), never one found by listing -- see
+# `_tmux_pane`. On a shared box a listed pane can be a stranger's session.
+# ⚠️ Residual race, accepted: nuntius-relay also injects into idle panes. It re-checks the input line
+# right before injecting too, and a pasted-then-submitted prompt is non-empty then busy, so the
+# window is the ~0.3 s between paste and Enter.
+RESUME_TEXT = (
+    "Autoclear just cleared this session's context to free the window. Resume the mission from the "
+    "restored notepad above: read the newest handoff and NOTES.md, then take the ONE next action. "
+    "Do not re-derive state, and do not stop to ask unless you reach a genuine hard stop.")
+RESUME_BUFFER = "df-autoresume"
+
+
+def _input_line_empty(pane_text):
+    """nuntius-relay's rule: the LAST line starting with `❯` (after left-trim) has nothing after the
+    glyph but whitespace or NBSP. No `❯` line at all is NOT empty -- it is not a prompt."""
+    last = None
+    for line in pane_text.split("\n"):
+        line = line.rstrip("\r")
+        if line.lstrip(" ").startswith("❯"):
+            last = line
+    if last is None:
+        return False
+    rest = last.lstrip(" ")[1:]
+    return rest.strip(" \t ") == ""
+
+
+def _capture(pane):
+    try:
+        return subprocess.run(["tmux", "capture-pane", "-p", "-t", pane], check=True, timeout=10,
+                              capture_output=True, text=True).stdout
+    except Exception:
+        return None
+
+
+def _deliver(pane, text):
+    """Bracketed paste, then Enter as a separate keystroke -- nuntius-relay's delivery. A literal
+    send-keys would submit at the first embedded newline."""
+    subprocess.run(["tmux", "load-buffer", "-b", RESUME_BUFFER, "-"], input=text, text=True,
+                   check=True, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", RESUME_BUFFER, "-t", pane],
+                   check=True, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(0.3)
+    subprocess.run(["tmux", "send-keys", "-t", pane, "Enter"], check=True, timeout=10,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _resume_after_clear(pane, root, t0, record):
+    """The detached helper's body. Returns the outcome string it also writes to `record`."""
+    clear_wait = float(os.environ.get("DF_CONTEXT_RESUME_CLEAR_WAIT", "60"))
+    ready_wait = float(os.environ.get("DF_CONTEXT_RESUME_READY_WAIT", "120"))
+    settle = float(os.environ.get("DF_CONTEXT_RESUME_SETTLE", "3"))
+    poll = 0.5
+    floor = os.path.join(root, "PRECOMPACT.md")
+
+    def done(outcome):
+        try:
+            with open(record, "w") as fh:
+                fh.write("%s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), outcome))
+        except OSError:
+            pass
+        return outcome
+
+    deadline = time.time() + clear_wait
+    while True:
+        try:
+            if os.path.getmtime(floor) > t0:
+                break
+        except OSError:
+            pass
+        if time.time() >= deadline:
+            return done("SKIPPED clear-not-observed: %s not rewritten within %ss -- typed nothing"
+                        % (floor, clear_wait))
+        time.sleep(poll)
+
+    deadline = time.time() + ready_wait
+    stable_since = None
+    while True:
+        text = _capture(pane)
+        if text is not None and _input_line_empty(text):
+            stable_since = stable_since or time.time()
+            if time.time() - stable_since >= settle:
+                break
+        else:
+            stable_since = None
+        if time.time() >= deadline:
+            return done("SKIPPED prompt-never-ready: no stable empty input line in %s within %ss "
+                        "-- typed nothing" % (pane, ready_wait))
+        time.sleep(poll)
+
+    text = _capture(pane)
+    if text is None or not _input_line_empty(text):
+        return done("SKIPPED prompt-changed: the input line stopped being empty at the last "
+                    "moment -- typed nothing")
+    try:
+        _deliver(pane, os.environ.get("DF_CONTEXT_AUTOCLEAR_RESUME_TEXT") or RESUME_TEXT)
+    except Exception as exc:
+        return done("FAILED delivery: %s" % exc)
+    return done("RESUMED pane %s" % pane)
+
+
+def _schedule_resume(pane, root, record):
+    """Spawn the helper fully detached and return at once. Never raises: a resume that cannot be
+    scheduled leaves today's behaviour (the session waits for a human), which is safe."""
+    if os.environ.get("DF_CONTEXT_AUTOCLEAR_RESUME", "1") == "0":
+        return
+    try:
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), "--resume-after-clear",
+                          pane, root, repr(time.time()), record],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+    except Exception:
+        pass
+
+
 def _autoclear(event, armed_at):
     """Phase 2. Returns None if the clear FIRED, else (reason, retryable).
 
@@ -638,6 +781,12 @@ def main():
                 open(fired, "w").close()
             except OSError:
                 pass
+            # Checkpoint, then CONTINUE: without this the new session sits at an empty prompt.
+            # `_autoclear` just proved both the pane and the notepad exist, so neither is None.
+            root = _notepad_root(event.get("cwd") or "")
+            pane = _tmux_pane()
+            if root and pane:
+                _schedule_resume(pane, root, marker + ".resumed")
             # The keys are already in the pane; the clear happens as this turn ends. Blocking
             # here would start a turn that is about to be discarded.
             allow()
@@ -662,4 +811,8 @@ def main():
 
 
 if __name__ == "__main__":
+    # The detached resume helper re-enters this same file (one home for the rule it applies).
+    if len(sys.argv) == 6 and sys.argv[1] == "--resume-after-clear":
+        _resume_after_clear(sys.argv[2], sys.argv[3], float(sys.argv[4]), sys.argv[5])
+        sys.exit(0)
     main()
