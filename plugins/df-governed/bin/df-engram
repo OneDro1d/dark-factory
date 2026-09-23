@@ -30,6 +30,26 @@ returned its top hit with `vector_score 0` (keyword only) while every other hit 
 (vector only). Both legs work; a given document usually rides only one of them, so one query finds
 half the neighbours.
 
+⚠️ THE GRAPH PROJECTS EDGES AGAIN — re-measured 2026-09-22, and the re-measurement is the only
+reason this half of the tool exists. Engram `dde3d4fd` (2026-09-09) recorded the graph layer as
+INERT: `engram_link` returned `projection: "pending"`, `engram_neighbors` and `engram_traverse`
+stayed empty 45 s later, and `engram_search_graph` reported `graph_available: true` with
+`graph_score: 0` on every hit — a FALSE GREEN, which is why nobody noticed. On 2026-09-22 the same
+probe returned `projection: "complete"`, the edge read back from `engram_neighbors` IMMEDIATELY
+(links do NOT carry the search layer's 60-90 s lag; that lag is indexing, and it is a different
+thing), `traverse` returned real paths, and `search_graph` scored `graph_score: 0.52` alongside a
+new `graph_contributed: true` — the field that finally makes that false green falsifiable.
+
+    ⛔ THE OLD FINDING WAS NOT WRONG, IT WAS STALE. It was true when it was taken. Anything here
+      that claims the graph works is dated for exactly that reason: check the date before trusting
+      it, and re-probe before building anything new on top of it.
+
+⚠️ AND THE HUB LINKS ON ITS OWN. The probe found a second edge nobody asked for:
+`auto_similar`, `created_by: system:auto_link`, weight 0.92. So embedding-similar neighbours are
+ALREADY wired without help. That does not make RELATES_TO redundant — `auto_similar` is computed
+from embeddings, so it reproduces the VECTOR leg and misses the keyword-only neighbour entirely,
+which is the precise half the two-query search above exists to catch.
+
 What Engram is, and how a machine is authorised to reach it, is documented in exactly one place:
 [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
 
@@ -144,7 +164,7 @@ def read_front(path):
 
 
 def write_front(path, front, body):
-    order = ["title", "kind", "collection", "key", "status", "id", "created", "mission"]
+    order = ["title", "kind", "collection", "key", "status", "id", "created", "mission", "links"]
     lines = [f"{k}: {front[k]}" for k in order if front.get(k) is not None]
     lines += [f"{k}: {v}" for k, v in front.items() if k not in order and v is not None]
     tmp = path + ".tmp"
@@ -199,6 +219,321 @@ def call(tool, args):
         return False, r.stdout[:300]
 
 
+ANCHOR_REL = "anchors"                       # <notepad>/.df/engram-anchor.json
+MIN_SCORE = float(os.environ.get("DF_ENGRAM_MIN_SCORE", "0.35"))
+
+
+def anchor_path(notepad):
+    return os.path.join(notepad, ".df", "engram-anchor.json")
+
+
+def read_anchors(notepad):
+    try:
+        with open(anchor_path(notepad), encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def write_anchors(notepad, data):
+    p = anchor_path(notepad)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp, p)
+
+
+def anchor_collection(a=None):
+    return (getattr(a, "collection", None) or os.environ.get("DF_ENGRAM_ANCHOR_COLLECTION")
+            or "loom-sessions")
+
+
+def notepad_blurb(notepad):
+    """The anchor's body: what this notepad is FOR and what it drives. Read from the notepad's own
+    files, never invented — an anchor that describes the notepad wrongly is worse than none."""
+    name = os.path.basename(notepad.rstrip("/"))
+    lines = [f"Agent-notepad `{name}` at `{notepad}`.", ""]
+    scope = os.path.join(notepad, "SCOPE.md")
+    if os.path.isfile(scope):
+        head = []
+        with open(scope, encoding="utf-8") as f:
+            for line in f:
+                if len(head) >= 12:
+                    break
+                if line.strip():
+                    head.append(line.rstrip("\n"))
+        lines += ["## Objective (from SCOPE.md)", ""] + head + [""]
+    man = os.path.join(notepad, "repos.manifest.json")
+    if os.path.isfile(man):
+        try:
+            with open(man, encoding="utf-8") as f:
+                d = json.load(f)
+            repos = d.get("repos") or []
+            names = [r.get("name") or r.get("repo") for r in repos if isinstance(r, dict)]
+            names = [n for n in names if n]
+            if names:
+                lines += ["## Repos it drives", ""] + [f"- {n}" for n in sorted(names)] + [""]
+        except Exception:
+            pass
+    lines += ["This document is a GRAPH ANCHOR. Records written from this notepad link to it with "
+              "`RECORDED_BY_NOTEPAD`, so another session reaches this notepad's knowledge by "
+              "expanding from here.", ""]
+    return "\n".join(lines)
+
+
+def ensure_notepad_anchor(notepad, a, quiet=False):
+    """(id, created, note). Idempotent: an id already on disk is never re-created."""
+    data = read_anchors(notepad)
+    have = (data.get("notepad") or {}).get("id")
+    if have:
+        return have, False, "already recorded"
+    name = os.path.basename(notepad.rstrip("/"))
+    title = f"Notepad: {name}"
+    coll = anchor_collection(a)
+    okc, res = call("engram-prod__engram_write",
+                    {"collection": coll, "title": title, "kind": "document",
+                     "content": notepad_blurb(notepad)})
+    if not (okc and isinstance(res, dict) and res.get("id")):
+        return None, False, str(res)[:200]
+    data["notepad"] = {"name": name, "title": title, "collection": coll, "id": res["id"],
+                       "created": str(int(time.time()))}
+    write_anchors(notepad, data)
+    return res["id"], True, "created"
+
+
+def ensure_mission_anchor(notepad, mission, a):
+    """(id, created, note). Linked FROM_NOTEPAD -> the notepad anchor, so a mission is never an
+    island. Idempotent per mission id."""
+    np_id, _, np_note = ensure_notepad_anchor(notepad, a)
+    if not np_id:
+        return None, False, f"no notepad anchor ({np_note})"
+    data = read_anchors(notepad)
+    missions = data.setdefault("missions", {})
+    have = (missions.get(mission) or {}).get("id")
+    if have:
+        return have, False, "already recorded"
+    name = os.path.basename(notepad.rstrip("/"))
+    title = f"Mission: {mission} — {name}"
+    coll = anchor_collection(a)
+    body = (f"Mission `{mission}`, run from agent-notepad `{name}`.\n\n"
+            f"GRAPH ANCHOR. Records produced by this mission link here with `FROM_MISSION`; "
+            f"this document links to the notepad anchor with `FROM_NOTEPAD`.\n")
+    okc, res = call("engram-prod__engram_write",
+                    {"collection": coll, "title": title, "kind": "document", "content": body})
+    if not (okc and isinstance(res, dict) and res.get("id")):
+        return None, False, str(res)[:200]
+    mid = res["id"]
+    lok, lres = link(mid, np_id, "FROM_NOTEPAD")
+    missions[mission] = {"title": title, "collection": coll, "id": mid,
+                         "from_notepad": "ok" if lok else f"FAILED: {str(lres)[:80]}",
+                         "created": str(int(time.time()))}
+    write_anchors(notepad, data)
+    return mid, True, ("created" if lok else f"created, but FROM_NOTEPAD failed: {str(lres)[:80]}")
+
+
+def link(from_id, to_id, relation):
+    if not from_id or not to_id or from_id == to_id:
+        return False, "refused: an edge needs two different ids"
+    return call("engram-prod__engram_link",
+                {"from_id": from_id, "to_id": to_id, "relation": relation})
+
+
+def _hits(res):
+    """Normalise a search result to [(id, title, score)] across both tools' shapes."""
+    out = []
+    if not isinstance(res, dict):
+        return out
+    for r in res.get("results") or []:
+        if not isinstance(r, dict):
+            continue
+        rid = r.get("document_id") or r.get("object_id") or r.get("id")
+        if not rid:
+            continue
+        title = r.get("document_title") or r.get("title") or ""
+        try:
+            score = float(r.get("score") or r.get("merged_score") or 0)
+        except Exception:
+            score = 0.0
+        out.append((rid, title, score))
+    return out
+
+
+def first_sentence(text, n=220):
+    """A fallback paraphrase for the vector leg, taken from the body.
+
+    ⛔ WITHOUT THIS THE TOOL HALF-SEARCHES IN SILENCE. When `--relates-query` was omitted the
+    second leg simply did not run, so only keyword neighbours were ever linked — the exact failure
+    the two-query design exists to prevent, reintroduced by an unset default. A caller's own
+    paraphrase is still better; this only makes the floor non-broken. Caught by a test that
+    expected two hub searches and counted one."""
+    body = re.sub(r"[#*`>|\-]+", " ", (text or "").strip())
+    body = re.sub(r"\s+", " ", body).strip()
+    if not body:
+        return None
+    m = re.search(r"^(.{40,%d}?[.!?])\s" % n, body)
+    return (m.group(1) if m else body[:n]) or None
+
+
+def two_leg_search(query_kw, query_vec, collection, limit=10):
+    """⛔ TWO queries, because the legs fire separately (see the module docstring). Returns the
+    UNION, best score per id, ordered by score. One query finds about half of these."""
+    seen = {}
+    for q in [q for q in (query_kw, query_vec) if q]:
+        okc, res = call("engram-prod__engram_search",
+                        {"query": q, "collection": collection, "limit": limit,
+                         "min_score": MIN_SCORE})
+        if not okc:
+            continue
+        for rid, title, score in _hits(res):
+            if rid not in seen or score > seen[rid][1]:
+                seen[rid] = (title, score)
+    return sorted(([rid, t, s] for rid, (t, s) in seen.items()), key=lambda r: -r[2])
+
+
+def wire_record(notepad, doc_id, a, mission, relates_query, title, collection):
+    """Link a written record into the graph. Returns a summary string for the queue file.
+
+    ⛔ NEVER CALLED WITHOUT A doc_id. An UNPROVEN write has no id, and inventing one would put a
+    phantom node in the graph; reconcile wires it up later, once the id is known.
+    ⛔ A LINK FAILURE IS RECORDED, NEVER SWALLOWED — the record itself is already written, so the
+    failure must not look like success and must not undo the write."""
+    parts = []
+    np_id = (read_anchors(notepad).get("notepad") or {}).get("id")
+    if np_id:
+        okc, res = link(doc_id, np_id, "RECORDED_BY_NOTEPAD")
+        parts.append("RECORDED_BY_NOTEPAD=ok" if okc else f"RECORDED_BY_NOTEPAD=FAILED({str(res)[:40]})")
+    if mission:
+        m_id = ((read_anchors(notepad).get("missions") or {}).get(mission) or {}).get("id")
+        if m_id:
+            okc, res = link(doc_id, m_id, "FROM_MISSION")
+            parts.append("FROM_MISSION=ok" if okc else f"FROM_MISSION=FAILED({str(res)[:40]})")
+        else:
+            parts.append("FROM_MISSION=no-anchor")
+    n_ok, n_bad = 0, 0
+    for rid, _t, _s in two_leg_search(title, relates_query, collection)[:8]:
+        if rid == doc_id:            # ⛔ a fresh record can rank as its own top hit
+            continue
+        if n_ok >= 3:
+            break
+        okc, _res = link(doc_id, rid, "RELATES_TO")
+        if okc:
+            n_ok += 1
+        else:
+            n_bad += 1
+    parts.append(f"RELATES_TO={n_ok}" + (f" FAILED={n_bad}" if n_bad else ""))
+    for cid in (getattr(a, "corrects", None) or []):
+        okc, res = link(doc_id, cid, "CORRECTS")
+        parts.append(f"CORRECTS[{cid[:8]}]=" + ("ok" if okc else f"FAILED({str(res)[:40]})"))
+    return " ".join(parts)
+
+
+RECALL_CACHE = "engram-recall.txt"
+RECALL_BUDGET = int(os.environ.get("DF_ENGRAM_RECALL_BUDGET", "400"))
+
+
+def refresh_recall_cache(notepad, limit=5, budget=RECALL_BUDGET):
+    """The line SessionStart injects: the notepad anchor, then the newest records written FROM
+    this notepad. Ids and titles, never content.
+
+    ⛔ THIS IS A LOCAL FILE, NOT A SEARCH, AND THAT IS DELIBERATE. DESIGN.md §7 had SessionStart
+    query Engram for this. Measured 2026-09-22: one search is 2.5-4.9 s and the line needs two
+    legs plus a graph query — ~10 s on EVERY session start, on the restore path, for a line that
+    is usually not read; and the hook's environment may not carry the token at all, so it would
+    fail where it is least debuggable. The tool that writes a record already knows the answer, so
+    it writes the line then. What this CANNOT show is another session's writes until this notepad
+    writes again — which is why the file says so on its first line.
+
+    ⛔ IT CAN NEVER FAIL THE WRITE IT FOLLOWS. The record is the promise; this is a convenience."""
+    try:
+        anchors = read_anchors(notepad)
+        np_a = anchors.get("notepad") or {}
+        # ⛔ ONE LINE, AND EVERY WORD IN IT IS PAYING RENT. This is what SessionStart injects, out
+        # of the most contended payload in the estate: the first version cost 319 bytes and took
+        # them straight out of NOTES.md's slice (measured — the NOTES cut moved from 2227 to 1908).
+        # So it carries exactly four things: the anchor id, that it is a CACHE and not a live read,
+        # the command that IS live, and where the full list sits.
+        head = (f"Engram {(np_a.get('id') or '-')[:8]} anchors `{np_a.get('name') or '?'}` · cache, "
+                f"not live · `df-engram recall \"<topic>\"` · .df/{RECALL_CACHE}")
+        rows, qdir = [], os.path.join(notepad, QUEUE)
+        if os.path.isdir(qdir):
+            for name in os.listdir(qdir):
+                if not name.endswith(".md"):
+                    continue
+                try:
+                    front, _b = read_front(os.path.join(qdir, name))
+                except Exception:
+                    continue
+                if front.get("status") != "written" or not front.get("id"):
+                    continue
+                rows.append((float(front.get("created") or 0), front["id"], front.get("title") or ""))
+        rows.sort(reverse=True)
+        out, used = [head], len(head) + 1
+        for _c, rid, title in rows[:limit]:
+            line = f"  {rid[:8]}  {title}"
+            if len(line) > 90:
+                line = line[:87] + "..."
+            if used + len(line) + 1 > budget:
+                break
+            out.append(line)
+            used += len(line) + 1
+        if len(out) > 1:
+            out.append("  (`df-engram recall \"<topic>\"` reads the hub itself)")
+        p = os.path.join(notepad, ".df", RECALL_CACHE)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+        os.replace(tmp, p)
+    except Exception:
+        pass          # ⛔ never let a cache refresh disturb a written record
+
+
+def cmd_anchor(a, notepad):
+    np_id, created, note = ensure_notepad_anchor(notepad, a)
+    if not np_id:
+        sys.stderr.write(f"df-engram: the notepad anchor was NOT recorded — {note}\n"
+                         "Nothing was written to disk, so a later run retries cleanly.\n")
+        return 3
+    refresh_recall_cache(notepad)
+    print(f"df-engram: notepad anchor {np_id} ({note}) -> {anchor_path(notepad)}")
+    if a.mission:
+        m_id, _c, m_note = ensure_mission_anchor(notepad, a.mission, a)
+        if not m_id:
+            sys.stderr.write(f"df-engram: the mission anchor for {a.mission} was NOT recorded — "
+                             f"{m_note}\n")
+            return 3
+        print(f"df-engram: mission anchor {m_id} for {a.mission} ({m_note})")
+    return 0
+
+
+def cmd_recall(a, notepad):
+    """Ids and titles, never content — the restore budget is contended and a wall of Engram text
+    pushes NOTES.md out of the window. Content is fetched on demand, by id."""
+    rows = two_leg_search(a.topic, a.paraphrase or a.topic, a.collection, limit=a.limit)
+    okc, res = call("engram-prod__engram_search_graph",
+                    {"query": a.topic, "collection": a.collection, "limit": a.limit,
+                     "min_score": MIN_SCORE})
+    if okc:
+        have = {r[0] for r in rows}
+        rows += [[rid, t, s] for rid, t, s in _hits(res) if rid not in have]
+    if not rows:
+        print("df-engram: nothing above the score floor. That is an absence of HITS, not of "
+              "knowledge — try other words before concluding it is not there.")
+        return 0
+    out, used = [], 0
+    for rid, title, _s in rows[:a.limit]:
+        line = f"{rid[:8]}  {title}"[:200]
+        if a.budget and used + len(line) + 1 > a.budget:
+            break
+        out.append(line)
+        used += len(line) + 1
+    sys.stdout.write("\n".join(out) + "\n")
+    return 0
+
+
 def cmd_write(a, notepad):
     body = a.body
     if a.body_file:
@@ -228,7 +563,18 @@ def cmd_write(a, notepad):
     if okc and isinstance(res, dict) and res.get("id"):
         front["status"], front["id"] = "written", res["id"]
         write_front(path, front, body_with_key)
+        # The record exists now. The graph is a SECOND concern: it must not be able to undo that,
+        # and it must not be able to fail quietly either.
+        front["links"] = wire_record(notepad, res["id"], a, a.mission,
+                                     a.relates_query or first_sentence(body),
+                                     a.title, a.collection)
+        write_front(path, front, body_with_key)
+        refresh_recall_cache(notepad)
         print(f"df-engram: written {res['id']} -> {a.collection} ({path})")
+        print(f"  links: {front['links']}")
+        if "FAILED" in front["links"]:
+            print("  ⚠️ the RECORD is written; some EDGES are not. Re-run `df-engram anchor` and "
+                  "link again, or repair by id — the record is not lost either way.")
         return 0
     front["status"] = "UNPROVEN"
     write_front(path, front, body_with_key)
@@ -272,7 +618,12 @@ def cmd_reconcile(a, notepad):
         if found:
             front["status"], front["id"] = "written", found
             write_front(path, front, body)
+            front["links"] = wire_record(notepad, found, a, front.get("mission"),
+                                         first_sentence(body), front.get("title") or "",
+                                         front.get("collection"))
+            write_front(path, front, body)
             print(f"df-engram: {name} DID land as {found} — recorded, not rewritten.")
+            print(f"  links: {front['links']}")
             continue
         if not okc:
             print(f"df-engram: {name} — search itself failed ({str(res)[:120]}). Still UNPROVEN.")
@@ -283,11 +634,17 @@ def cmd_reconcile(a, notepad):
         if okc and isinstance(res, dict) and res.get("id"):
             front["status"], front["id"] = "written", res["id"]
             write_front(path, front, body)
+            front["links"] = wire_record(notepad, res["id"], a, front.get("mission"),
+                                         first_sentence(body), front.get("title") or "",
+                                         front.get("collection"))
+            write_front(path, front, body)
             print(f"df-engram: {name} retried and written as {res['id']}.")
+            print(f"  links: {front['links']}")
         else:
             print(f"df-engram: {name} still UNPROVEN — {TIMEOUT_NOTE}")
     if not touched:
         print("df-engram: nothing old enough to reconcile.")
+    refresh_recall_cache(notepad)
     return 0
 
 
@@ -305,10 +662,31 @@ def main():
     w.add_argument("--body", default="")
     w.add_argument("--body-file")
     w.add_argument("--mission")
+    w.add_argument("--relates-query", dest="relates_query",
+                   help="a ONE-SENTENCE paraphrase of the finding. ⛔ This is the second search "
+                        "leg: the title finds keyword neighbours, this finds vector ones. Omit it "
+                        "and half the neighbours go unlinked.")
+    w.add_argument("--corrects", action="append", default=[], metavar="ID",
+                   help="a document this one supersedes (repeatable). Never inferred — a CORRECTS "
+                        "edge is a claim, so it is only ever made because you named the id.")
     w.set_defaults(func=cmd_write)
 
     r = sub.add_parser("reconcile", help="re-probe UNPROVEN writes by their key, after the lag")
     r.set_defaults(func=cmd_reconcile)
+
+    an = sub.add_parser("anchor", help="ensure this notepad's (and a mission's) graph anchor")
+    an.add_argument("--mission", help="also ensure the anchor for this mission id")
+    an.add_argument("--collection", help=f"namespace for anchors (default: {anchor_collection()})")
+    an.set_defaults(func=cmd_anchor)
+
+    rc = sub.add_parser("recall", help="ids and titles for a topic — both search legs, plus graph")
+    rc.add_argument("topic")
+    rc.add_argument("--paraphrase", help="the second leg; defaults to the topic itself")
+    rc.add_argument("--collection")
+    rc.add_argument("--limit", type=int, default=5)
+    rc.add_argument("--budget", type=int, default=0,
+                    help="cap the output in BYTES (the SessionStart budget is ~400)")
+    rc.set_defaults(func=cmd_recall)
 
     a = p.parse_args()
     notepad = a.notepad or find_notepad(os.getcwd())
