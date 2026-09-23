@@ -118,6 +118,23 @@ cmd_profile() {
 die() { echo "df-mission: $*" >&2; exit 1; }
 mdir() { echo "$ROOT/$1"; }
 
+# ONE resolver for df-engram, used by both `start` and `stop`. It was written out twice, and two
+# copies of a lookup order is how one of them silently stops matching the other.
+# $DF_ENGRAM_BIN comes first so a test can stub the writer without a hub — the #220 wiring had no
+# such seam, which is why it shipped with nothing exercising it.
+# What Engram is, and how a machine is authorised to reach it, is documented in one place:
+# [Engram](../../starter-kit/instance/AUTHENTICATION.md#engram)
+df_engram_bin() {
+  local c
+  for c in "${DF_ENGRAM_BIN:-}" \
+           "$SCRIPTS/../../plugins/df-governed/bin/df-engram" \
+           "$(command -v df-engram 2>/dev/null || true)" \
+           "$HOME/.claude/skills/df-governed/bin/df-engram"; do
+    if [ -n "$c" ] && [ -f "$c" ]; then printf '%s' "$c"; return 0; fi
+  done
+  return 1
+}
+
 cmd_list() {
   [ -d "$ROOT" ] || { echo "no missions yet"; return 0; }
   for d in "$ROOT"/*/; do
@@ -188,6 +205,36 @@ cmd_stop() {
   local d; d="$(mdir "$id")"
   [ -d "$d" ] || die "no such mission: $id"
   echo STOP > "$d/state"
+  # ---- the mission's closing record, FIRED AND FORGOTTEN --------------------------------
+  # The anchor written at `start` says a mission BEGAN. Without this, the store never says how it
+  # ended, so a session on another machine can reach the mission and learn nothing about its
+  # outcome. This is the missing half of DESIGN.md §5.
+  #
+  # ⛔ FACTS ONLY, READ OFF DISK. Nothing here summarises or interprets, because nothing here
+  # CAN: a mechanical "result" that invents an outcome is worse than no record. It carries the
+  # final state, the iteration count and where to look. ⚠️ Deliberately NOT the supervisor log —
+  # that is unbounded text of unknown provenance, and this record goes to shared memory.
+  #
+  # ⛔ AND IT IS DETACHED, WHICH IS THE WHOLE POINT. `stop` is the brake on a runaway loop, and
+  # the reason it is a CLI at all is that it must work when nothing else does. df-engram's hub
+  # call allows up to 120 s; two minutes of waiting is not a brake. So it is backgrounded: the
+  # queue file is written locally either way, and `df-engram reconcile` heals it later.
+  if _eng="$(df_engram_bin)"; then
+    _iters="$(find "$d/iterations" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ')"
+    _body="Mission \`$id\` closed on notepad \`$(basename "$NOTEPAD")\`.
+final state: STOP
+iterations: ${_iters}
+mission dir: $d
+
+Recorded mechanically by \`df-mission stop\`. These are facts read off disk, not an assessment:
+what the mission achieved is in its handoff and its MISSION.md, not here."
+    (
+      "$_eng" --notepad "$NOTEPAD" write --kind session \
+        --collection "${DF_ENGRAM_MISSION_COLLECTION:-loom-sessions}" \
+        --title "Mission result: $id — $(basename "$NOTEPAD")" \
+        --body "$_body" --mission "$id" >/dev/null 2>&1 &
+    ) >/dev/null 2>&1
+  fi
   # STOP takes the mission out of RUNNING (attended) or CONTINUE (unattended) either way; the
   # owner-aware gates only ever consult `owner` while state=RUNNING, so clear it here rather
   # than leave a stale claim a later `own`/`start` would have to know to overwrite.
@@ -247,14 +294,15 @@ cmd_start() {
   # will WARN, and `df-engram anchor` can be re-run by hand from a session that has it.
   # What Engram is, and how a machine is authorised to reach it, is documented in one place:
   # [Engram](../../starter-kit/instance/AUTHENTICATION.md#engram)
-  _eng=""
-  for _c in "$SCRIPTS/../../plugins/df-governed/bin/df-engram" \
-            "$(command -v df-engram 2>/dev/null || true)" \
-            "$HOME/.claude/skills/df-governed/bin/df-engram"; do
-    if [ -n "$_c" ] && [ -f "$_c" ]; then _eng="$_c"; break; fi
-  done
+  _eng="$(df_engram_bin || true)"
   if [ -n "$_eng" ]; then
-    python3 "$_eng" --notepad "$NOTEPAD" anchor --mission "$id" >/dev/null 2>&1 || \
+    # ⚠️ INVOKED DIRECTLY, NOT VIA `python3`, and that is not a style choice. Running it as
+    # `python3 <path>` hard-codes the interpreter at the call site, which (a) disagrees with the
+    # `stop` path below and (b) makes the tool untestable: a stub handed to python3 is not run,
+    # so the test seam silently exercises nothing. df-engram carries its own shebang and is
+    # installed executable (its own suite asserts `-x`), so the shebang is the one home for
+    # "how is this interpreted".
+    "$_eng" --notepad "$NOTEPAD" anchor --mission "$id" >/dev/null 2>&1 || \
       echo "df-mission: WARN no Engram anchor for $id (run \`df-engram anchor --mission $id\`)" >&2
   fi
 
