@@ -535,6 +535,18 @@ def cmd_recall(a, notepad):
 
 
 def cmd_write(a, notepad):
+    # ⛔ HEAL WHAT IS PARKED, BECAUSE NOTHING ELSE WAS GOING TO. Measured 2026-09-23 by grepping
+    # every caller in Tier 1: NOTHING invoked `reconcile` automatically — the only other matches
+    # were unrelated DF doctrine using the same English word. So an UNPROVEN record sat on disk
+    # until a person happened to remember, which defeats a queue whose whole purpose is that a
+    # finding survives WITHOUT anyone remembering.
+    #
+    # The next write is the natural trigger: it already runs inside a session that holds the token
+    # and is already talking to the hub. `parked_due` is pure disk, so when nothing is parked this
+    # costs ZERO hub calls — the common case stays free, which is what makes it safe to do here.
+    if parked_due(notepad):
+        print("df-engram: reconciling parked record(s) from an earlier timeout first —")
+        cmd_reconcile(a, notepad)
     body = a.body
     if a.body_file:
         body = open(a.body_file, encoding="utf-8").read()
@@ -582,6 +594,63 @@ def cmd_write(a, notepad):
     return 0
 
 
+def find_in_store(collection, title, key):
+    """(id, note). Ask the OBJECT STORE whether our write landed.
+
+    ⛔ SEARCH CANNOT ANSWER THIS QUESTION, AND THAT IS MEASURED, NOT SUSPECTED. Engram `17f17b10`
+    (2026-09-21), and `8017bc3d` / `ec62a906` before it: `engram_read` and `engram_list` hit the
+    OBJECT STORE, while `engram_search` hits the VECTOR INDEX, which re-embeds on a delay. A
+    document that is plainly present reads ABSENT FROM SEARCH until the embedding lands.
+
+    A normal write embeds synchronously (measured 2026-09-23: a fresh document was searchable at
+    once, `embedded_count: 1`). The write that TIMES OUT is the one that commits with the embedding
+    unfinished — so search is blind in the one case this function exists for, and believing that
+    blindness is what produced duplicates by hand, twice.
+
+    ⚠️ AN ABSENCE HERE IS TRUSTWORTHY, unlike an absence from search: the store has no index lag.
+    That is what makes a retry safe rather than a coin toss.
+
+    list gives id + title only, never content, so the title narrows the candidates and `read`
+    confirms the ENGRAM-KEY. The key is the authority; the title merely shortlists."""
+    okc, res = call("engram-prod__engram_list", {"collection": collection, "limit": 200})
+    # ⚠️ ONLY A RESPONSE THAT IS ACTUALLY A LISTING MAY BE READ AS AN ABSENCE. A reply with no
+    # `objects` key is malformed or from something that does not implement list — and treating
+    # that as "your record is not there" licenses a retry, which is how a duplicate gets written.
+    # An absence is only trustworthy when the thing answering was able to answer.
+    if not okc or not isinstance(res, dict) or "objects" not in res:
+        return None, "unavailable"
+    for o in res.get("objects") or []:
+        if not isinstance(o, dict) or (o.get("title") or "") != title:
+            continue
+        rid = o.get("id")
+        if not rid:
+            continue
+        okr, doc = call("engram-prod__engram_read", {"document_id": rid})
+        if okr and key and key in json.dumps(doc):
+            return rid, "confirmed in the object store"
+    return None, "absent from the object store"
+
+
+def parked_due(notepad):
+    """Queue files that are UNPROVEN and old enough to re-probe. Cheap: pure disk, no hub call."""
+    out, qdir, now = [], os.path.join(notepad, QUEUE), time.time()
+    if not os.path.isdir(qdir):
+        return out
+    for name in sorted(os.listdir(qdir)):
+        if not name.endswith(".md"):
+            continue
+        p = os.path.join(qdir, name)
+        try:
+            front, _b = read_front(p)
+        except Exception:
+            continue
+        if front.get("status") != "UNPROVEN" or not front.get("key"):
+            continue
+        if now - float(front.get("created") or 0) >= MIN_AGE:
+            out.append(p)
+    return out
+
+
 def _hit_id(res, key):
     """A search result that CONTAINS OUR KEY is proof our write landed. Anything else is not."""
     if not isinstance(res, dict):
@@ -612,9 +681,20 @@ def cmd_reconcile(a, notepad):
                   "an absence this early is a FALSE NEGATIVE, not an absence. Leaving it.")
             continue
         touched += 1
-        okc, res = call("engram-prod__engram_search",
-                        {"query": front["key"], "collection": front.get("collection")})
-        found = _hit_id(res, front["key"]) if okc else None
+        # ⛔ OBJECT STORE FIRST. See find_in_store: search is blind to a write whose embedding has
+        # not landed, which is precisely the write that timed out.
+        found, note = find_in_store(front.get("collection"), front.get("title") or "", front["key"])
+        okc = True
+        if not found and note == "unavailable":
+            # Only when the store cannot be reached do we fall back to the weaker signal, and a
+            # miss here stays UNPROVEN rather than licensing a retry.
+            okc, res = call("engram-prod__engram_search",
+                            {"query": front["key"], "collection": front.get("collection")})
+            found = _hit_id(res, front["key"]) if okc else None
+            if not found:
+                print(f"df-engram: {name} — the object store was unreachable and search is blind to "
+                      "a fresh write, so this is still UNPROVEN. Not retried.")
+                continue
         if found:
             front["status"], front["id"] = "written", found
             write_front(path, front, body)
@@ -625,9 +705,9 @@ def cmd_reconcile(a, notepad):
             print(f"df-engram: {name} DID land as {found} — recorded, not rewritten.")
             print(f"  links: {front['links']}")
             continue
-        if not okc:
-            print(f"df-engram: {name} — search itself failed ({str(res)[:120]}). Still UNPROVEN.")
-            continue
+        # Reaching here means the OBJECT STORE answered and our record is genuinely absent. That
+        # absence is trustworthy — the store has no index lag — so the retry is safe rather than a
+        # coin toss. (The unreachable-store and blind-search cases both `continue` above.)
         okc, res = call("engram-prod__engram_write",
                         {"collection": front.get("collection"), "title": front.get("title"),
                          "kind": front.get("kind") or "knowledge", "content": body})

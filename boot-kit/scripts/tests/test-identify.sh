@@ -451,6 +451,38 @@ O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --match 
 contains "M7: names the matching record" "MATCHES:" "$O"
 if [ "$rc" -eq 0 ]; then ok "M7: exits 0"; else bad "M7: exits 0" "exit $rc"; fi
 
+echo "=== N: ⛔ a VALUE-TAKING FLAG WITH NO VALUE MUST REFUSE, NEVER SPIN ==="
+# ⛔ MEASURED IN THE FIELD, 2026-09-23, AND IT COST AN HOUR OF A FLEET SESSION. `identify.sh
+# --match` with no directory argument HUNG at 100% CPU for 10+ minutes and was killed. The cause is
+# four lines of the arg parser: `--match) DIR="${2:-}"; shift 2 ;;` — when the flag is the LAST
+# argument, `shift 2` has only one positional to consume, bash REFUSES the shift and leaves `$1`
+# exactly where it was, so `while [ $# -gt 0 ]` re-reads the same flag forever. `--lock`,
+# --declare` and `--machine` are written the same way and hang the same way.
+#
+# ⚠️ WHY THIS WAS NOT CAUGHT, AND IT IS THE MORE USEFUL HALF: every existing test, and my own
+# re-probe of the reported hang, passed the flag WITH its argument. The correct invocation cannot
+# see this defect. I ran that probe, got exit 0 in 0 seconds, and told the operator the script was
+# fine and not to fix it — a FALSE NEGATIVE FROM A SINGLE INVOCATION, reported as a fact about the
+# script. A missing required value is a usage error: it must print and exit 2.
+for _flag in --match --lock --declare --machine; do
+  START=$(date +%s)
+  O="$(timeout 10 bash "$ID" "$_flag" 2>&1)"; rc=$?
+  END=$(date +%s)
+  if [ "$rc" -eq 124 ]; then
+    bad "N: $_flag with no value refuses" "IT HUNG — timed out after $((END-START))s"
+  elif [ "$rc" -eq 2 ]; then
+    ok "N: $_flag with no value exits 2 in $((END-START))s"
+  else
+    bad "N: $_flag with no value exits 2" "exit $rc"
+  fi
+  contains "N: $_flag says what is missing" "$_flag" "$O"
+done
+# CONTROL, because every assertion above is about a REFUSAL and would pass against a script that
+# refuses everything. The same flag WITH a value must still work.
+O="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" --match "$T/instances-m7" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "N: CONTROL — the same flag WITH a value still exits 0"; \
+                     else bad "N: CONTROL" "exit $rc — the refusal is now too broad"; fi
+
 echo ""
 printf 'passed %d  failed %d\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %d\n' "$((PASS + FAIL))"
