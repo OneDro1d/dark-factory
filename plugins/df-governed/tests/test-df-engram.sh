@@ -373,6 +373,75 @@ chmod 700 "$NPA/.df" 2>/dev/null
 FQ="$(grep -l 'Q finding' "$NPA"/pending-engram/*.md | head -1)"
 contains "Q: and the record is still recorded as written" "status: written" "$(cat "$FQ")"
 
+echo "=== R: ⛔ reconcile asks the OBJECT STORE first, not the vector index ==="
+# ⛔ THE TOOL THIS USED TO ASK CANNOT ANSWER THE QUESTION IT IS ASKED. Engram `17f17b10`
+# (2026-09-21) and `8017bc3d`/`ec62a906` before it: `engram_read` and `engram_list` hit the OBJECT
+# STORE; `engram_search` hits the VECTOR INDEX, which re-embeds on a delay. A freshly written
+# document therefore reads ABSENT FROM SEARCH while being plainly present in the store.
+#
+# The first version of reconcile verified "did MY write land?" with `engram_search` on the
+# ENGRAM-KEY — the weaker check, and weaker EXACTLY in the case reconcile exists for. A normal
+# write embeds synchronously (measured 2026-09-23: a fresh doc was searchable at once,
+# `embedded_count: 1`); a TIMED-OUT write is the one that commits with the embedding unfinished,
+# which is where the estate measured the 60-90 s blind window. Believing that absence is what
+# created the duplicates, twice, by hand.
+#
+#   ⇒ list the namespace (object store) -> match OUR title -> read the candidate -> confirm the
+#     ENGRAM-KEY is in its body. Search stays as a fallback for when list is unavailable.
+: > "$DFE_LOG"
+NPR="$T/npr"; mkdir -p "$NPR"; printf '# NOTES\n' > "$NPR/NOTES.md"
+DF_ENGRAM_TRANSPORT="$TIMEOUT_T" "$CLI" --notepad "$NPR" write --title "R finding" --kind knowledge \
+  --collection loom-behaviors --body "committed, but the response timed out" >/dev/null 2>&1
+FR="$(grep -l 'R finding' "$NPR"/pending-engram/*.md | head -1)"
+KEYR="$(sed -n 's/^key: //p' "$FR")"
+# The hub that broke it: search is BLIND (the embedding has not landed), the store has the record.
+BLIND_T="$(mk_transport blind-search-transport '
+printf "%s %s\n" "$1" "$(tr -d "\n" < "$2")" >> "$DFE_LOG"
+case "$1" in
+  *engram_search) printf "{\"results\":[]}\n" ;;
+  *engram_list)   printf "{\"objects\":[{\"id\":\"77777777-7777-7777-7777-777777777777\",\"title\":\"R finding\"}]}\n" ;;
+  *engram_read)   printf "{\"id\":\"77777777-7777-7777-7777-777777777777\",\"content\":\"body ENGRAM-KEY REPLACEKEY\"}\n" ;;
+  *engram_write)  printf "{\"id\":\"doc-DUPLICATE-should-not-happen\"}\n" ;;
+  *engram_link)   printf "{\"status\":\"linked\"}\n" ;;
+  *) printf "{}\n" ;;
+esac')"
+sed -i.bak "s/REPLACEKEY/$KEYR/" "$BLIND_T"
+OUT="$(DF_ENGRAM_TRANSPORT="$BLIND_T" DF_ENGRAM_MIN_AGE=0 "$CLI" --notepad "$NPR" reconcile 2>&1)"
+contains "R: it finds the record the SEARCH could not see" "77777777" "$OUT"
+BODY="$(cat "$FR")"
+contains "R: and records that id" "id: 77777777" "$BODY"
+contains "R: flipping to written" "status: written" "$BODY"
+absent   "R: ⛔ NO DUPLICATE WAS WRITTEN" "doc-DUPLICATE-should-not-happen" "$BODY"
+N_DUP="$(grep -c 'engram_write' "$DFE_LOG" || true)"
+eq "R: ⛔ reconcile issued ZERO writes" "$N_DUP" "0"
+grep -q 'engram_list' "$DFE_LOG" && ok "R: it asked the object store" \
+                                 || bad "R: object store" "engram_list was never called"
+
+echo "=== S: a write HEALS the last timeout, so a parked record is not waiting on a human ==="
+# ⛔ NOTHING CALLED `reconcile`. Measured 2026-09-23 by grepping every caller in Tier 1: the only
+# references outside this plugin were unrelated DF doctrine using the same English word. So an
+# UNPROVEN record sat on disk until a person happened to remember — and the whole point of the
+# queue is that a finding survives WITHOUT anyone remembering.
+#   The next write is the natural trigger: it already runs in a session that has the token, and
+#   reconcile is a no-op with zero hub calls when nothing is old enough, so it costs nothing.
+: > "$DFE_LOG"
+# Park a FRESH one first: R's record was healed by R's own reconcile, so reusing it would have
+# tested nothing. (It did, on the first run — the assertion failed against correct code.)
+DF_ENGRAM_TRANSPORT="$TIMEOUT_T" "$CLI" --notepad "$NPR" write --title "S parked" --kind knowledge \
+  --collection loom-behaviors --body "parked, waiting for someone who never comes" >/dev/null 2>&1
+OUT="$(DF_ENGRAM_TRANSPORT="$BLIND_T" DF_ENGRAM_MIN_AGE=0 "$CLI" --notepad "$NPR" write \
+        --title "S finding" --kind knowledge --collection loom-behaviors --body "a later write" 2>&1)"
+contains "S: the write says it healed the earlier parked record" "reconcil" "$OUT"
+FSP="$(grep -l 'S parked' "$NPR"/pending-engram/*.md | head -1)"
+contains "S: and the parked record is no longer UNPROVEN" "status: written" "$(cat "$FSP")"
+echo "=== S2: CONTROL — with nothing parked, a write makes NO reconcile calls ==="
+: > "$DFE_LOG"
+NPS="$T/nps"; mkdir -p "$NPS"; printf '# NOTES\n' > "$NPS/NOTES.md"
+DF_ENGRAM_TRANSPORT="$OK_T" "$CLI" --notepad "$NPS" write --title "S2" --kind knowledge \
+  --collection loom-behaviors --body "nothing parked before this" >/dev/null 2>&1
+N_LIST="$(grep -c 'engram_list' "$DFE_LOG" || true)"
+eq "S2: no object-store call when there is nothing to heal" "$N_LIST" "0"
+
 printf 'passed %s  failed %s\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %s\n' "$((PASS+FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1
