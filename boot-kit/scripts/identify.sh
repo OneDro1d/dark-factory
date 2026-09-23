@@ -53,15 +53,37 @@ set -uo pipefail
 MODE=print
 LOCK=""
 DIR=""
+# ⛔ `need_value` EXISTS BECAUSE THE SPACED FORMS USED TO HANG, NOT AS TIDINESS.
+#
+# Every value-taking flag was written `--match) DIR="${2:-}"; shift 2 ;;`. When the flag is the
+# LAST argument there is only one positional to consume, so `shift 2` FAILS, bash leaves `$1`
+# exactly where it was, and `while [ $# -gt 0 ]` re-reads the same flag forever. `${2:-}` makes it
+# worse by hiding the missing value: the script never notices it has nothing to work with.
+#
+# Measured in the field 2026-09-23: `identify.sh --match` (no directory) spun at 100% CPU for over
+# ten minutes on a Coder workspace and had to be killed. It ran at install step 0b, so it looked
+# like the identity probe wedging — and the session that hit it concluded the machine could not be
+# identified and stopped. All four flags shared the bug.
+#
+# ⚠️ AND THE RE-PROBE THAT WAS SUPPOSED TO CONFIRM IT MISSED IT. The invocation used to check was
+# `--match instances`, WITH the argument, which returns in 0s. On that single reading the script
+# was reported as fine and "do not fix". A correct invocation cannot observe this class of defect;
+# a negative from one invocation is not a fact about the program. test-identify.sh section N now
+# exercises every flag with NO value, and keeps a control that passes one WITH a value.
+need_value() { # need_value <flag> <count-remaining>
+  [ "$2" -ge 2 ] && return 0
+  printf 'FATAL %s needs a value: %s <path>, or %s=<path>\n' "$1" "$1" "$1" >&2
+  exit 2
+}
 while [ $# -gt 0 ]; do
   case "$1" in
-    --lock)  MODE=check; LOCK="${2:-}"; shift 2 ;;
+    --lock)  need_value --lock $#;  MODE=check;   LOCK="$2"; shift 2 ;;
     --lock=*) MODE=check; LOCK="${1#--lock=}"; shift ;;
-    --match) MODE=match; DIR="${2:-}"; shift 2 ;;
+    --match) need_value --match $#; MODE=match;   DIR="$2";  shift 2 ;;
     --match=*) MODE=match; DIR="${1#--match=}"; shift ;;
-    --declare)  MODE=declare; LOCK="${2:-}"; shift 2 ;;
+    --declare)  need_value --declare $#; MODE=declare; LOCK="$2"; shift 2 ;;
     --declare=*) MODE=declare; LOCK="${1#--declare=}"; shift ;;
-    --machine)  MODE=machine; LOCK="${2:-}"; shift 2 ;;
+    --machine)  need_value --machine $#; MODE=machine; LOCK="$2"; shift 2 ;;
     --machine=*) MODE=machine; LOCK="${1#--machine=}"; shift ;;
     -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
     *) printf 'FATAL unknown option: %s\n' "$1" >&2; exit 2 ;;
