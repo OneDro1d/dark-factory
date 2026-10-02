@@ -81,46 +81,103 @@ TIMEOUT_NOTE = ("a timeout proves nothing either way — parked UNPROVEN, not re
 
 
 def _mcp_servers(start):
-    """The nearest .mcp.json, walking up. Returns {name: {url, headers}} or {}."""
+    """The nearest .mcp.json, walking up. Returns ({name: {url, headers}}, path_or_None)."""
     d = os.path.abspath(start)
     for _ in range(12):
         p = os.path.join(d, ".mcp.json")
         if os.path.isfile(p):
             try:
                 with open(p, encoding="utf-8") as f:
-                    return json.load(f).get("mcpServers") or {}
+                    return (json.load(f).get("mcpServers") or {}), p
             except Exception:
-                return {}
+                return {}, p
         parent = os.path.dirname(d)
         if parent == d:
             break
         d = parent
-    return {}
+    return {}, None
 
 
-def resolve_hub():
-    """(url, token_var) or (None, reason). The token VARIABLE NAME is read from the config's
-    Authorization header (`Bearer ${VAR}`), never the value — so nothing here holds a secret."""
+def resolve_auth():
+    """(hub, auth_header, source, why).
+
+    `auth_header` is the ready-to-send `Authorization:` VALUE. `source` describes where it came
+    from, in words safe to print — it never contains the credential. On failure auth_header is
+    None and `why` says what to set.
+
+    ⛔ THREE CREDENTIAL SOURCES, AND THE ORDER IS THE POINT.
+      1. DF_ENGRAM_TOKEN_VAR — an explicit override, so it wins and the config is not consulted.
+      2. The config entry's Authorization header as a `${VAR}` INDIRECTION — resolve that variable.
+      3. The config entry's Authorization header LITERALLY — use it as it stands.
+
+    (3) is the case this function was missing, and its absence cost a session's writes on
+    2026-10-02. A `.mcp.json` that carries the bearer token literally is the normal shape for
+    every other MCP client on the box, so the config was correct and only this tool could not
+    read it. It fell through to TOKEN_VAR_DEFAULT and then reported that the DEFAULT variable was
+    unset — true, and about a variable nothing in the config had ever named.
+
+    ⛔ A SILENT FALLBACK TO A DIFFERENT NAME IS WORSE THAN A REFUSAL. The error then describes the
+    guess instead of the gap, and the reader goes looking for a missing secret when the real
+    problem is the config's FORM. So the default is still used — a kit may legitimately rely on
+    it — but it is reported as a GUESS, with the file and server that failed to say.
+    """
     env_hub = os.environ.get("DF_ENGRAM_HUB")
-    token_var = os.environ.get("DF_ENGRAM_TOKEN_VAR")
-    servers = _mcp_servers(os.getcwd())
+    chosen_var = os.environ.get("DF_ENGRAM_TOKEN_VAR")
+    servers, cfg = _mcp_servers(os.getcwd())
     name = os.environ.get("DF_ENGRAM_SERVER")
-    entry = None
+    entry, entry_name = None, name
     if name and name in servers:
         entry = servers[name]
     elif not name and len(servers) == 1:
-        entry = next(iter(servers.values()))
+        entry_name, entry = next(iter(servers.items()))
     if entry and not env_hub:
         env_hub = entry.get("url")
-    if entry and not token_var:
-        auth = (entry.get("headers") or {}).get("Authorization", "")
-        m = re.search(r"\$\{?([A-Z0-9_]+)\}?", auth)
-        if m:
-            token_var = m.group(1)
     if not env_hub:
-        return None, ("no Engram endpoint: set DF_ENGRAM_HUB, or DF_ENGRAM_SERVER to a server in "
-                      "the nearest .mcp.json (found: %s)" % (", ".join(sorted(servers)) or "none"))
-    return env_hub, (token_var or TOKEN_VAR_DEFAULT)
+        return None, None, None, (
+            "no Engram endpoint: set DF_ENGRAM_HUB, or DF_ENGRAM_SERVER to a server in "
+            "the nearest .mcp.json (found: %s)" % (", ".join(sorted(servers)) or "none"))
+
+    where = "%s server '%s'" % (cfg, entry_name) if entry else "no .mcp.json entry"
+
+    # 1. an explicit variable name wins outright
+    if chosen_var:
+        tok = os.environ.get(chosen_var)
+        src = "DF_ENGRAM_TOKEN_VAR names %s" % chosen_var
+        if not tok:
+            return env_hub, None, src, "%s is not set in this environment (named by " \
+                                       "DF_ENGRAM_TOKEN_VAR)" % chosen_var
+        return env_hub, "Bearer " + tok, src, None
+
+    auth = (entry.get("headers") or {}).get("Authorization", "") if entry else ""
+    m = re.search(r"\$\{?([A-Z0-9_]+)\}?", auth)
+
+    # 2. the config points at a variable — resolve THAT one, and name it in any refusal
+    if m:
+        var = m.group(1)
+        tok = os.environ.get(var)
+        src = "%s refers to ${%s}" % (where, var)
+        if not tok:
+            return env_hub, None, src, "%s is not set in this environment (referred to by the " \
+                                       "Authorization header in %s)" % (var, where)
+        return env_hub, "Bearer " + tok, src, None
+
+    # 3. the config carries the credential literally — usable exactly as it stands
+    if auth.strip():
+        return env_hub, auth.strip(), "%s has a literal Authorization header " \
+                                      "(value not shown)" % where, None
+
+    # 4. nothing named a credential. Use the default, but call it a GUESS.
+    tok = os.environ.get(TOKEN_VAR_DEFAULT)
+    src = "nothing named a credential — guessing the default %s" % TOKEN_VAR_DEFAULT
+    if not tok:
+        return env_hub, None, src, (
+            "no credential: %s has no Authorization header, so the variable name %s is a GUESS, "
+            "not something you configured — and it is not set either. Fix EITHER end: put the "
+            "token in that header (literally, or as ${YOUR_VAR}), or set DF_ENGRAM_TOKEN_VAR to "
+            "the variable you do use." % (where, TOKEN_VAR_DEFAULT))
+    return env_hub, "Bearer " + tok, src, None
+
+
 
 
 def find_notepad(start):
@@ -192,14 +249,11 @@ def call(tool, args):
             return True, json.loads(r.stdout)
         except Exception:
             return False, r.stdout.strip()
-    hub, token_var = resolve_hub()
-    if not hub:
-        return False, token_var          # the reason, when hub is None
-    token = os.environ.get(token_var)
-    if not token:
-        return False, f"{token_var} is not set in this environment"
+    hub, auth, _src, why = resolve_auth()
+    if not auth:
+        return False, why                # the reason: no endpoint, or no resolvable credential
     cmd = ["curl", "-sS", "-m", "90", "-X", "POST", hub,
-           "-H", f"Authorization: Bearer {token}",
+           "-H", f"Authorization: {auth}",
            "-H", "Accept: application/json, text/event-stream",
            "-H", "Content-Type: application/json",
            "-d", json.dumps(payload)]
@@ -548,11 +602,10 @@ def cmd_write(a, notepad):
     # THE FILE FIRST. Everything after this can fail without losing the finding.
     write_front(path, front, body_with_key)
     if not os.environ.get("DF_ENGRAM_TRANSPORT"):
-        hub, token_var = resolve_hub()
-        if not hub or not os.environ.get(token_var):
+        _hub, auth, _src, why = resolve_auth()
+        if not auth:
             front["status"] = "UNPROVEN"
             write_front(path, front, body_with_key)
-            why = token_var if not hub else f"{token_var} is not set in this environment"
             sys.stderr.write(
                 f"df-engram: nothing was sent — {why}.\n"
                 f"The finding is QUEUED at {path} — run `df-engram reconcile` from a session that has it.\n")
@@ -648,6 +701,26 @@ def cmd_reconcile(a, notepad):
     return 0
 
 
+def cmd_auth_check(a, notepad):
+    """Say WHERE the credential comes from, and never what it is.
+
+    This exists because the failure it diagnoses is invisible: the tool reported a variable name
+    it had guessed, so the message looked like a missing secret rather than a config whose FORM it
+    could not read. One command that prints the SOURCE turns that into a ten-second check.
+
+    It is also the test suite's only seam into resolution — DF_ENGRAM_TRANSPORT short-circuits
+    ahead of it, so nothing else can reach this code without a network.
+    """
+    hub, auth, src, why = resolve_auth()
+    print("hub:    %s" % (hub or "UNRESOLVED"))
+    print("auth:   %s" % (src or "UNRESOLVED"))
+    if not auth:
+        sys.stderr.write("df-engram: %s\n" % why)
+        return 3
+    print("status: resolved — the credential is usable and is not printed here")
+    return 0
+
+
 def main():
     p = argparse.ArgumentParser(prog="df-engram", description=__doc__.split("\n")[0],
                                 epilog=f"Queue: <notepad>/{QUEUE}/ — the file is written BEFORE the "
@@ -687,6 +760,10 @@ def main():
     rc.add_argument("--budget", type=int, default=0,
                     help="cap the output in BYTES (the SessionStart budget is ~400)")
     rc.set_defaults(func=cmd_recall)
+
+    ac = sub.add_parser("auth-check", help="where the hub and credential resolve FROM — never the "
+                                          "credential itself")
+    ac.set_defaults(func=cmd_auth_check)
 
     a = p.parse_args()
     notepad = a.notepad or find_notepad(os.getcwd())

@@ -373,6 +373,67 @@ chmod 700 "$NPA/.df" 2>/dev/null
 FQ="$(grep -l 'Q finding' "$NPA"/pending-engram/*.md | head -1)"
 contains "Q: and the record is still recorded as written" "status: written" "$(cat "$FQ")"
 
+echo "=== R: the credential SOURCE is named, and a literal Authorization header is usable ==="
+# ⛔ THE MEASURED FAILURE, 2026-10-02 on the onedroid homelab box. `.mcp.json` held the bearer token
+# LITERALLY (as every MCP client there expects), not as `Bearer ${VAR}`. resolve_hub's regex found no
+# ${VAR}, silently fell back to the default var name SYNAPSE_ENGRAM_PAT -- which nothing had ever set
+# -- and the writer reported "SYNAPSE_ENGRAM_PAT is not set in this environment". Every word of that
+# was true and it pointed at a variable the config never mentioned, so it read as a missing-secret
+# problem rather than a config-form problem. A silent fallback to a DIFFERENT name is worse than a
+# refusal: the error names the guess, not the gap.
+#
+# `auth-check` exists so the source is checkable WITHOUT printing a credential. It is also this
+# suite's only seam into resolution, because DF_ENGRAM_TRANSPORT short-circuits ahead of it.
+AT="$T/authcheck"; mkdir -p "$AT/deep"; printf '# NOTES\n' > "$AT/NOTES.md"
+
+mk_mcp() { # mk_mcp <dir> <auth-header-value>
+  printf '{"mcpServers":{"hubname":{"type":"http","url":"https://example.invalid/mcp","headers":{"Authorization":"%s"}}}}\n' \
+    "$2" > "$1/.mcp.json"
+}
+
+# R1 — a LITERAL header. Usable as-is: nothing needs an env var at all.
+mk_mcp "$AT" 'Bearer sk-fixture-not-a-real-token'
+OUT="$(cd "$AT/deep" && env -u DF_ENGRAM_TRANSPORT -u DF_ENGRAM_HUB -u DF_ENGRAM_TOKEN_VAR \
+        DF_ENGRAM_SERVER=hubname "$CLI" --notepad "$AT" auth-check 2>&1)"; RC=$?
+eq "R1: a literal Authorization header resolves" "$RC" "0"
+contains "R1: and it says the header came from the config" "literal" "$OUT"
+contains "R1: naming the file it read" ".mcp.json" "$OUT"
+absent "R1: ⛔ and it NEVER prints the credential" "sk-fixture-not-a-real-token" "$OUT"
+absent "R1: nor does it fall back to the default var name" "SYNAPSE_ENGRAM_PAT" "$OUT"
+
+# R2 — a ${VAR} reference whose variable is UNSET. The refusal must name THAT var, not the default.
+mk_mcp "$AT" 'Bearer ${MY_ESTATE_PAT}'
+OUT="$(cd "$AT/deep" && env -u DF_ENGRAM_TRANSPORT -u DF_ENGRAM_HUB -u DF_ENGRAM_TOKEN_VAR \
+        -u MY_ESTATE_PAT DF_ENGRAM_SERVER=hubname "$CLI" --notepad "$AT" auth-check 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "R2: an unset referenced variable refuses" || bad "R2: refuses" "rc=$RC"
+contains "R2: and names the variable THE CONFIG asked for" "MY_ESTATE_PAT" "$OUT"
+absent "R2: ⛔ not the default it would otherwise have guessed" "SYNAPSE_ENGRAM_PAT" "$OUT"
+
+# R3 — nothing names a credential anywhere. The refusal must say it is GUESSING and name the config.
+printf '{"mcpServers":{"hubname":{"type":"http","url":"https://example.invalid/mcp"}}}\n' > "$AT/.mcp.json"
+OUT="$(cd "$AT/deep" && env -u DF_ENGRAM_TRANSPORT -u DF_ENGRAM_HUB -u DF_ENGRAM_TOKEN_VAR \
+        -u SYNAPSE_ENGRAM_PAT DF_ENGRAM_SERVER=hubname "$CLI" --notepad "$AT" auth-check 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "R3: no credential source at all refuses" || bad "R3: refuses" "rc=$RC"
+contains "R3: ⛔ it says the name is a GUESS, not something it was told" "guess" "$OUT"
+contains "R3: names the default it guessed" "SYNAPSE_ENGRAM_PAT" "$OUT"
+contains "R3: and names the config that failed to say" "hubname" "$OUT"
+
+# R4 — DF_ENGRAM_TOKEN_VAR wins over the config, and says so. This is the documented workaround.
+mk_mcp "$AT" 'Bearer ${MY_ESTATE_PAT}'
+OUT="$(cd "$AT/deep" && env -u DF_ENGRAM_TRANSPORT -u DF_ENGRAM_HUB \
+        DF_ENGRAM_TOKEN_VAR=CHOSEN_PAT CHOSEN_PAT=fixture-value \
+        DF_ENGRAM_SERVER=hubname "$CLI" --notepad "$AT" auth-check 2>&1)"; RC=$?
+eq "R4: an explicit DF_ENGRAM_TOKEN_VAR resolves" "$RC" "0"
+contains "R4: and it names the variable it was told to use" "CHOSEN_PAT" "$OUT"
+absent "R4: ⛔ never printing its value" "fixture-value" "$OUT"
+absent "R4: and the config's variable is not consulted" "MY_ESTATE_PAT" "$OUT"
+
+# R5 — the CONTROL. A check that cannot fail is not a check: the same command on a hub it cannot
+# resolve at all must refuse, or R1/R4's green says nothing.
+OUT="$(cd "$T" && env -u DF_ENGRAM_TRANSPORT -u DF_ENGRAM_HUB -u DF_ENGRAM_SERVER \
+        "$CLI" --notepad "$AT" auth-check 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "R5: CONTROL — no hub resolvable still refuses" || bad "R5: control fired" "rc=$RC"
+
 printf 'passed %s  failed %s\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %s\n' "$((PASS+FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1

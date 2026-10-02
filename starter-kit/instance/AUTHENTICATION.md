@@ -182,6 +182,39 @@ Two things from that page are worth surfacing here, because they change what you
 > means that process cannot write to the tracker or to memory, so any work it goes on to do
 > is invisible to whatever runs next — which is worse than not doing the work.
 
+### A literal token in the header still works, and `df-engram auth-check` tells you which you have
+
+Everything above is advice about what you *should* write. It is not a claim about what the
+tools will *read*. Real configs on real machines hold the token literally — a harness wrote
+it there, or someone pasted it to get unblocked — and a tool that cannot read that config is
+broken, not principled. So `df-engram` resolves a credential from three places, in this order:
+
+| where | what it means |
+|---|---|
+| `DF_ENGRAM_TOKEN_VAR` | you name the variable yourself; the config is not consulted |
+| `Authorization: Bearer ${VAR}` in the config | the indirection this page recommends — that variable is read |
+| `Authorization: <token>` in the config | the literal form — used exactly as it stands |
+
+⛔ **Why this is worth a section: a silent fallback to a DIFFERENT name is worse than a
+refusal.** Before 2026-10-02 the second row was the only one that worked. Given a literal
+header the tool found no `${…}` to match, quietly fell back to a default variable name, and
+then reported *that* variable as unset. Every word of the error was true and it named a
+variable the config had never mentioned — so it read as a missing secret when the real
+problem was the config's **form**. The reader had no way to tell a guessed name from a
+configured one, because the message printed them identically.
+
+It still falls back to the default, because a kit may legitimately rely on it. It now says so,
+and names the file and server that failed to say:
+
+```sh
+df-engram auth-check     # prints the hub and WHERE the credential came from — never the credential
+```
+
+⚠️ The advice in §3 is unchanged: **prefer `${VAR}`.** A literal token in a config is still a
+token that travels into a screenshot or a commit. The tool reading it is a concession to
+reality, not a recommendation — and `auth-check` naming the literal form in its output is the
+nudge.
+
 ---
 
 ## 4. Connectors — what each one needs
