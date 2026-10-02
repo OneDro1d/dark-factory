@@ -151,11 +151,26 @@ printf 'Objective: prove the anchors.\n' > "$NPA/SCOPE.md"
 # for the notepad anchor AND the new record, so every edge the CLI tried was a self-edge, correctly
 # refused — and three assertions failed against CORRECT code. A fixture that cannot tell two nodes
 # apart cannot test a graph.
-D_ID="11111111-1111-1111-1111-111111111111"   # the record a write returns
-A_ID="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"   # the NOTEPAD anchor
-M_ID="55555555-5555-5555-5555-555555555555"   # the MISSION anchor
-V_ID="22222222-2222-2222-2222-222222222222"   # findable ONLY by the paraphrase (vector leg)
-K_ID="44444444-4444-4444-4444-444444444444"   # findable ONLY by the title   (keyword leg)
+#
+# ⚠️ AND DISTINCT IN THEIR FIRST 8 CHARACTERS, because that is the form the tests observe. The CLI
+# prints `rid[:8]` (bin/df-engram:529, :582) and two assertions below grep that displayed prefix. A
+# rename that kept the ids distinct but collided on the prefix reintroduced the exact defect above
+# through the DISPLAY path instead of the data path. The rule is not "distinct ids" — it is
+# "distinct in every form the test observes".
+#
+# ⛔ AND NOT UUID-SHAPED, which is not cosmetic. landmarks.example.conf's P4 class has a bare
+# 8-4-4-4-12 hex branch, deliberately: it is the only P4 branch that still works in CI, where the
+# real config is absent. UUID fixtures here made `gate-selftest.sh` report FINDINGS on main from
+# #220 (2026-09-23) until 2026-10-02 — ten days in which every PR carried an inherited red check
+# and no PR caused it. Fixed in the FIXTURE, not the gate: a path exclusion would let a real UUID
+# dropped into this file later sail straight through, and nothing in df-engram parses an id's shape.
+# ⚠️ The gate's own comment claimed "ZERO matches across this entire repository" — true when it was
+# measured, and a measurement is not a permanent property of a repo that keeps changing.
+D_ID="fxrecord1"   # the record a write returns
+A_ID="fxnotepad"   # the NOTEPAD anchor
+M_ID="fxmission"   # the MISSION anchor
+V_ID="fxvector1"   # findable ONLY by the paraphrase (vector leg)
+K_ID="fxkeyword"   # findable ONLY by the title   (keyword leg)
 
 # One transport for the whole graph half. It hands back a DIFFERENT neighbour per search leg, which
 # is how the suite proves two searches actually ran rather than trusting that they did.
@@ -165,16 +180,16 @@ Q="$(cat "$2")"
 case "$1" in
   *engram_write)
      case "$Q" in
-       *Mission:*)  printf "{\"id\":\"55555555-5555-5555-5555-555555555555\"}\n" ;;
-       *Notepad:*)  printf "{\"id\":\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\"}\n" ;;
-       *)           printf "{\"id\":\"11111111-1111-1111-1111-111111111111\"}\n" ;;
+       *Mission:*)  printf "{\"id\":\"fxmission\"}\n" ;;
+       *Notepad:*)  printf "{\"id\":\"fxnotepad\"}\n" ;;
+       *)           printf "{\"id\":\"fxrecord1\"}\n" ;;
      esac ;;
   *engram_search_graph)
-     printf "{\"results\":[{\"object_id\":\"66666666-6666-6666-6666-666666666666\",\"title\":\"graph neighbour\"}]}\n" ;;
+     printf "{\"results\":[{\"object_id\":\"fxgraph01\",\"title\":\"graph neighbour\"}]}\n" ;;
   *engram_search)
      case "$Q" in
-       *PARAPHRASE*) printf "{\"results\":[{\"document_id\":\"22222222-2222-2222-2222-222222222222\",\"document_title\":\"vector-leg neighbour\",\"score\":0.91}]}\n" ;;
-       *)            printf "{\"results\":[{\"document_id\":\"44444444-4444-4444-4444-444444444444\",\"document_title\":\"keyword-leg neighbour\",\"score\":0.82}]}\n" ;;
+       *PARAPHRASE*) printf "{\"results\":[{\"document_id\":\"fxvector1\",\"document_title\":\"vector-leg neighbour\",\"score\":0.91}]}\n" ;;
+       *)            printf "{\"results\":[{\"document_id\":\"fxkeyword\",\"document_title\":\"keyword-leg neighbour\",\"score\":0.82}]}\n" ;;
      esac ;;
   *engram_link) printf "{\"status\":\"linked\",\"projection\":\"complete\"}\n" ;;
   *) printf "{}\n" ;;
@@ -244,8 +259,8 @@ echo "=== K: ⛔ never link a document to ITSELF ==="
 SELF_T="$(mk_transport self-transport '
 printf "%s %s\n" "$1" "$(tr -d "\n" < "$2")" >> "$DFE_LOG"
 case "$1" in
-  *engram_write)  printf "{\"id\":\"11111111-1111-1111-1111-111111111111\"}\n" ;;
-  *engram_search) printf "{\"results\":[{\"document_id\":\"11111111-1111-1111-1111-111111111111\",\"document_title\":\"itself\",\"score\":0.99},{\"document_id\":\"44444444-4444-4444-4444-444444444444\",\"document_title\":\"a real neighbour\",\"score\":0.80}]}\n" ;;
+  *engram_write)  printf "{\"id\":\"fxrecord1\"}\n" ;;
+  *engram_search) printf "{\"results\":[{\"document_id\":\"fxrecord1\",\"document_title\":\"itself\",\"score\":0.99},{\"document_id\":\"fxkeyword\",\"document_title\":\"a real neighbour\",\"score\":0.80}]}\n" ;;
   *engram_link)   printf "{\"status\":\"linked\"}\n" ;;
   *) printf "{}\n" ;;
 esac')"
@@ -274,7 +289,7 @@ KEYL="$(sed -n 's/^key: //p' "$FL")"
 LANDED_L="$(mk_transport landed-log-transport '
 printf "%s %s\n" "$1" "$(tr -d "\n" < "$2")" >> "$DFE_LOG"
 case "$1" in
-  *engram_search) printf "{\"results\":[{\"document_id\":\"11111111-1111-1111-1111-111111111111\",\"document_title\":\"t\",\"content\":\"ENGRAM-KEY '"$KEYL"'\"}]}\n" ;;
+  *engram_search) printf "{\"results\":[{\"document_id\":\"fxrecord1\",\"document_title\":\"t\",\"content\":\"ENGRAM-KEY '"$KEYL"'\"}]}\n" ;;
   *engram_link)   printf "{\"status\":\"linked\"}\n" ;;
   *) printf "{}\n" ;;
 esac')"
@@ -289,7 +304,7 @@ echo "=== M: a FAILED link never un-writes the record, and never passes silently
 BADLINK_T="$(mk_transport badlink-transport '
 printf "%s %s\n" "$1" "$(tr -d "\n" < "$2")" >> "$DFE_LOG"
 case "$1" in
-  *engram_write)  printf "{\"id\":\"11111111-1111-1111-1111-111111111111\"}\n" ;;
+  *engram_write)  printf "{\"id\":\"fxrecord1\"}\n" ;;
   *engram_search) printf "{\"results\":[]}\n" ;;
   *engram_link)   printf "graph unavailable\n" >&2; exit 9 ;;
   *) printf "{}\n" ;;
@@ -305,7 +320,7 @@ contains "M: and it is said out loud" "link" "$OUT"
 echo "=== N: recall returns ids and titles, and respects a byte budget ==="
 : > "$DFE_LOG"
 OUT="$(DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" recall "PARAPHRASE of a topic" 2>&1)"
-contains "N: it prints a short id" "22222222" "$OUT"
+contains "N: it prints a short id" "fxvector" "$OUT"
 contains "N: and the title next to it" "vector-leg neighbour" "$OUT"
 N_SR="$(grep -c 'engram_search ' "$DFE_LOG" || true)"
 eq "N: ⛔ recall also runs BOTH legs" "$N_SR" "2"
@@ -353,7 +368,7 @@ DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" write --title "P newest f
   --kind knowledge --collection loom-behaviors --body "the most recent thing written" >/dev/null 2>&1
 [ -f "$RC_F" ] && ok "P: the cache file is written" || bad "P: cache" "missing $RC_F"
 RCB="$(cat "$RC_F" 2>/dev/null)"
-contains "P: it carries the notepad anchor id" "aaaaaaaa" "$RCB"
+contains "P: it carries the notepad anchor id" "fxnotepa" "$RCB"
 contains "P: and the newest record's title" "P newest finding" "$RCB"
 contains "P: and says it is a cache, not a live read" "cache" "$RCB"
 N_RC="$(wc -c < "$RC_F" | tr -d ' ')"
