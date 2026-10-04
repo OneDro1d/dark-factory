@@ -244,6 +244,35 @@ if [ "$(decision "$OUT")" = "block" ] && ! printf '%s' "$OUT" | grep -qF "$FAKE_
 else bad "U2 env secret value prompt not blocked (or echoed)" "(value withheld)"; fi
 OUT="$(prompt "reinstall the workspace and check the syn_ prefix rule")"
 [ "$(decision "$OUT")" != "block" ] && ok "U3 ordinary prompt allowed" || bad "U3 ordinary prompt blocked" "$(reason "$OUT")"
+# U4-U6 a PLACEHOLDER in the password position is not a credential (2026-10-04).
+# ⛔ The regression, verbatim: the operator asked a session where to find the
+# `amqps://argus-test:...@host/vhost` strings. `...` was captured as the password, the prompt was
+# REFUSED, and because it had arrived from Slack over the bus his message was DESTROYED in
+# transit — the session never saw it and nothing told him. A guard that cries wolf on an obvious
+# placeholder does not merely annoy: on a delivery path it loses the message.
+# ⚠️ `$BROKER_PASS` in the same position was already exempt, because `$` is on the benign list
+# and the URL rule was the one rule that never consulted it. Both directions below, because an
+# exemption wide enough to swallow a real credential would be a silent false negative.
+OUT="$(prompt 'I don'"'"'t know where to fing the `<<amqps://argus-test>>:...@host/vhost` strings')"
+[ "$(decision "$OUT")" != "block" ] && ok "U4 the operator's own placeholder question is allowed" \
+  || bad "U4 a '...' placeholder is still read as a credential" "$(reason "$OUT")"
+U5FAIL=""
+for ph in '...' '***' '---' '<password>' '$BROKER_PASS' '${BROKER_PASS}' '[REDACTED]'; do
+  OUT="$(prompt "connect with amqps://argus-test:${ph}@host/vhost and report")"
+  [ "$(decision "$OUT")" = "block" ] && U5FAIL="$U5FAIL $ph"
+done
+[ -z "$U5FAIL" ] && ok "U5 every placeholder form is allowed in the password position" \
+  || bad "U5 placeholder(s) read as a credential:$U5FAIL" "the benign list is not reaching the URL rule"
+# The control. Without this, U4/U5 could be passing because the rule stopped working at all.
+OUT="$(prompt 'connect with amqps://argus-test:n0tApl4ceholderV4lue@host/vhost')"
+if [ "$(decision "$OUT")" = "block" ] && printf '%s' "$OUT" | grep -q 'url-password'; then
+  ok "U6 control: a real URL password is STILL blocked, by the url-password rule"
+else bad "U6 the exemption is too wide — a real URL password got through" "$(reason "$OUT")"; fi
+# U7 and the redactor must agree with the detector. They disagreed in the SAME direction, which
+# is why neither ever contradicted the other where a reader would look.
+OUT="$(printf 'see amqps://u:...@h/v\n' | env -i PATH="$PATH" HOME="$W/home" python3 "$GUARD" --filter)"
+printf '%s' "$OUT" | grep -qF '...' && ok "U7 --filter leaves a placeholder password intact" \
+  || bad "U7 --filter redacted a placeholder, corrupting the text a reviewer reads" "$OUT"
 
 echo
 echo "=== P: notepad pre-commit ==="
