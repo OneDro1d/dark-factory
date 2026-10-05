@@ -34,6 +34,22 @@ command -v python3 >/dev/null 2>&1 || { echo "test-walkthrough-mutations: need p
 T="$(mktemp -d "${TMPDIR:-/tmp}/wtmut.XXXXXX")"
 trap 'rm -rf "$T"' EXIT
 
+# ⛔ REFUSE TO MEASURE A FRACTION AND REPORT IT LIKE THE WHOLE. Without ffmpeg only 21 of the
+# 36 mutants run, and among the 15 that do not is `the #224 black-frame defect, restored` —
+# the guard for a defect that actually shipped. MEASURED in CI on 2026-10-05: the gate was
+# green at 21, and nothing in the log said so, because run-tests.sh shows a child's output
+# only on failure. A mutation suite that silently drops the mutant it exists for is worse than
+# no mutation suite: it certifies the regression is guarded when it is not.
+if [ -n "${WT_TESTS_REQUIRE_FULL:-}" ]; then
+  if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+    echo "REFUSING TO DEGRADE: WT_TESTS_REQUIRE_FULL is set and ffmpeg/ffprobe is absent."
+    echo "  15 of 36 mutants would not run, including the #224 regression guard."
+    echo "  Install ffmpeg, or unset WT_TESTS_REQUIRE_FULL to accept reduced coverage knowingly."
+    echo "ASSERTIONS: 0"
+    exit 1
+  fi
+fi
+
 PASS=0
 FAIL=0
 

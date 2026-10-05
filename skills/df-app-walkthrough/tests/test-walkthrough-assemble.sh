@@ -60,6 +60,15 @@ has "…and says which script to run first" "$OUT" "run record-walkthrough.mjs f
 
 HAVE_FF=0
 if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then HAVE_FF=1; fi
+if [ "$HAVE_FF" -eq 0 ] && [ -n "${WT_TESTS_REQUIRE_FULL:-}" ]; then
+  echo
+  echo "REFUSING TO DEGRADE: WT_TESTS_REQUIRE_FULL is set and ffmpeg/ffprobe is absent."
+  echo "  Only the guard would run — no caption escaping, no audio offsets, no pre-roll trim."
+  echo "  Install ffmpeg, or unset WT_TESTS_REQUIRE_FULL to accept reduced coverage knowingly."
+  printf 'ASSERTIONS: %s\n' "$((PASS + FAIL))"
+  exit 1
+fi
+
 if [ "$HAVE_FF" -eq 0 ]; then
   echo
   echo "  ⚠️  ffmpeg/ffprobe absent — the caption and offset cases below did NOT run."

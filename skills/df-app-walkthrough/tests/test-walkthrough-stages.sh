@@ -79,6 +79,16 @@ fi
 HAVE_FF=0
 if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then HAVE_FF=1; fi
 
+if [ "$HAVE_FF" -eq 0 ] && [ -n "${WT_TESTS_REQUIRE_FULL:-}" ]; then
+  echo
+  echo "REFUSING TO DEGRADE: WT_TESTS_REQUIRE_FULL is set and ffmpeg/ffprobe is absent."
+  echo "  The build-narration pacing arithmetic would not run, nor the positive"
+  echo "  check-prereqs direction that proves the SIGPIPE repair works."
+  echo "  Install ffmpeg, or unset WT_TESTS_REQUIRE_FULL to accept reduced coverage knowingly."
+  printf 'ASSERTIONS: %s\n' "$((PASS + FAIL))"
+  exit 1
+fi
+
 if [ "$HAVE_FF" -eq 1 ]; then
   echo
   echo "=== build-narration.mjs — the pacing arithmetic ==="

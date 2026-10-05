@@ -49,9 +49,26 @@ printf '#!/usr/bin/env bash\ncat > /dev/null\necho "RMS     amplitude:     0.250
 # sox reporting silence, for the one case that IS about the floor
 mkdir -p "$T/bin-silent"
 printf '#!/usr/bin/env bash\ncat > /dev/null\necho "RMS     amplitude:     0.000100"\n' > "$T/bin-silent/sox"
-# sox absent entirely: verify.mjs must report a floor failure, not crash
+# ⛔ sox ABSENT ENTIRELY, AND THIS ONE MUST BE HERMETIC. The first version prepended the stub
+# dir to the INHERITED PATH, so "sox is missing" was true only because this machine happens
+# not to have sox — the assertion measured the machine, not verify.mjs, and would have failed
+# on any developer box with sox installed. run-tests.sh's own header warns about exactly this
+# shape: a suite whose subject depends on what the environment happens to provide is not
+# hermetic anywhere, it merely fails visibly on the machines that differ.
+#
+# So this dir holds symlinks to everything verify.mjs needs AND NOTHING ELSE, and the case runs
+# with PATH set to exactly this dir. `sh` is in the list because verify.mjs shells out to
+# `sh -c 'ffmpeg … | sox …'` for the RMS probe.
 mkdir -p "$T/bin-nosox"
 chmod +x "$T/bin/sox" "$T/bin-silent/sox"
+# ⚠️ `bash` is in this list and it is not decoration: the stub sox starts
+# `#!/usr/bin/env bash`, and with PATH scoped to one directory `env` cannot find bash, so the
+# stub silently fails to execute. The mirror case below failed for exactly that reason before
+# bash was added — a missing interpreter looks identical to "sox reported nothing".
+for tool in node sh bash ffmpeg ffprobe; do
+  src="$(command -v "$tool" || true)"
+  [ -n "$src" ] && ln -sf "$src" "$T/bin-nosox/$tool"
+done
 
 # An ffmpeg that is REAL except for one named filter. Scoping the breakage to a single
 # filter is what makes the "probe could not run" cases honest: a stub that broke every
@@ -85,9 +102,16 @@ mkfix() {
   printf '{"sections":[{"id":"s1","startSeconds":1,"endSeconds":5}],"problems":[]}\n' > "$d/recorded-timeline.json"
 }
 
-# vrun <fixture> <stub-dir> -> sets OUT and RC
+# vrun <fixture> <stub-dir> -> sets OUT and RC. Stub dir goes in FRONT of the inherited PATH.
 vrun() {
   OUT="$(PATH="$2:$PATH" WT_OUT="$T/$1" node "$V" 2>&1)"
+  RC=$?
+}
+
+# vrun_exact <fixture> <dir> -> same, but PATH is EXACTLY <dir>: nothing is inherited, so what
+# the machine happens to have installed cannot change the result.
+vrun_exact() {
+  OUT="$(PATH="$2" WT_OUT="$T/$1" node "$V" 2>&1)"
   RC=$?
 }
 
@@ -106,6 +130,15 @@ if printf '%s\n' "$OUT" | grep -q "FAIL: no mp4 at"; then
   ok "…and names the path it looked for"
 else
   bad "…and names the path it looked for" "output was: $OUT"
+fi
+
+if [ "$HAVE_FF" -eq 0 ] && [ -n "${WT_TESTS_REQUIRE_FULL:-}" ]; then
+  echo
+  echo "REFUSING TO DEGRADE: WT_TESTS_REQUIRE_FULL is set and ffmpeg/ffprobe is absent."
+  echo "  11 of 13 cases would not run — including every black-frame and loudness probe case."
+  echo "  Install ffmpeg, or unset WT_TESTS_REQUIRE_FULL to accept reduced coverage knowingly."
+  printf 'ASSERTIONS: %s\n' "$((PASS + FAIL))"
+  exit 1
 fi
 
 if [ "$HAVE_FF" -eq 0 ]; then
@@ -179,10 +212,24 @@ echo "=== verify.mjs — the remaining artefact checks ==="
 vrun silent "$T/bin-silent"
 said_bad 'audio RMS' "a silent track is REJECTED on the RMS floor"
 
-# sox absent is a real deployment condition, not a contrivance: it is absent on the machine
-# this suite was written on. The floor must fail, and the run must not crash.
-vrun moving "$T/bin-nosox"
+# sox absent is a real deployment condition, not a contrivance: it is absent on the machine this
+# suite was written on, and on the GitHub runner. The floor must fail, and the run must not crash.
+vrun_exact moving "$T/bin-nosox"
 said_bad 'audio RMS 0\.0000' "a MISSING sox fails the floor rather than crashing"
+
+# ⛔ THE PAIR IS THE CONTROL, and it is what makes the case above mean anything. Same fixture,
+# same verify.mjs, differing in ONE thing — whether sox is reachable — and giving OPPOSITE
+# verdicts. On its own the case above would pass identically on a box where sox is installed
+# and the scoping is broken, which is the state it was in when first written: it would have
+# been measuring this machine's lack of sox. The mirror below also proves the stub sox works,
+# so the failure above is attributable to absence rather than to a broken stub.
+mkdir -p "$T/bin-haxsox"
+cp "$T/bin/sox" "$T/bin-haxsox/sox"
+for tool in node sh bash ffmpeg ffprobe; do
+  [ -e "$T/bin-nosox/$tool" ] && cp -P "$T/bin-nosox/$tool" "$T/bin-haxsox/$tool"
+done
+vrun_exact moving "$T/bin-haxsox"
+said_ok 'audio RMS 0\.2500' "…and the SAME fixture passes the floor when sox IS reachable"
 
 vrun short "$T/bin"
 said_bad 'duration' "a too-short recording is REJECTED"

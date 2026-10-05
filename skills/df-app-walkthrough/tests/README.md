@@ -14,6 +14,36 @@ the whole repo, so nothing had to be added to a list.
 No suite needs a browser, a network, an app, or the TTS model. All seven scripts are
 covered to the depth stated below.
 
+## ⛔ The gate installs ffmpeg, and it has to — read this before removing that step
+
+**MEASURED 2026-10-05 on the GitHub runner: it ships no ffmpeg.** Four of these five suites
+therefore took their degraded paths and the gate was **green at a fraction of the coverage** —
+verify 20 → 2 assertions, assemble 26 → 2, stages 39 → 21, mutations 36 → 21. Among the 15
+mutants that did not run was **`the #224 black-frame defect, restored`**: the regression guard
+for a defect that actually shipped. It was guarded on a maintainer's laptop and nowhere that
+enforces anything.
+
+⚠️ **And the shrinkage was invisible.** Each suite prints a `COVERAGE:` line naming exactly
+what it skipped — but `run-tests.sh` captures a child's output and shows it only on
+**failure**, so on a pass that declaration never reaches the log. The only visible signal was
+the assertion count, and a reader would have to already know the full number to notice.
+*"Declared, not silent" was true of the suite and false of the system it reports into.*
+**Declaring a gap only helps where the reader will actually look.**
+
+Two things now stop it recurring:
+
+1. `gate.yml` installs ffmpeg before running the suites (not sox — see below).
+2. **`WT_TESTS_REQUIRE_FULL=1`**, set for the gate job: a suite that would degrade **refuses**
+   instead, exits 1 and names the missing tool. Remove the install step and the gate goes red
+   rather than shrinking by 90% and still ticking. Locally the variable is unset, so a
+   contributor without ffmpeg still gets a useful partial run, with the `COVERAGE:` line they
+   *will* see because they ran the suite directly.
+
+Both directions of that interlock are proven — it must refuse when set, and must still pass
+degraded when unset, since one that always refuses is equally broken. The prover is
+`bin/prove-walkthrough-interlock.sh` in the `notepad-onedroid-dark-factory` notepad: 8/8, and
+the degraded counts it reproduces match the CI log exactly.
+
 ## Why there is a mutation suite
 
 The other four are ~190 green assertions, and **a green suite carries no information until
@@ -66,11 +96,18 @@ it in miniature:
 ## Two environment notes that changed what was measured
 
 - **sox is stubbed in `test-walkthrough-verify.sh` for every case**, and that is not
-  convenience. sox is absent on many machines, including the one these were written on.
-  Without the stub, `verify.mjs`'s RMS check fails for a reason unrelated to the case under
-  test and *every* run exits 1 — during the #224 review that nearly got attributed to the
-  black-frame defect. The RMS branch gets its own case, with a stub that reports silence,
-  and a further case with no sox at all.
+  convenience. sox is absent on many machines, including the one these were written on and the
+  GitHub runner. Without the stub, `verify.mjs`'s RMS check fails for a reason unrelated to
+  the case under test and *every* run exits 1 — during the #224 review that nearly got
+  attributed to the black-frame defect. The RMS branch gets its own case, with a stub that
+  reports silence, and a further case with no sox at all. **sox is deliberately not installed
+  in CI**, so those paths stay exercised.
+  ⚠️ The no-sox case runs with `PATH` set to **exactly** one scratch directory, not prepended
+  to the inherited one. The first version prepended, so "sox is missing" was true only because
+  this machine happens to lack sox — **the assertion measured the machine, not `verify.mjs`,
+  and would have failed on any box with sox installed.** It is now paired with a mirror case
+  where sox *is* reachable and the floor passes; the pair is the control, since either case
+  alone would pass against broken scoping.
 - **`session.mjs` reads `WT_AUTH` at module load**, so `test-walkthrough-actions.sh` runs
   one node process per auth mode and scrubs every `WT_*`/`CLERK_*` variable around each.
   Two modes in one process would mean the second ran under the first one's constant and
