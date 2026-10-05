@@ -2,8 +2,9 @@
 # run-tests.sh — run EVERY test suite in the repo, discovered by existence.
 #
 # WHY THIS EXISTS. Until now `.github/workflows/gate.yml` named exactly one suite from
-# `boot-kit/scripts/tests/` (`test-p8-reachability.sh`). The repo ships two dozen suites
-# across four directories — the exact number is deliberately not written down here, since
+# `boot-kit/scripts/tests/` (`test-p8-reachability.sh`). The repo shipped, AT THAT TIME,
+# two dozen suites across four directories — both figures have since grown, and the
+# current number is deliberately not written down here, since
 # a count in prose is the same rotting hand-written list in miniature, and this one was
 # already wrong (22) by the time it was read. All but that one executed only when a human
 # typed the path, so their
@@ -184,7 +185,18 @@ while IFS= read -r suite; do
   [ -n "$suite" ] || continue
   rel="${suite#$ROOT/}"
   start=$(date +%s)
-  if bash "$suite" >"$CAP" 2>&1; then
+  # ⛔ `</dev/null` IS LOAD-BEARING, AND ITS ABSENCE CORRUPTED THIS RUNNER'S OWN SUITE LIST.
+  # The loop below is fed by a here-doc, and a child inherits that as ITS stdin — so any suite
+  # whose child reads stdin consumes bytes the loop has not read yet, and the NEXT iteration
+  # starts mid-line. MEASURED in CI 2026-10-05: two suite paths arrived missing their leading
+  # bytes ("unner/work/…" and "home/runner/…"), each then failing rc=127 "No such file or
+  # directory" — a defect attributed to the suites, which were fine. ffmpeg is the canonical
+  # offender (it polls stdin for keyboard interaction unless given `-nostdin`), which is why
+  # this surfaced the moment the gate started installing it.
+  # ⚠️ A greedy child eats the WHOLE list and the run looks mysteriously short; a polling child
+  # eats a few bytes and you get a corrupt path instead. The second is worse: it names a file.
+  # No suite has any business reading this runner's stdin, so close it for all of them.
+  if bash "$suite" >"$CAP" 2>&1 </dev/null; then
     rc=0
   else
     rc=$?

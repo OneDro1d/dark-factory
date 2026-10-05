@@ -20,13 +20,23 @@ const VIDEO_DIR = join(OUT, "video");
 const W = Number(process.env.WT_WIDTH || 1600);
 const H = Number(process.env.WT_HEIGHT || 900);
 
-const { chromium } = await import(join(SKILL, "node_modules/playwright-core/index.mjs"));
-
+// ⚠️ THE CHEAP CHECKS GO FIRST, AND THE ORDER IS THE WHOLE POINT. This guard used to sit
+// BELOW the playwright import, which made it unreachable for exactly the person who needed
+// it: a fresh checkout has no `node_modules`, so the import threw ERR_MODULE_NOT_FOUND and
+// a seven-line stack trace instead of either of the two sentences that say what to do. Both
+// of this stage's preconditions now report themselves before anything heavy is loaded.
 const timingPath = join(OUT, "timing.json");
 if (!existsSync(timingPath)) {
   console.error(`no timing.json in ${OUT} — run build-narration.mjs first`);
   process.exit(1);
 }
+
+const playwright = join(SKILL, "node_modules/playwright-core/index.mjs");
+if (!existsSync(playwright)) {
+  console.error(`no playwright-core in ${SKILL} — run scripts/setup.sh`);
+  process.exit(1);
+}
+const { chromium } = await import(playwright);
 const timing = JSON.parse(readFileSync(timingPath, "utf8"));
 mkdirSync(VIDEO_DIR, { recursive: true });
 
