@@ -172,6 +172,27 @@ echo "=== check-prereqs.sh — both directions ==="
 # PRESENT tool reports as MISSING. The script captures first and matches after. The only
 # way to prove that works is the POSITIVE direction: a real ffmpeg that HAS the filter must
 # report ok. A suite that only checked the missing case would pass on the broken version.
+# ⛔ THE STRUCTURAL GUARD, AND IT EXISTS BECAUSE THE BEHAVIOURAL ONE WAS A RACE. Whether
+# SIGPIPE actually fires depends on whether the producer's output fits the 64 KiB pipe buffer
+# before grep exits — so `ffmpeg -filters | grep -q` is a LATENT bug that happens to work on
+# chatty builds. MEASURED 2026-10-05: a mutant restoring that pipeline was caught on the
+# homelab Coder and SURVIVED on the GitHub runner. A behavioural test cannot reliably catch
+# it; reading the source can, on every machine.
+# ⚠️ So this asserts the SHAPE: the two probes must capture into a variable first and match
+# afterwards. That is a lint, not a behaviour test, and it is the right instrument here —
+# the defect is in the construct, not in any particular run of it.
+PRQ="$(cat "$SKILL/scripts/check-prereqs.sh")"
+if printf '%s' "$PRQ" | grep -Eq '(ffmpeg -hide_banner -filters|fc-list)[^|]*\| *grep'; then
+  bad "captures the filter list before matching it" "a probe pipes straight into grep — SIGPIPE + pipefail will report a PRESENT tool as missing"
+else
+  ok "captures the filter list before matching it"
+fi
+if printf '%s' "$PRQ" | grep -Fq 'FILTERS="$(ffmpeg -hide_banner -filters'; then
+  ok "…by assigning the filter list to a variable"
+else
+  bad "…by assigning the filter list to a variable" "the capture-then-match shape is gone"
+fi
+
 if [ "$HAVE_FF" -eq 1 ] && [ "$(ffmpeg -hide_banner -filters 2>/dev/null | grep -c ' subtitles ')" -gt 0 ]; then
   OUT="$(bash "$SKILL/scripts/check-prereqs.sh" 2>&1)"
   has "a PRESENT subtitles filter is reported ok" "$OUT" "ok  ffmpeg subtitles filter"

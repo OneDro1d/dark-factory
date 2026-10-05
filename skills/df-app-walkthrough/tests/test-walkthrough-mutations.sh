@@ -410,18 +410,34 @@ if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
     '.sort((a, b) => a.startSeconds - b.startSeconds);' ';' \
     'cues are ordered by measured start, not file order' test-walkthrough-assemble.sh
 
-  # ⛔ THE SIGPIPE BUG check-prereqs.sh DOCUMENTS, restored. `producer | grep -q` makes grep
-  # exit on the first hit, the producer takes SIGPIPE, pipefail turns the pipeline non-zero
-  # — and a PRESENT filter reports as missing. Only the positive direction catches this,
-  # which is exactly why the suite asserts both.
-  scheck "check-prereqs regains the SIGPIPE bug" "scripts/check-prereqs.sh" \
-    'FILTERS="$(ffmpeg -hide_banner -filters 2>/dev/null || true)"
-case "$FILTERS" in
-  *" subtitles "*) ok "ffmpeg subtitles filter (libass)" ;;' \
-    'if ffmpeg -hide_banner -filters 2>/dev/null | grep -q " subtitles "; then ok "ffmpeg subtitles filter (libass)"; else bad "ffmpeg has no subtitles filter" "x"; fi
-case "x" in
-  *" subtitles "*) : ;;' \
+  # ⛔ THIS MUTANT USED TO RESTORE THE SIGPIPE BUG, AND IT SURVIVED IN CI. Recorded here
+  # because the reason is the interesting part.
+  #
+  # `producer | grep -q` makes grep exit at the FIRST hit, the producer takes SIGPIPE, and
+  # `pipefail` turns the pipeline non-zero — so a PRESENT filter reports as missing. That is
+  # a real bug and `check-prereqs.sh` documents having had it. But whether SIGPIPE actually
+  # fires is a RACE: if the producer's whole output fits the 64 KiB pipe buffer and it
+  # finishes writing before grep exits, nothing is signalled and the pipeline succeeds.
+  # `ffmpeg -filters` output size differs per build, and `subtitles` sorts late in it.
+  # MEASURED 2026-10-05: caught on the homelab Coder, SURVIVED on the GitHub runner.
+  #
+  # ⛔ A MUTANT WHOSE DETECTION DEPENDS ON A RACE IS A MUTANT THAT PASSES ON YOUR MACHINE.
+  # Scoring it as "caught" locally told me the assertion discriminates, when what it really
+  # told me was that this box's ffmpeg is chatty. So the mutation is now DETERMINISTIC — a
+  # one-character typo in the match pattern, which makes a present filter report missing on
+  # every machine — and the SIGPIPE shape itself is guarded STRUCTURALLY in
+  # test-walkthrough-stages.sh, by reading the source rather than by racing it.
+  scheck "a present filter reported as missing" "scripts/check-prereqs.sh" \
+    '  *" subtitles "*) ok "ffmpeg subtitles filter (libass)" ;;' \
+    '  *" subtitlez "*) ok "ffmpeg subtitles filter (libass)" ;;' \
     'a PRESENT subtitles filter is reported ok' test-walkthrough-stages.sh
+
+  # And the structural guard must itself be falsifiable: reintroduce the dangerous pipeline
+  # shape and the source check has to notice, race or no race.
+  scheck "the dangerous pipe shape returns" "scripts/check-prereqs.sh" \
+    'FILTERS="$(ffmpeg -hide_banner -filters 2>/dev/null || true)"' \
+    'ffmpeg -hide_banner -filters 2>/dev/null | grep -q " subtitles "' \
+    'captures the filter list before matching it' test-walkthrough-stages.sh
 else
   echo "  ⚠️  ffmpeg absent — 7 of the 8 mutants in this section did NOT run."
 fi
