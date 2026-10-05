@@ -96,7 +96,7 @@ mkfix() {
   local name="$1" vsrc="$2" asrc="$3"; shift 3
   local d="$T/$name"
   mkdir -p "$d"
-  ffmpeg -hide_banner -loglevel error -y -f lavfi -i "$vsrc" -f lavfi -i "$asrc" \
+  ffmpeg -nostdin -hide_banner -loglevel error -y -f lavfi -i "$vsrc" -f lavfi -i "$asrc" \
     -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "$@" "$d/walkthrough.mp4" 2>/dev/null
   printf 'Dialogue: 0,0:00:01.00,0:00:05.00,Cap,,0,0,0,,one\n' > "$d/captions.ass"
   printf '{"sections":[{"id":"s1","startSeconds":1,"endSeconds":5}],"problems":[]}\n' > "$d/recorded-timeline.json"
@@ -159,7 +159,7 @@ mkfix short   "testsrc=s=320x240:d=5"             "sine=f=440:d=5"
 mkfix silent  "testsrc=s=320x240:d=12"            "anullsrc=r=44100:cl=mono:d=12"
 mkfix loud    "testsrc=s=320x240:d=12"            "sine=f=440:d=12" -filter:a "volume=20"
 mkdir -p "$T/noaudio"
-ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc=s=320x240:d=12" \
+ffmpeg -nostdin -hide_banner -loglevel error -y -f lavfi -i "testsrc=s=320x240:d=12" \
   -c:v libx264 -pix_fmt yuv420p -an "$T/noaudio/walkthrough.mp4" 2>/dev/null
 printf 'Dialogue: 0,0:00:01.00,0:00:05.00,Cap,,0,0,0,,one\n' > "$T/noaudio/captions.ass"
 printf '{"sections":[{"id":"s1","startSeconds":1,"endSeconds":5}],"problems":[]}\n' > "$T/noaudio/recorded-timeline.json"

@@ -81,12 +81,12 @@ fi
 
 # ---------------------------------------------------------------- real media + stubs
 # Genuine files, so every ffprobe assemble.mjs runs is a real measurement.
-ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=f=440:d=2" "$T/real-2s.wav"
-ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=f=440:d=3" "$T/real-3s.wav"
-ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc=s=160x120:d=20" \
+ffmpeg -nostdin -hide_banner -loglevel error -y -f lavfi -i "sine=f=440:d=2" "$T/real-2s.wav"
+ffmpeg -nostdin -hide_banner -loglevel error -y -f lavfi -i "sine=f=440:d=3" "$T/real-3s.wav"
+ffmpeg -nostdin -hide_banner -loglevel error -y -f lavfi -i "testsrc=s=160x120:d=20" \
   -c:v libx264 -pix_fmt yuv420p "$T/raw-video.mp4"
-ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=f=440:d=10" "$T/real-10s.wav"
-ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc=s=160x120:d=10" \
+ffmpeg -nostdin -hide_banner -loglevel error -y -f lavfi -i "sine=f=440:d=10" "$T/real-10s.wav"
+ffmpeg -nostdin -hide_banner -loglevel error -y -f lavfi -i "testsrc=s=160x120:d=10" \
   -f lavfi -i "sine=f=440:d=10" -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "$T/real-final.mp4"
 
 mkdir -p "$T/bin"

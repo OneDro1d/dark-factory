@@ -97,7 +97,7 @@ if [ "$HAVE_FF" -eq 1 ]; then
   # length you have not measured. The offsets below are accumulated from REAL ffprobe
   # measurements of real wavs; only the synthesis is stubbed.
   mkdir -p "$T/voices"
-  ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=f=440:d=2" "$T/two.wav"
+  ffmpeg -nostdin -hide_banner -loglevel error -y -f lavfi -i "sine=f=440:d=2" "$T/two.wav"
   # A stub "piper": consumes the text on stdin and writes a 2s wav to the -f path.
   {
     printf '#!/usr/bin/env bash\n'
