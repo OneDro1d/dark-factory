@@ -137,6 +137,14 @@ if command -v claude >/dev/null 2>&1; then
   VOUT="$(claude plugin validate "$PLUGIN" 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ]; then ok "G: claude plugin validate exits 0"
   else bad "G: claude plugin validate exits 0" "exit $rc: $VOUT"; fi
+elif [ -n "${DF_TESTS_REQUIRE_FULL:-}" ]; then
+  # ⛔ Measured 2026-10-05: this skip fired on EVERY CI run. See test-plugin-invariants.sh.
+  echo ""
+  echo "REFUSING TO DEGRADE: DF_TESTS_REQUIRE_FULL is set and the claude CLI is not on PATH."
+  echo "  Section G would not run — the plugin manifest would go unvalidated by this gate."
+  echo "  Install the claude CLI, or unset DF_TESTS_REQUIRE_FULL to accept reduced coverage knowingly."
+  printf 'ASSERTIONS: %s\n' "$((PASS + FAIL))"
+  exit 1
 else
   printf '  SKIP %s -- %s\n' "G: claude plugin validate" "SKIP (visible, not a pass): claude CLI not on PATH here - the validator runs where the CLI is installed (the invariants suite carries the same check)"
 fi
