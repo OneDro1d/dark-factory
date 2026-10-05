@@ -110,6 +110,15 @@ if command -v claude >/dev/null 2>&1; then
   echo "$VOUT"
   contains "I: validation passed" "Validation passed" "$VOUT"
   if [ "$vrc" -eq 0 ]; then ok "I: exits 0"; else bad "I: exits 0" "exit $vrc"; fi
+elif [ -n "${DF_TESTS_REQUIRE_FULL:-}" ]; then
+  # ⛔ Measured 2026-10-05: this skip fired on EVERY CI run, so section I had never once run
+  # where it gates a merge. See the comment in test-plugin-invariants.sh for the full finding.
+  echo ""
+  echo "REFUSING TO DEGRADE: DF_TESTS_REQUIRE_FULL is set and the claude CLI is not on PATH."
+  echo "  Section I would not run — the plugin manifest would go unvalidated by this gate."
+  echo "  Install the claude CLI, or unset DF_TESTS_REQUIRE_FULL to accept reduced coverage knowingly."
+  printf 'ASSERTIONS: %s\n' "$((PASS + FAIL))"
+  exit 1
 else
   printf '  SKIP %s -- %s\n' "I: claude plugin validate" "SKIP (visible, not a pass): claude CLI not on PATH here - the validator runs where the CLI is installed (the invariants suite carries the same check)"
 fi
