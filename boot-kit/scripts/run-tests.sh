@@ -2,8 +2,9 @@
 # run-tests.sh — run EVERY test suite in the repo, discovered by existence.
 #
 # WHY THIS EXISTS. Until now `.github/workflows/gate.yml` named exactly one suite from
-# `boot-kit/scripts/tests/` (`test-p8-reachability.sh`). The repo ships two dozen suites
-# across four directories — the exact number is deliberately not written down here, since
+# `boot-kit/scripts/tests/` (`test-p8-reachability.sh`). The repo shipped, AT THAT TIME,
+# two dozen suites across four directories — both figures have since grown, and the
+# current number is deliberately not written down here, since
 # a count in prose is the same rotting hand-written list in miniature, and this one was
 # already wrong (22) by the time it was read. All but that one executed only when a human
 # typed the path, so their
