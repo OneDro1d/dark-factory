@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# test-instance-ci.sh — a Tier-3 instance ships a runner and CI, and the runner sees the
-# WHOLE instance rather than the corner it happens to live in.
+# test-instance-ci.sh — a Tier-3 instance ships a RUNNER and deliberately NO GitHub CI, and the
+# runner sees the WHOLE instance rather than the corner it happens to live in.
+#
+# ⛔ RENAMED IN PURPOSE 2026-10-07, not in filename: this suite used to assert the instance ships
+# CI. It does not any more (operator ruling, "C please") and A2/A3 now assert that ABSENCE. The
+# filename is kept so the suite stays enrolled by existence and so its history is findable.
 #
 # WHY THIS EXISTS. Tier 3 is the record of ONE machine and the last tier before a real
 # environment. Measured 2026-08-31, it was the only tier in the estate with no runner and no
@@ -41,13 +45,29 @@ run_kit() { ( cd "$KIT" && env -u RUN_TESTS_ACTIVE bash boot-kit/scripts/run-tes
 echo "=== A: the kit ships both halves ==="
 [ -s "$RUNNER" ] && ok "A1 boot-kit/scripts/run-tests.sh is present" \
   || bad "A1 boot-kit/scripts/run-tests.sh is present" "absent — a minted instance gets no runner"
-[ -s "$WF" ] && ok "A2 .github/workflows/gate.yml is present" \
-  || bad "A2 .github/workflows/gate.yml is present" "absent — a minted instance gets no CI"
-# `cp -R "$KIT" "$TARGET"` carries dotfiles because it copies the directory itself. A future
-# `cp -R "$KIT"/* "$TARGET"` would silently drop `.github/`, and every instance minted after
-# that would lose CI with nothing to say so — the exact defect C2b guards at Tier 2.
-grep -q 'run-tests.sh' "$WF" 2>/dev/null && ok "A3 the workflow actually calls the runner" \
-  || bad "A3 the workflow actually calls the runner" "gate.yml does not reference run-tests.sh"
+# ⛔ INVERTED 2026-10-07 BY OPERATOR RULING ("C please"). A2 and A3 used to assert that the
+# template SHIPS `.github/workflows/gate.yml` and that the workflow calls the runner. It did ship
+# it, and the workflow could never pass: it ran `boot-kit/scripts/run-tests.sh`, a path
+# `dot-gitignore.template:8` EXCLUDES because `install.sh` regenerates that directory from the
+# pinned engine (`install.sh:275`) after `rm -rf`ing it (`:320`). So the mint wrote the runner to
+# disk and the gitignore kept it out of the repo — green for whoever minted the kit, exit 127 for
+# everyone else, for ever. Two live kits: 15 of 15 runs red since 2026-09-10.
+# ⚠️ THE ASSERTION IS INVERTED RATHER THAN DELETED, and that is the point: deleting it would let
+# somebody re-add the workflow and recreate a permanently-red check with nothing objecting. A
+# rule that nothing makes bite is not a rule.
+# On this estate GitHub CI was never the gate anyway — builds and tests run on the clusters, with
+# Tier 1 the one repo holding a required check. The runner still ships, for running by hand.
+if [ -e "$WF" ]; then
+  bad "A2 NO GitHub workflow is shipped into an instance" \
+      "$WF exists — it can never pass, because dot-gitignore.template excludes the path it runs"
+else
+  ok "A2 NO GitHub workflow is shipped into an instance"
+fi
+if [ -d "$KIT/.github" ]; then
+  bad "A3 the template ships no .github/ at all" "$KIT/.github exists"
+else
+  ok "A3 the template ships no .github/ at all"
+fi
 
 echo "=== B: it runs, and reports assertions ==="
 OUT="$(run_kit)"; RC=$?
