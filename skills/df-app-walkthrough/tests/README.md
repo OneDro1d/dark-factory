@@ -9,7 +9,7 @@ the whole repo, so nothing had to be added to a list.
 | `test-walkthrough-verify.sh` | `verify.mjs` | node, ffmpeg |
 | `test-walkthrough-assemble.sh` | `assemble.mjs` | node, ffmpeg |
 | `test-walkthrough-stages.sh` | `build-narration.mjs`, `record-walkthrough.mjs`, `check-prereqs.sh` | node, ffmpeg |
-| `test-walkthrough-mutations.sh` | **the four above** | node, ffmpeg, python3 |
+| `test-walkthrough-mutations.sh` | **all five others** | node, ffmpeg, python3, chromium |
 | `test-walkthrough-browser.sh` | the drawn cursor, click placement, resolution against real layout, `recordVideo` | node, **chromium**, Playwright's own ffmpeg, ffprobe |
 
 The first five need no browser, no network, no app and no TTS model. The sixth needs a real
@@ -104,8 +104,15 @@ that.** Deleting the visible-tabpanel preference from `scopeFor` SURVIVED, becau
 name outside any panel, which is what separates the two behaviours. And removing
 `glideTo`'s `.catch(() => null)` SURVIVED, because `boundingBox()` on `display:none`
 *resolves* to null rather than rejecting; an **ambiguous** locator is what makes it reject,
-so that is the input now used. All ten mutants are caught, each by the assertion that names
-it.
+so that is the input now used.
+
+⛔ **Those two fixes are only load-bearing while something keeps checking them**, so all ten
+mutants live in `test-walkthrough-mutations.sh` rather than in a one-off ablation script —
+each required to be caught *by the assertion that names it*. Two of them declare the
+enclosing `t.step` label on purpose: the defect makes the page throw, so the step attributes
+the throw and the inner assertion never runs to be named. Declaring the inner label would
+score `WRONG-FAIL` forever, which is that mechanism working — it refuses to credit a catch it
+cannot attribute.
 
 ## What these suites do NOT cover — declared, not implied
 - **A real app.** The browser suite drives `file://` fixtures, not a running application, so

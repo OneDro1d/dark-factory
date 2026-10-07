@@ -35,7 +35,8 @@ T="$(mktemp -d "${TMPDIR:-/tmp}/wtmut.XXXXXX")"
 trap 'rm -rf "$T"' EXIT
 
 # ⛔ REFUSE TO MEASURE A FRACTION AND REPORT IT LIKE THE WHOLE. Without ffmpeg only 21 of the
-# 36 mutants run, and among the 15 that do not is `the #224 black-frame defect, restored` —
+# a MINORITY of the mutants run, and among those that do not is `the #224 black-frame defect,
+# restored` —
 # the guard for a defect that actually shipped. MEASURED in CI on 2026-10-05: the gate was
 # green at 21, and nothing in the log said so, because run-tests.sh shows a child's output
 # only on failure. A mutation suite that silently drops the mutant it exists for is worse than
@@ -43,11 +44,32 @@ trap 'rm -rf "$T"' EXIT
 if [ -n "${WT_TESTS_REQUIRE_FULL:-}" ]; then
   if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
     echo "REFUSING TO DEGRADE: WT_TESTS_REQUIRE_FULL is set and ffmpeg/ffprobe is absent."
-    echo "  15 of 36 mutants would not run, including the #224 regression guard."
+    echo "  The ffmpeg-dependent mutants would not run, including the #224 regression guard."
+    echo "  (No count is quoted here on purpose: it rots. Run the suite to see the tally.)"
     echo "  Install ffmpeg, or unset WT_TESTS_REQUIRE_FULL to accept reduced coverage knowingly."
     echo "ASSERTIONS: 0"
     exit 1
   fi
+fi
+
+# ⛔ THE BROWSER MUTANTS, AND WHY THEY ARE GUARDED SEPARATELY. The ten mutants in the browser
+# section need a real Chromium, which the ffmpeg guard above says nothing about — a machine can
+# have both ffmpeg binaries and no browser. Two of those ten exist BECAUSE the assertions they
+# target could not fail when first written (`scopeFor`'s visible-panel preference, and
+# `glideTo`'s `.catch`), so dropping them silently is dropping the only evidence that those two
+# cases discriminate at all.
+HAVE_BROWSER=0
+if [ -d "$SKILL/node_modules/playwright-core" ]; then
+  node -e 'import("'"$SKILL"'/node_modules/playwright-core/index.mjs").then(async (m) => { const b = await m.chromium.launch(); await b.close(); }).catch(() => process.exit(1))' \
+    >/dev/null 2>&1 && HAVE_BROWSER=1
+fi
+if [ -n "${WT_TESTS_REQUIRE_FULL:-}" ] && [ "$HAVE_BROWSER" -eq 0 ]; then
+  echo "REFUSING TO DEGRADE: WT_TESTS_REQUIRE_FULL is set and no launchable chromium is present."
+  echo "  The 10 browser mutants would not run, including the two that are the ONLY evidence"
+  echo "  that the visible-tabpanel and glideTo-catch assertions can fail at all."
+  echo "  Run scripts/setup.sh, or unset WT_TESTS_REQUIRE_FULL to accept reduced coverage."
+  echo "ASSERTIONS: 0"
+  exit 1
 fi
 
 PASS=0
@@ -83,6 +105,10 @@ check() {
   local dir="$T/m$((PASS + FAIL))"
   mkdir -p "$dir"
   cp -R "$SKILL/scripts" "$SKILL/tests" "$dir/"
+  # case-browser.mjs resolves playwright-core relative to ITS OWN location, so the copy needs
+  # node_modules reachable. A symlink, not a copy: the package is ~90 MB with the browser
+  # registry, and one copy per mutant would make this suite unusable.
+  [ -d "$SKILL/node_modules" ] && ln -sfn "$SKILL/node_modules" "$dir/node_modules"
 
   if ! mutate "$dir/$relfile" "$old" "$new" 2>"$dir/mut.err"; then
     FAIL=$((FAIL + 1))
@@ -99,6 +125,7 @@ check() {
                       WT_AUTH="$auth" WT_APP=https://app.invalid \
                       CLERK_SECRET_KEY=not-a-real-key CLERK_USER_ID=not-a-real-user \
                       node "$dir/tests/lib/case-session.mjs" "$kase" 2>&1)"; rc=$? ;;
+    browser) out="$(node "$dir/tests/lib/case-browser.mjs" "$kase" 2>&1)"; rc=$? ;;
     *) printf '  FAIL  %-44s unknown driver %s\n' "$label" "$driver"; FAIL=$((FAIL + 1)); return ;;
   esac
 
@@ -440,6 +467,84 @@ if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
     'captures the filter list before matching it' test-walkthrough-stages.sh
 else
   echo "  ⚠️  ffmpeg absent — 7 of the 8 mutants in this section did NOT run."
+fi
+
+echo
+echo "=== the REAL-BROWSER suite can fail ==="
+
+# ⛔ TWO OF THESE TEN ARE THE REASON THE SECTION EXISTS, not a bonus. When
+# test-walkthrough-browser.sh was first written, 10 cases and 41 assertions passed on the
+# first run — and ablation showed that two of them COULD NOT FAIL:
+#
+#   · deleting `scopeFor`'s visible-panel preference SURVIVED, because `resolve` ALSO takes
+#     the first visible match, so both behaviours chose the same button. The fixture now
+#     carries a visible decoy of the same name OUTSIDE any panel and earlier in the DOM,
+#     which is the only arrangement where page-scope and panel-scope disagree.
+#   · removing `glideTo`'s `.catch(() => null)` SURVIVED, because `boundingBox()` on a
+#     `display:none` element RESOLVES to null rather than rejecting — the catch was never
+#     reached. An AMBIGUOUS locator is what makes it reject, and it rejects immediately
+#     rather than waiting out a timeout.
+#
+# Both fixes are only load-bearing while something keeps checking them, which is this list.
+if [ "$HAVE_BROWSER" -eq 1 ]; then
+  # ⚠️ THE DECLARED SUBSTRING IS THE t.step LABEL, NOT THE INNER ASSERTION, and that is not a
+  # convenience. Without the interval the page never gets its cursor back, so `waitForSelector`
+  # THROWS and `t.step` attributes the throw to the step — the inner `t.ok` never runs to be
+  # named. Declaring the inner label would score this WRONG-FAIL forever, which is the check
+  # working: it refuses to credit a catch it cannot attribute.
+  check "cursor stops re-installing" "$S" \
+    'const boot = () => { install(); setInterval(install, 1000); };' \
+    'const boot = () => { install(); };' \
+    'the cursor comes back after an SPA wipes the body' browser cursor-reinstall
+
+  check "the drawn cursor eats clicks" "$S" \
+    'pointer-events:none;left:-200px' 'pointer-events:auto;left:-200px' \
+    'the drawn cursor does not intercept clicks' browser cursor-install
+
+  check "glide to the corner, not the centre" "$S" \
+    'const x = Math.round(box.x + box.width / 2);' 'const x = Math.round(box.x);' \
+    'glideTo returns the real layout centre' browser glide-centre
+
+  # The same one-line defect, seen from the other end: the click then lands somewhere the
+  # viewer never saw the cursor go. Two cases must notice, or only one of them discriminates.
+  check "the click leaves the drawn cursor" "$S" \
+    'const x = Math.round(box.x + box.width / 2);' 'const x = Math.round(box.x);' \
+    "the browser's own clientX/clientY match the drawn cursor" browser click-lands-where-drawn
+
+  # ⛔ The mutant the STUB could not express at all: a Set-backed classList cannot represent
+  # re-triggering, so this survived the node-only mutation run. A real browser fires
+  # animationstart a second time only if the reflow happens.
+  check "the ripple reflow is removed" "$S" \
+    "r.classList.remove('__wt_pop'); void r.offsetWidth;" '' \
+    'two clicks produce two animation starts' browser ripple-retriggers
+
+  # Same shape as the one above: the removed catch makes glideTo THROW, so the nested t.step
+  # reports it under its own label and the inner assertion never runs to be named.
+  check "glideTo rethrows a rejecting box" "$S" \
+    'const box = await locator.boundingBox().catch(() => null);' \
+    'const box = await locator.boundingBox();' \
+    'glideTo swallows a REJECTING boundingBox' browser stub-fidelity
+
+  check "scope ignores the visible tabpanel" "$A" \
+    'for (const p of panels) if (await p.isVisible().catch(() => false)) return p;' '' \
+    'the click went to the visible panel' browser visible-tabpanel
+
+  # #226's fix, re-proven against a real accessible-name computation rather than the stub.
+  check "nameFlags falsy-vs-absent returns" "$A" \
+    'typeof a.nameFlags === "string" ? a.nameFlags : "i"' 'a.nameFlags || "i"' \
+    "nameFlags:'' matches only the capitalised control" browser nameflags
+
+  check "card bullets go through innerHTML" "$A" \
+    'li.textContent = b;' 'li.innerHTML = b;' \
+    'a bullet containing markup renders as text' browser card
+
+  check "the card loses its backdrop" "$A" \
+    'el.style.cssText = "background:#f6f8fa;opacity:1;";' \
+    'el.style.cssText = "opacity:0.4;";' \
+    'the card is opaque over the live app' browser card
+else
+  echo "  ⚠️  no launchable chromium — the 10 browser mutants did NOT run, including the two"
+  echo "      that are the only evidence the visible-tabpanel and glideTo-catch cases can fail."
 fi
 
 echo
