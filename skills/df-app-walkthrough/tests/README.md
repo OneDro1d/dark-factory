@@ -1,6 +1,6 @@
 # df-app-walkthrough test suites
 
-Five suites, enrolled by existing — `boot-kit/scripts/run-tests.sh` globs `test-*.sh` across
+Six suites, enrolled by existing — `boot-kit/scripts/run-tests.sh` globs `test-*.sh` across
 the whole repo, so nothing had to be added to a list.
 
 | suite | subject | needs |
@@ -10,9 +10,15 @@ the whole repo, so nothing had to be added to a list.
 | `test-walkthrough-assemble.sh` | `assemble.mjs` | node, ffmpeg |
 | `test-walkthrough-stages.sh` | `build-narration.mjs`, `record-walkthrough.mjs`, `check-prereqs.sh` | node, ffmpeg |
 | `test-walkthrough-mutations.sh` | **the four above** | node, ffmpeg, python3 |
+| `test-walkthrough-browser.sh` | the drawn cursor, click placement, resolution against real layout, `recordVideo` | node, **chromium**, Playwright's own ffmpeg, ffprobe |
 
-No suite needs a browser, a network, an app, or the TTS model. All seven scripts are
-covered to the depth stated below.
+The first five need no browser, no network, no app and no TTS model. The sixth needs a real
+Chromium by definition — it exists for the things a stub cannot settle — and it **skips with
+a declared `COVERAGE:` line** when the browser is absent, or **refuses** when
+`WT_TESTS_REQUIRE_FULL=1` says a degraded run is unacceptable. The gate sets that variable
+and installs the browser, so removing the install step turns the gate RED instead of quietly
+dropping 41 assertions. Both directions of that interlock are proven by
+`bin/prove-browser-interlock.sh` in the `notepad-onedroid-dark-factory` notepad: 11/11.
 
 ## ⛔ The gate installs ffmpeg, and it has to — read this before removing that step
 
@@ -71,14 +77,40 @@ it in miniature:
 - a `grep` without `--` reading `-ss` and `-map` as its own options, reporting a broken
   harness as four defects in `assemble.mjs`.
 
-## What these suites do NOT cover — declared, not implied
+## What the browser suite covers, and why it is a separate file
 
-- **The browser.** `runAction` and the session helpers are driven through a recording stub
-  (`lib/stub-page.mjs`). What a real Chromium adds — that a click lands on the pixel the
-  cursor was drawn at, that an SPA re-renders the injected cursor, that `recordVideo` starts
-  when assumed — is not tested here. The stub is built to fail the way Playwright fails
-  (`waitFor` rejects on a hidden element, `boundingBox` resolves to null) so the tests
-  measure the subject rather than the stub, but that is a mitigation, not coverage.
+`test-walkthrough-browser.sh` exists because the four items below used to be the first entry
+in the "NOT covered" list, with the honest reason *"a suite that needed Chromium would not
+run in the gate"*. It runs there now, so they are covered: the cursor installs into a real
+document and **comes back on its own after an SPA replaces the body** (the `setInterval`
+re-install claim, untestable against a stub), `glideTo` lands on the element's real layout
+centre, the browser's own `clientX/clientY` for the dispatched click **match the pixel the
+cursor was drawn at**, the ripple **re-triggers** on a second click at the same point, a
+same-named control resolves inside the **visible** tabpanel, `nameFlags: ""` is
+case-sensitive against a real accessible name, card bullets render as text and the card's
+stylesheet lands in `<head>`, and `recordVideo` writes a webm that `ffprobe` decodes.
+
+⛔ **And one case points the other way: `stub-fidelity`.** Roughly 190 assertions in the
+node-only suites rest on `stub-page.mjs` failing the way Playwright fails, and nothing
+checked that against a browser. It now asserts the two behaviours the stub models —
+`waitFor({visible})` rejects on a hidden element, `boundingBox` resolves to `null` for
+`display:none` — plus `glideTo`'s null contract. If Playwright ever changes either, those
+suites would keep passing against a stub that models nothing: the quietest way a green suite
+can go hollow.
+
+⚠️ **Two of its ten cases could not fail when first written, and ablation is what found
+that.** Deleting the visible-tabpanel preference from `scopeFor` SURVIVED, because `resolve`
+*also* takes the first visible match — so the fixture now carries a visible decoy of the same
+name outside any panel, which is what separates the two behaviours. And removing
+`glideTo`'s `.catch(() => null)` SURVIVED, because `boundingBox()` on `display:none`
+*resolves* to null rather than rejecting; an **ambiguous** locator is what makes it reject,
+so that is the input now used. All ten mutants are caught, each by the assertion that names
+it.
+
+## What these suites do NOT cover — declared, not implied
+- **A real app.** The browser suite drives `file://` fixtures, not a running application, so
+  nothing here exercises auth against a live app, an SPA's own routing, or a page that is
+  still loading when a beat fires. Those remain the operator's end-to-end run.
 - **The real TTS.** `build-narration.mjs` runs against a stub voice that emits a genuine
   2-second wav. The pacing arithmetic is therefore measured for real against real `ffprobe`
   output; the synthesis is not exercised at all.
