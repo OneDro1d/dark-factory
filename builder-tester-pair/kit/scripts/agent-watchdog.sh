@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # agent-watchdog.sh — keeps this workspace's agent (builder or tester, from pair.yaml) running unattended.
-# Runs in its own tmux session "watchdog", started by start-agent.sh. No cron needed.
+# Runs in its own tmux session "watchdog-<agent>", started by start-agent.sh. No cron needed.
 #  - every minute: a pending chat restart request ("<name> restart" → kit/bin/restart-request) → after 30 s, a
 #    fresh claude process. Message ids already honoured are kept, so a re-read never restarts again.
 #  - every 10 min: if the agent's tmux session is gone, or claude has exited, start it again
@@ -9,7 +9,7 @@
 #  - builder only, if paths.heartbeat is set: a heartbeat file older than schedule.stall_minutes means the loop
 #    stopped → fresh process, at most once per 2 h
 # Survives the owner being locked out of the workspace UI; not a workspace rebuild (then run start-agent.sh once).
-# Log: ~/.cache/agent-watchdog.log    Stop: tmux kill-session -t watchdog
+# Log: ~/.cache/agent-watchdog.log    Stop: tmux kill-session -t watchdog-<agent>   (~ = the agent's own HOME)
 set -uo pipefail
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PC() { python3 "$KIT/kit/lib/pairconf.py" "$@"; }
@@ -24,7 +24,10 @@ HOURS="$(PC get schedule.fresh_start_utc | python3 -c 'import json,sys; print(" 
 STALL_MIN="$(PC get schedule.stall_minutes)"; STALL_MIN="${STALL_MIN:-0}"
 HEARTBEAT=""; [ "$ROLE" = builder ] && HEARTBEAT="$(PC get paths.heartbeat)"
 STALL_COOLDOWN_MIN=120
-printf -v LAUNCH 'PAIR_AGENT_SESSION=%q claude --permission-mode auto %q; exec bash' "$NAME" "$CMD"
+# HOME and PAIR_CONFIG are passed explicitly: tmux starts commands from the tmux server's environment, not ours, and a
+# workspace can hold several agents (each with its own HOME, see agent-home.sh) that must never read each other's pair.yaml.
+UMASK_PFX=""; [ -n "$(PC get paths.share_group)" ] && UMASK_PFX="umask 002; "   # builder+tester as 2 users in one workspace
+printf -v LAUNCH '%sHOME=%q PAIR_CONFIG=%q PAIR_AGENT_SESSION=%q claude --permission-mode auto %q; exec bash' "$UMASK_PFX" "$HOME" "$(PC path)" "$NAME" "$CMD"
 LOG="$HOME/.cache/agent-watchdog.log"; mkdir -p "$(dirname "$LOG")"
 STAMP="$HOME/.cache/agent-watchdog.last-refresh"
 LAST_STALL="$HOME/.cache/agent-watchdog.last-stall-refresh"

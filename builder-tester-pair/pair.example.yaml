@@ -43,7 +43,12 @@ identity:                       # who the agents commit and push as — `./setup
 builder:                        # writes code to the tester's spec, never sees the tests
   name: Builder                 # agent name used in chat: "builder restart", "[bot — Builder, for Jane]"
   workspace: payments-builder   # Coder workspace name
-  host: coder-jane-payments-builder   # `hostname` inside that workspace
+  host: coder-jane-payments-builder   # `hostname` inside that workspace; may be a pattern (`*`, `?`) because a
+                                #   Kubernetes pod's hostname gets a new random suffix on every restart:
+                                #   coder-<workspace-id>-*  (`echo $CODER_WORKSPACE_ID`)
+  agent_home: ""                # optional: run this agent with its OWN home folder (absolute path), so several pairs can
+                                #   share one workspace. `bash kit/scripts/agent-home.sh init`, then run ./setup --steps
+                                #   with HOME set to it. Claude/gh/git sign-ins are linked from the real home.
   start_command: builder-start  # slash command that starts it: /builder-start
   coder_template: ""            # kit/scripts/ensure-workspace.sh: Coder template to create this workspace from
                                 #   (blank = never create it; print the steps for a person instead)
@@ -53,7 +58,8 @@ builder:                        # writes code to the tester's spec, never sees t
 tester:                         # product owner + architect + tester; holds the tests
   name: Tester
   workspace: payments-tester
-  host: coder-jane-payments-tester
+  host: coder-jane-payments-tester    # exact hostname or pattern, as for the builder
+  agent_home: ""                # optional own home folder, as for the builder
   k8s_namespace: jane-payments-tester-01   # the tester workspace's pod namespace (guard blocks exec into it)
   start_command: tester-start
   kits_dir: ~/argus-kits        # where the tester keeps its working test files (its own home only)
@@ -221,6 +227,15 @@ restore:                        # optional: rebuilt-workspace restore (kit/scrip
 
 guard:
   blocked_hosts: []              # hosts this pair must never talk to (commands and fetches are blocked)
+  workspace_mode: separate       # separate (DEFAULT) | single. How the two agents are deployed:
+                                 #   separate = builder and tester each in their OWN workspace. The kit's hand-over tools
+                                 #     (handoff, testrun, reqstatus, verdict, knowledge-refresh) then require a process that
+                                 #     shares PID 1's namespaces, and fail closed when they cannot prove it. Strongest.
+                                 #   single   = both agents in ONE workspace (e.g. as two Linux users). One of them can never
+                                 #     read PID 1, so the check compares with the oldest readable process of its own user
+                                 #     instead. It still catches a process that really unshared, but agents that share an
+                                 #     account can do anything that account can: choose this on purpose, and also set
+                                 #     builder.user / tester.user / tester.agent_home and guard.block_privilege_escalation.
 
 dashboard:
   artifact_url: ""              # YOUR OWN live dashboard page (each person publishes their own copy of

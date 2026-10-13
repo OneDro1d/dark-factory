@@ -12,7 +12,23 @@ NAME="$(PC get "$ROLE.name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]
 NAME="${NAME:-$ROLE}"
 CMD="/$(PC get "$ROLE.start_command")"
 ROOT="$(PC get paths.shared_root)"
-tmux has-session -t watchdog 2>/dev/null || tmux new -d -c "$ROOT" -s watchdog "bash $KIT/kit/scripts/agent-watchdog.sh"
+# Optional per-agent HOME (`<role>.agent_home`): lets several pairs share one workspace. See agent-home.sh.
+CFG="$(PC path)"
+AH="$(bash "$KIT/kit/scripts/agent-home.sh" path)"
+if [ -n "$AH" ]; then
+  [ -d "$AH" ] || { echo "$AH does not exist: run  bash $KIT/kit/scripts/agent-home.sh init  (then ./install.sh with HOME=$AH)"; exit 1; }
+  export HOME="$AH"
+fi
+export PAIR_CONFIG="$CFG"
+# Optional `paths.share_group` (builder and tester as two Linux users in ONE workspace, see tester-users.sh): the tmux
+# sessions must carry that group (a group added after login is not in this shell yet) and write group-writable files.
+SG="$(PC get paths.share_group)"
+if [ -n "$SG" ] && [ -z "${PAIR_SG_REEXEC:-}" ] && ! id -nG | tr ' ' '\n' | grep -qx "$SG"; then
+  export PAIR_SG_REEXEC=1; exec sg "$SG" -c "bash $(printf %q "${BASH_SOURCE[0]}")"
+fi
+UMASK_PFX=""; [ -n "$SG" ] && UMASK_PFX="umask 002; "
+WD="watchdog-$NAME"   # one watchdog per agent, so two agents in a workspace never share (or stop) each other's
+tmux has-session -t "$WD" 2>/dev/null || tmux new -d -c "$ROOT" -s "$WD" "HOME=$(printf %q "$HOME") PAIR_CONFIG=$(printf %q "$CFG") bash $KIT/kit/scripts/agent-watchdog.sh"
 if [ -t 0 ] && [ -t 1 ]; then ATTACH=1; else ATTACH=0; fi   # no terminal (e.g. `! …` from Claude): start detached
 if tmux has-session -t "$NAME" 2>/dev/null; then
   [ "$ATTACH" = 1 ] && exec tmux attach -t "$NAME"
@@ -22,7 +38,7 @@ fi
 # stands down until it goes stale (lock_stale_minutes).
 LOCK="$HOME/.claude/channel-listener/state/listener.lock"
 [ -f "$LOCK" ] && { echo "released a listener lock left by the previous agent: $(head -c 200 "$LOCK")"; rm -f "$LOCK"; }
-printf -v LAUNCH 'PAIR_AGENT_SESSION=%q claude --permission-mode auto %q; exec bash' "$NAME" "$CMD"
+printf -v LAUNCH '%sHOME=%q PAIR_CONFIG=%q PAIR_AGENT_SESSION=%q claude --permission-mode auto %q; exec bash' "$UMASK_PFX" "$HOME" "$CFG" "$NAME" "$CMD"
 echo "starting $NAME ($ROLE): claude --permission-mode auto \"$CMD\" in tmux session '$NAME' (Ctrl-b then d to leave it running)"
 if [ "$ATTACH" = 1 ]; then
   exec tmux new -c "$ROOT" -s "$NAME" "$LAUNCH"

@@ -31,7 +31,7 @@ import pairconf  # noqa: E402
 def _initial_ns():
     """Refuse inside an unshare'd namespace, where any process can set its own hostname (role spoof)."""
     try:
-        return all(os.readlink(f"/proc/self/ns/{n}") == os.readlink(f"/proc/1/ns/{n}") for n in ("uts", "user"))
+        return pairconf.initial_namespaces()          # strict by default; guard.workspace_mode: single relaxes it (pairconf.py)
     except OSError:
         return False
 

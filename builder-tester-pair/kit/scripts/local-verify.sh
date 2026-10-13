@@ -111,6 +111,7 @@ print(f"GO_MIN={q(str(lv.get('go_min', '1.25')))}")
 print(f"EXTRA_SETUP_SIG={q(str(lv.get('setup_signatures', '')))}")
 print("declare -a GO_REPLACE=(" + " ".join(q(f"{r['module']}|{r['git']}|{r['sha']}") for r in lv.get("go_replace", [])) + ")")
 print("declare -a DOTNET_PREPACK=(" + " ".join(q(str(p)) for p in lv.get("dotnet_prepack", [])) + ")")
+print("declare -a CUSTOM_CMDS=(" + " ".join(q(str(c)) for c in (lv.get("commands") or [])) + ")")
 print(f"NPM_TEST_ARGS={q(str(lv.get('npm_test_args', '--watch=false')))}")
 print(f"ROOT_NPM_TEST_ARGS={q(str(lv.get('root_npm_test_args', '--watch=false')))}")
 fs = lv.get("full_stack") or {}
@@ -153,7 +154,7 @@ CLEANPATH="$DOTNET_HOME:${GOTC:+$GOTC/bin:}/usr/local/bin:/usr/bin:/bin"
 mkdir -p "$W/home"
 run_env() { env -i HOME="$W/home" PATH="$CLEANPATH" LANG=C.UTF-8 TMPDIR="$W/tmp" \
   DOTNET_ROOT="$DOTNET_HOME" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 NUGET_PACKAGES="$HOME/.nuget/packages" \
-  DOTNET_CLI_HOME="$W/home" \
+  DOTNET_CLI_HOME="$W/home" AGENT_HOME="$HOME" \
   GOROOT="${GOTC:-}" GOTOOLCHAIN=local GOPATH="$HOME/go" GOMODCACHE="$HOME/go/pkg/mod" GOCACHE="$HOME/.cache/go-build" GOWORK=off GOFLAGS=-mod=mod CI=1 \
   ${CHROME_BIN:+CHROME_BIN="$CHROME_BIN"} "${EXTRA_ENV[@]}" "$@"; }
 # output that means "the harness could not set this up", not "the code is wrong"
@@ -274,6 +275,17 @@ if [ -f package.json ]; then
       else step "root: npm test" npm test -s -- $ROOT_NPM_TEST_ARGS; COVERED+=("*"); fi
     else DEVIATIONS+=("root: build only — no npm test script"); BUILD_ONLY=$((BUILD_ONLY+1)); fi
   fi
+fi
+
+# --- optional project test commands (repos[].local_verify.commands): for a repo whose tests are not a Go / .NET / npm
+# project the steps above can find (e.g. a single-file app with `node tests/run-all.mjs`). Each runs from the repo
+# root in the scrubbed environment; $AGENT_HOME is this agent's real home (toolchains live there: the step's own HOME
+# is an empty per-run folder). A command that exits non-zero is a FAIL; all of them passing covers the whole tree. ---
+if [ "${#CUSTOM_CMDS[@]}" -gt 0 ] && [ "${#CHANGED[@]}" -gt 0 ]; then
+  SVC_BLOCKED=0
+  ci=0
+  for c in "${CUSTOM_CMDS[@]}"; do ci=$((ci+1)); step "custom $ci: ${c:0:60}" bash -c "$c"; done
+  COVERED+=("*")
 fi
 
 # --- optional local full stack (repos[].local_verify.full_stack): Postgres + Azurite + integration tests ---

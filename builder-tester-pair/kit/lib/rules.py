@@ -43,9 +43,18 @@ DEFAULTS = {
     "dark_factory.enabled": False, "dark_factory.loop_skill": "dark-factory-build", "dark_factory.skills_dir": "",
     "dark_factory.stage_gate": False,
     "messaging.broker": "handoff", "argus.execution_hub": "",
-    "schedule.tick_minutes": 3, "schedule.stall_minutes": 45, "owner.teams_self_chat": "48:notes",
+    "schedule.tick_minutes": 3, "schedule.stall_minutes": 45, "schedule.digest_utc": "02:30", "owner.teams_self_chat": "48:notes",
     "builder.start_command": "builder-start", "tester.start_command": "tester-start",
     "jira.builder_label": "agent-builder", "jira.tester_label": "agent-tester",
+    # Monday as the tracker (instead of / next to Jira): a card carrying an agent's label is assigned to it, and an
+    # update that starts with the agent's name or tags the owner is addressed to it. Tools: the Monday MCP connector.
+    "monday.boards": [], "monday.mcp_server": "claude_ai_Trilix__monday", "monday.label_column": "",
+    "monday.builder_label": "", "monday.tester_label": "", "monday.owner_user_id": "",
+    # Assignment by column instead of by label: set monday.owner_column (the people column) and the card is the agents'
+    # when it names the owner there AND its role column holds that agent's role AND its status is open.
+    "monday.owner_column": "", "monday.role_column": "", "monday.status_column": "", "monday.groups": [],
+    "monday.builder_roles": ["dev"], "monday.tester_roles": ["po", "qa"], "monday.status_open": ["Ready", "Doing"],
+    "slack.mention_tag": True,   # Slack @mentions of the owner in the watched channels (needs owner.slack_user_id)
     "owner.coder_user": "", "owner.coder_url": "",
     "builder.coder_template": "", "tester.coder_template": "", "builder.coder_parameters": {},
     "tester.coder_parameters": {}, "builder.onboarding": "", "tester.onboarding": "",
@@ -286,6 +295,28 @@ def session(cfg, role):
     return "\n".join(L)
 
 
+def _monday_assign(cfg, role, name):
+    """The sentence saying which Monday cards are this agent's: by column (owner + role + open status) when
+    monday.owner_column is set, else by label."""
+    if get(cfg, "monday.owner_column"):
+        oc, rc, sc = get(cfg, "monday.owner_column"), get(cfg, "monday.role_column"), get(cfg, "monday.status_column")
+        roles = " or ".join(f"`{r}`" for r in get(cfg, f"monday.{role}_roles"))
+        opens = " or ".join(f"`{s}`" for s in get(cfg, "monday.status_open"))
+        oid = str(get(cfg, "monday.owner_user_id") or "")
+        groups = get(cfg, "monday.groups")
+        where = (f"it sits in group(s) {', '.join(str(x) for x in groups)} (other missions' cards are NOT yours, even when "
+                 f"the owner and role match); ") if groups else ""
+        return (f"is assigned to {name} when ALL hold: {where}its Owner people-column (`{oc}`) includes the owner"
+                + (f" (user {oid})" if oid else "") + f"; its role column (`{rc or 'the DF Role column - find its id with get_board_info'}`) is {roles}; "
+                f"its status column (`{sc or 'the DF Status column - find its id with get_board_info'}`) is {opens}; "
+                f"and the board's own claim rule holds: its Claimed By and Blocked By columns are empty (a card another worker "
+                f"has claimed is never taken). Columns are resolved by id, never by title")
+    label = get(cfg, f"monday.{role}_label") or "agent-" + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    col = (f"the column `{get(cfg, 'monday.label_column')}`" if get(cfg, "monday.label_column")
+           else "the board's tags / labels column (find its id with get_board_info; resolve columns by id, never by title)")
+    return f"is assigned to {name} when it carries the label `{label}` in {col}"
+
+
 def derived_texts(cfg):
     """The ${derived.*} keys the listener/start templates use."""
     d = {k.split(".", 1)[1]: get(cfg, k) for k in DEFAULTS if k.startswith("listener.")}
@@ -314,6 +345,18 @@ def derived_texts(cfg):
         "jira_ignore_note": (f"labels {', '.join(get(cfg, 'jira.ignore_labels'))} look similar but are NOT assignments — never act on them."
                              if get(cfg, "jira.ignore_labels") else ""),
         "requirements_index": (f" and link it from '{get(cfg, 'knowledge.requirements_index')}'" if get(cfg, "knowledge.requirements_index") else ""),
+        "monday_tools": f"mcp__{get(cfg, 'monday.mcp_server')}__" if get(cfg, "monday.mcp_server") else "your Monday MCP tools: ",
+        "monday_boards": ", ".join(str(b) for b in get(cfg, "monday.boards")) or "(none configured)",
+        "monday_label_builder": get(cfg, "monday.builder_label") or "agent-" + re.sub(r"[^a-z0-9]+", "-", bn.lower()).strip("-"),
+        "monday_label_tester": get(cfg, "monday.tester_label") or "agent-" + re.sub(r"[^a-z0-9]+", "-", tn.lower()).strip("-"),
+        "monday_label_column": (f"the column `{get(cfg, 'monday.label_column')}`" if get(cfg, "monday.label_column")
+                                else "the board's tags / labels column (find its id with get_board_info; resolve columns by id, never by title)"),
+        "monday_owner_id": str(get(cfg, "monday.owner_user_id") or "") or "the owner's Monday user",
+        "monday_assign_builder": _monday_assign(cfg, "builder", bn), "monday_assign_tester": _monday_assign(cfg, "tester", tn),
+        "slack_mention_tag": ("<@" + str(pairconf.get(cfg, "owner.slack_user_id") or "") + ">") if pairconf.get(cfg, "owner.slack_user_id") else "",
+        "no_teams_note": ("" if pairconf.get(cfg, "teams.hub_workspace_id") else
+                          f"Teams is not configured here, so there is no self-chat: put what {on} must see on the board "
+                          f"(`board add need ...`) and say it in your terminal session; never post it on Slack."),
     })
     return d
 

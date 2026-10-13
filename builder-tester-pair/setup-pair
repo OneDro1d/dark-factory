@@ -369,6 +369,18 @@ def build_sources(cfg, role):
                     **({"_hub": f"mcp__{pairrules.get(cfg, 'jira.mcp_server')}__jira_list_issues"} if pairrules.get(cfg, "jira.mcp_server") else {}),
                     "jql": f'project = {g("jira.project")} AND labels = "{label}" AND statusCategory != Done ORDER BY updated DESC',
                     "limit": 20, "workspace_id": g("jira.hub_workspace_id")})
+    if g("monday.boards"):
+        mrules = pairrules.derived_texts(cfg)
+        label = mrules["monday_label_" + role]
+        src.append({"key": "monday-assigned", "kind": "monday", "boards": [str(b) for b in g("monday.boards")],
+                    "limit": 25,
+                    **({"owner_column": g("monday.owner_column"), "owner_user_id": str(g("monday.owner_user_id") or ""),
+                        "role_column": g("monday.role_column"), "status_column": g("monday.status_column"),
+                        "groups": pairrules.get(cfg, "monday.groups"),
+                        "roles": pairrules.get(cfg, f"monday.{role}_roles"), "status_open": pairrules.get(cfg, "monday.status_open")}
+                       if g("monday.owner_column") else {"label": label}),
+                    **({"label_column": g("monday.label_column")} if g("monday.label_column") and not g("monday.owner_column") else {}),
+                    "_hub": f"mcp__{pairrules.get(cfg, 'monday.mcp_server')}__get_board_items_page / get_updates"})
     return src
 
 
@@ -690,7 +702,8 @@ def cmd_check(a):
     item(wd or None, "the KIT's watchdog is running" + ("" if wd or "watchdog:" not in sess else
                                                         " (a tmux 'watchdog' session runs, but not the kit's script)"),
          f"bash {KIT}/kit/scripts/start-agent.sh")
-    name = pairconf.name(cfg, role).lower() if role in ("builder", "tester") else "?"
+    # the tmux session name is the agent's name as a slug ("Dr. Strange" -> dr-strange), as start-agent.sh makes it
+    name = (re.sub(r"[^a-z0-9_-]+", "-", pairconf.name(cfg, role).lower()).strip("-") or role) if role in ("builder", "tester") else "?"
     item(f"{name}:" in sess or None, f"agent session '{name}' running", f"bash {KIT}/kit/scripts/start-agent.sh")
     if pairconf.get(cfg, "jira.project"):
         cl = pairconf.get(cfg, "jira.connector_login") or {}

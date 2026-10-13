@@ -28,7 +28,7 @@ REQ_RE = re.compile(r"([A-Z][A-Z0-9]{1,9}-[0-9]{1,7}|req-[0-9]{8}-[a-z0-9]{4,12}
 
 def _initial_ns():
     try:
-        return all(os.readlink(f"/proc/self/ns/{n}") == os.readlink(f"/proc/1/ns/{n}") for n in ("uts", "user"))
+        return pairconf.initial_namespaces()          # strict by default; guard.workspace_mode: single relaxes it (pairconf.py)
     except OSError:
         return False
 

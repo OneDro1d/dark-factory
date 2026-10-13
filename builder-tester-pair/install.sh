@@ -37,7 +37,10 @@ missing=0
 for t in python3 tmux git gh claude; do
   if command -v "$t" >/dev/null; then echo "ok   $t"; else echo "MISSING $t"; missing=1; fi
 done
-python3 -c "import yaml" 2>/dev/null || { echo "installing PyYAML for this user"; python3 -m pip install --user -q pyyaml; }
+# --user only (~/.local): never touches system Python. Debian/Ubuntu images mark system Python "externally managed"
+# (PEP 668) and refuse the plain form, so the second attempt adds the flag that PEP documents for exactly this case.
+python3 -c "import yaml" 2>/dev/null || { echo "installing PyYAML for this user"
+  python3 -m pip install --user -q pyyaml 2>/dev/null || python3 -m pip install --user --break-system-packages -q pyyaml; }
 [ "$missing" = 0 ] || { echo "Install the missing tools above, then re-run ./install.sh"; exit 1; }
 
 say "2/9 pair.yaml"
@@ -268,6 +271,68 @@ else
   warn "Fix: bash $KIT/kit/scripts/make-agent-kubeconfig.sh  (prints the commands for you to run), then re-run ./install.sh"
   echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 fi
+
+say "7b/9 this agent's environment (<role>.env)"
+python3 - "$KIT" "$HOME/.claude/settings.json" <<'PY'
+import json, pathlib, re, sys
+kit, sp = sys.argv[1], pathlib.Path(sys.argv[2])
+sys.path.insert(0, kit + "/kit/lib")
+import pairconf
+cfg = pairconf.load(); role = pairconf.role(cfg)
+env = pairconf.get(cfg, f"{role}.env", {}) or {}
+deny_mcp = [str(x) for x in (pairconf.get(cfg, "guard.deny_mcp", []) or [])]    # MCP servers this pair must never use
+bad = [k for k in env if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", str(k)) or k in ("KUBECONFIG", "HOME", "PATH", "PAIR_CONFIG")]
+if bad:
+    sys.exit(f"{role}.env: not allowed / not a plain variable name: {bad}")
+bad = [n for n in deny_mcp if not re.fullmatch(r"[A-Za-z0-9_.*-]+", n)]
+if bad:
+    sys.exit(f"guard.deny_mcp: not a plain server name / pattern: {bad}")
+# a bare name (`Synapse-pwww-live`, or `srv__upstream`) denies all its tools; an entry ending in `*` is used as written
+deny_pat = [n if (n.startswith("mcp__") or n.endswith("*")) else f"mcp__{n}__*" for n in deny_mcp]
+# guard.allow_mcp: the exact MCP tools this pair is MEANT to use, as `mcp__...` patterns. In auto mode a judgment-based
+# classifier decides unlisted calls; when some sibling tools are denied it can misread an intended call as "routing
+# around the deny" and block it intermittently. An explicit allow rule removes the guesswork. Hooks and the deny list
+# still apply, and an entry that is also denied is refused.
+allow_mcp = [str(x) for x in (pairconf.get(cfg, "guard.allow_mcp", []) or [])]
+bad = [a for a in allow_mcp if not (a.startswith("mcp__") and re.fullmatch(r"[A-Za-z0-9_.*-]+", a))]
+if bad:
+    sys.exit(f"guard.allow_mcp: entries must be `mcp__...` patterns: {bad}")
+both = [a for a in allow_mcp if a in deny_pat]
+if both:
+    sys.exit(f"guard.allow_mcp: also denied in guard.deny_mcp: {both}")
+if not env and not deny_mcp and not allow_mcp:
+    print(f"{role}.env / guard.deny_mcp / guard.allow_mcp not set — nothing to add"); sys.exit(0)
+s = json.loads(sp.read_text()) if sp.exists() and sp.read_text().strip() else {}
+cur = s.setdefault("env", {})
+changed = [k for k, v in env.items() if cur.get(k) != str(v)]
+cur.update({k: str(v) for k, v in env.items()})
+perm = s.setdefault("permissions", {})
+deny = perm.setdefault("deny", [])
+# guard.deny_mcp OWNS the MCP deny entries (those starting `mcp__`): rebuild them from pair.yaml so an entry removed
+# from the config is also removed from settings.json (otherwise a narrowed rule would stay blocked). Non-MCP deny
+# rules (Bash(...), Read(...)) are left alone.
+if deny_mcp:
+    new = [d for d in deny if not str(d).startswith("mcp__")] + deny_pat
+    added = [p for p in deny_pat if p not in deny]
+    removed = [d for d in deny if str(d).startswith("mcp__") and d not in deny_pat]
+    perm["deny"] = new
+else:
+    added, removed = [], []
+allow = perm.setdefault("allow", [])
+allow_changed = False
+if allow_mcp:
+    new_allow = [a for a in allow if not str(a).startswith("mcp__")] + allow_mcp
+    allow_changed = new_allow != allow
+    perm["allow"] = new_allow
+if changed or added or removed or allow_changed:
+    sp.parent.mkdir(parents=True, exist_ok=True); sp.write_text(json.dumps(s, indent=2) + "\n")
+if env:
+    print(f"ok   settings.json env: {', '.join(sorted(env))}" + (" (updated)" if changed else " (unchanged)") + " — names only; values are not secrets")
+if deny_mcp:
+    print(f"ok   settings.json permissions.deny: {len(deny_pat)} MCP pattern(s)" + (f" ({len(added)} added, {len(removed)} removed)" if (added or removed) else " (unchanged)"))
+if allow_mcp:
+    print(f"ok   settings.json permissions.allow: {len(allow_mcp)} MCP pattern(s)" + (" (updated)" if allow_changed else " (unchanged)"))
+PY
 
 say "8/9 render this workspace's files"
 "$KIT/setup-pair" render

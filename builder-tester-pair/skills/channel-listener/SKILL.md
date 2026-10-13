@@ -66,7 +66,10 @@ or a private channel looks like it does not exist.
 Source kinds: `teams` (a channel: workspace_id, team_id, channel_id, max_results), `teams-chat`
 (the owner's self-chat `48:notes`, `command_inbox: true`), `teams-dms` (the owner's 1:1 and group chats,
 `addressed_only`), `slack` (a channel or the owner's self-DM, channel_id, limit), `slack-dms`
-(addressed-only), `jira` (jql, limit, workspace_id).
+(addressed-only), `jira` (jql, limit, workspace_id), `monday` (boards, label, optional label_column, limit:
+cards carrying the agent's label; read with the Monday MCP tools named in `_hub`, handled by the
+`monday_tasks` / `monday_mentions` rules). Slack `@mentions` of the owner are not a source of their own: the
+`slack_mentions` rule filters the messages the `slack` sources already read.
 
 State — `~/.claude/channel-listener/state/<key>.json`: `{"last_seen": "...", "seen_ids": [...]}` (cap
 `seen_ids` at ~200). Pending inbox — `state/pending.json`: in-scope items classified but not yet handled.
@@ -79,7 +82,8 @@ State — `~/.claude/channel-listener/state/<key>.json`: `{"last_seen": "...", "
    templates use: `fix_loop` (FIRST, before reading any source), `scope_only`, `post_format`,
    `message_format`, `alerts`, `dm_rules`, `chat_approvals`, `team_requests`, `jira`, `jira_tasks`,
    `test_recheck`, `knowledge_refresh`, `requirements_graph`, `two_readings`, `requirement_tracking`,
-   `branch_rule`, `restart_command`, `help_command`, `slack_identity`, `teams_mentions`, `learning`,
+   `branch_rule`, `restart_command`, `help_command`, `slack_identity`, `teams_mentions`, `slack_mentions`,
+   `slack_video_feedback`, `morning_digest`, `monday_tasks`, `monday_mentions`, `learning`,
    `action_policy_spec`, and `live_dashboard` (LAST step of the tick, builder only; a failed push is
    reported in one line and retried next tick — never block the tick on it). When a new key is added to a
    template, add it to this list in the same change.

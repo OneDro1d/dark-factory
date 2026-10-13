@@ -771,6 +771,16 @@ if not tester:
     promote = tool in ("Edit", "Write") and "settings.json" in str(ti.get("file_path", "")) and \
         re.search(r"PAIR_GUARD_TEST_HOST|PAIR_CONFIG", blob)
     web_hit = tool == "WebFetch" and bool(REPO_RX) and re.search(r"(" + REPO_RX + r")[^ ]*/(tree|blob|raw)/[^ ]*kits", str(ti.get("url", "")))
+    # Same-workspace stand-in (tester runs as another Linux user here): the builder must not become that user or open
+    # its home. With the tester in its own workspace neither can happen, so both checks are off unless configured.
+    _esc = tool == "Bash" and G("guard.block_privilege_escalation", False) is True and re.search(
+        r"(?:^|[;&|(`]|\$\(|\bxargs\s+|\benv\s+|\bexec\s+|\bcommand\s+)\s*(?:sudo|su|doas|runuser|pkexec|nsenter|setpriv)\b", cmd)
+    _th = os.path.expanduser(str(G("tester.agent_home") or "")).rstrip("/")
+    _home_hit = bool(_th) and G("tester.user") and _th in (paths + " " + cmd + " " + str(ti.get("file_path", "")))
+    if _esc or _home_hit:
+        block(f"BLOCKED (pair-guard): HOLDOUT. {TESTER} runs in this workspace as its own Linux user. The builder may "
+              f"not use sudo/su/doas to become another user, nor open {TESTER}'s home folder. If you need a "
+              f"privileged step, put it in the hand-over under 'Needs you'.")
     if clone_hit or glob_hit or glob_tool or promote or web_hit:
         block(f"BLOCKED (pair-guard): HOLDOUT. The builder may not clone the checker repos, reach kits/ by glob or "
               f"URL, or make itself the tester ({TESTER} is {TESTER_HOST or 'the tester host'}, set in pair.yaml).")

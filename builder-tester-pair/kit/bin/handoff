@@ -85,7 +85,7 @@ def _initial_namespaces():
     """hostname is the role; refuse if this process could have set its own hostname (unshare -U -r -u).
     Still a tripwire: both agents are one Unix user on a shared disk (say so, never claim more)."""
     try:
-        return all(os.readlink(f"/proc/self/ns/{n}") == os.readlink(f"/proc/1/ns/{n}") for n in ("uts", "user"))
+        return pairconf.initial_namespaces(CFG)      # strict by default; guard.workspace_mode: single relaxes it (pairconf.py)
     except OSError:
         return False
 

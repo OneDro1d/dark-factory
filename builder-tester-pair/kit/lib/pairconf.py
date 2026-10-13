@@ -9,6 +9,7 @@ hard-coded. Lookup order for the file:
 CLI (for shell scripts):  python3 pairconf.py get builder.name
                           python3 pairconf.py role            # builder | tester | unknown, from `hostname`
 """
+import fnmatch
 import json
 import os
 import pathlib
@@ -146,13 +147,83 @@ def get(cfg, dotted, default=None):
 
 
 def role(cfg=None, host=None):
-    """Which role this machine plays, decided by hostname (never by an env var an agent could set)."""
+    """Which role this machine plays, decided by hostname (never by an env var an agent could set).
+
+    `<role>.host` is an exact hostname or a shell-style pattern (`*`, `?`): a Kubernetes pod's hostname carries a random
+    suffix that changes on every restart (coder-<workspace-id>-<hash>-<id>), so `coder-<workspace-id>-*` is stable."""
     cfg = cfg or load()
     host = host or socket.gethostname()
     for r in ROLES:
-        if get(cfg, f"{r}.host") == host:
+        want = get(cfg, f"{r}.host")
+        if want and fnmatch.fnmatchcase(host, str(want)):
+            # `<role>.user` (optional): when both roles run in ONE workspace (a temporary stand-in for two), the
+            # Linux user tells them apart. Unset = any user, as before.
+            u = get(cfg, f"{r}.user")
+            if u and str(u) != _current_user():
+                continue
             return r
     return "unknown"
+
+
+def workspace_mode(cfg=None):
+    """How the two agents are deployed: `separate` (DEFAULT: the builder and the tester are in two workspaces) or
+    `single` (both run in ONE workspace, e.g. as two Linux users). Set `guard.workspace_mode` in pair.yaml. Anything
+    unreadable or unrecognised means `separate`, the strict reading."""
+    try:
+        v = str(get(cfg or load(), "guard.workspace_mode") or "separate").strip().lower()
+    except (Exception, SystemExit):
+        return "separate"
+    return "single" if v == "single" else "separate"
+
+
+def initial_namespaces(cfg=None):
+    """True when this process shares its uts + user namespaces with a TRUSTED reference process (the role is decided by
+    hostname, so a process that could set its own hostname - `unshare -U -r -u` - must never be believed).
+
+    Reference = PID 1. In `separate` workspace mode (the default) that is the whole check, and it fails closed: if PID 1's
+    namespaces cannot be read, the answer is False, exactly as the kit shipped.
+    In `single` workspace mode (guard.workspace_mode: single) the builder and the tester share one workspace, so one of them
+    can never read PID 1 (another Linux user; or a setgid launcher such as `sg`). Then, and only then, the reference is the
+    OLDEST process of this user whose namespaces we can read: the tmux server / watchdog that start-agent.sh launched in the
+    original namespaces. A process that unshared differs from it, so the tripwire still fires when PID 1 IS readable
+    (compared with PID 1) and when it is not (compared with that process). Still a tripwire, not a sandbox: agents
+    sharing one account can do anything that account can, which is why `single` is a deliberate, named setting."""
+    def ns(pid, n):
+        return os.readlink(f"/proc/{pid}/ns/{n}")
+    names = ("uts", "user")
+    try:
+        mine = [ns("self", n) for n in names]
+    except OSError:
+        return False
+    try:
+        return mine == [ns(1, n) for n in names]
+    except OSError:
+        if workspace_mode(cfg) != "single":
+            return False          # strict: PID 1 unreadable -> not trusted (the original behaviour)
+        pass                      # single-workspace mode: fall back to the oldest readable process of ours
+    uid, best = os.getuid(), None
+    for d in os.listdir("/proc"):
+        if not d.isdigit() or int(d) == os.getpid():
+            continue
+        try:
+            if os.stat(f"/proc/{d}").st_uid != uid:
+                continue
+            with open(f"/proc/{d}/stat") as f:
+                start = int(f.read().rsplit(")", 1)[1].split()[19])      # field 22: start time in clock ticks
+            ref = [ns(d, n) for n in names]
+        except (OSError, ValueError, IndexError):
+            continue
+        if best is None or start < best[0]:
+            best = (start, ref)
+    return best is not None and mine == best[1]
+
+
+def _current_user():
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_name     # the account, never an env var an agent could set
+    except Exception:
+        return ""
 
 
 def name(cfg, r):
