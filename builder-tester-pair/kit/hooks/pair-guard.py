@@ -774,7 +774,7 @@ if not tester:
     # Same-workspace stand-in (tester runs as another Linux user here): the builder must not become that user or open
     # its home. With the tester in its own workspace neither can happen, so both checks are off unless configured.
     _esc = tool == "Bash" and G("guard.block_privilege_escalation", False) is True and re.search(
-        r"(?:^|[;&|(`]|\$\(|\bxargs\s+|\benv\s+|\bexec\s+|\bcommand\s+)\s*(?:sudo|su|doas|runuser|pkexec|nsenter|setpriv)\b", cmd)
+        r"(?:^|[;&|(`\n\r'\"]|\$\(|\bxargs\s+|\benv\s+|\bexec\s+|\bcommand\s+|\b(?:ba|z|da)?sh\s+-\w*c\s+)\s*(?:sudo|su|doas|runuser|pkexec|nsenter|setpriv)\b", cmd)
     _th = os.path.expanduser(str(G("tester.agent_home") or "")).rstrip("/")
     _home_hit = bool(_th) and G("tester.user") and _th in (paths + " " + cmd + " " + str(ti.get("file_path", "")))
     if _esc or _home_hit:

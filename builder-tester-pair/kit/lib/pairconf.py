@@ -159,6 +159,8 @@ def role(cfg=None, host=None):
             # `<role>.user` (optional): when both roles run in ONE workspace (a temporary stand-in for two), the
             # Linux user tells them apart. Unset = any user, as before.
             u = get(cfg, f"{r}.user")
+            if not u and workspace_mode(cfg) == "single":
+                continue          # single mode: the user is the ONLY thing separating the roles, so it is required
             if u and str(u) != _current_user():
                 continue
             return r
@@ -174,6 +176,21 @@ def workspace_mode(cfg=None):
     except (Exception, SystemExit):
         return "separate"
     return "single" if v == "single" else "separate"
+
+
+def _identity_uid_map(path="/proc/self/uid_map"):
+    """True only when the user namespace maps every uid to itself (`0 0 4294967295`), i.e. the initial user namespace.
+    A process inside `unshare -U` reads e.g. `0 1000 1`. If the pod itself runs inside a user namespace this is False
+    for everyone: the pair then fails closed and the baseline must be measured on the image before `single` is used."""
+    try:
+        with open(path) as f:
+            rows = [line.split() for line in f.read().splitlines() if line.strip()]
+    except OSError:
+        return False
+    try:
+        return len(rows) == 1 and len(rows[0]) == 3 and rows[0][0] == "0" and rows[0][1] == "0" and int(rows[0][2]) >= 4294967295
+    except ValueError:
+        return False
 
 
 def initial_namespaces(cfg=None):
@@ -201,6 +218,12 @@ def initial_namespaces(cfg=None):
         if workspace_mode(cfg) != "single":
             return False          # strict: PID 1 unreadable -> not trusted (the original behaviour)
         pass                      # single-workspace mode: fall back to the oldest readable process of ours
+    # The fallback reference is chosen from what THIS process can read, which a process in a fresh user namespace can
+    # shape (there the only readable process is its own shell, which matches itself). So first ask the kernel whether
+    # we are in the initial user namespace at all: /proc/self/uid_map is the caller's own kernel state, nothing an
+    # agent can supply. Anything but the full identity map, or unreadable -> not trusted (fail closed).
+    if not _identity_uid_map():
+        return False
     uid, best = os.getuid(), None
     for d in os.listdir("/proc"):
         if not d.isdigit() or int(d) == os.getpid():

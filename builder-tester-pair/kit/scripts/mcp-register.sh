@@ -38,7 +38,9 @@ if dest.exists():
     cur = json.loads(dest.read_text() or "{}")
 had = name in (cur.get("mcpServers") or {})
 cur.setdefault("mcpServers", {})[name] = defn
-print(f"{'would register' if dry else 'registering'} {name!r} ({defn.get('type')} {defn.get('url')}) for {t} from {used}; "
+from urllib.parse import urlsplit
+_host = urlsplit(str(defn.get("url") or "")).hostname or "-"      # host only: a URL can carry a token in its path/query
+print(f"{'would register' if dry else 'registering'} {name!r} ({defn.get('type')} {_host}) for {t} from {used}; "
       f"headers/credentials: {'present, copied, not shown' if defn.get('headers') else 'none'}; "
       f"{'replacing an existing entry' if had else 'new entry'}")
 if dry: sys.exit(0)
