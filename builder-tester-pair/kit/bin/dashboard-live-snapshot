@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""dashboard-live-snapshot — build ONE snapshot document for the live Control Room page.
+
+  dashboard-live-snapshot [out_file]
+
+out_file defaults to pair.yaml paths.heartbeat (the file the watchdog checks for a stalled loop), else
+live-snapshot.json in Claude Code's per-user temp folder. It prints the path it wrote: upload THAT file.
+
+Runs bin/dashboard-export (the same masked, secret-scanned, integrity-checked datasets the old dashboard
+used) into a temp dir and folds them into one JSON document under 200 KB:
+  {ts, generated_by, project, owner, builder, tester, stall_minutes, tick_minutes, summary{...}, needs[], loops[], scorecard[], approvals[], prs[], alerts[], health[],
+   reports[], actions[] (last 60), agents{builder, tester}}
+templates/dashboard/control-room.html renders it. The builder's listener tick then writes it with ArtifactData as a NEW doc `snapshots/<ts>` (no version pin
+needed) and prunes older snapshots; the page always shows the newest one, live.
+Prints the file path and its size. Exits non-zero (writes nothing) if the export refused (secret shape).
+"""
+import datetime, json, os, pathlib, socket, subprocess, sys, tempfile
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+import pairconf  # noqa: E402
+CFG = pairconf.load()
+
+out = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else
+                   os.path.expanduser(str(pairconf.get(CFG, "paths.heartbeat") or f"/tmp/claude-{os.getuid()}/live-snapshot.json")))
+tmp = pathlib.Path(tempfile.mkdtemp(prefix="live-"))
+r = subprocess.run([sys.executable, str(HERE / "dashboard-export"), str(tmp)], capture_output=True, text=True, timeout=240)
+if r.returncode != 0:
+    sys.exit("export refused or failed — nothing written:\n" + (r.stdout + r.stderr)[-800:])
+
+
+def ds(name, n=None):
+    try:
+        rows = json.loads((tmp / f"{name}.json").read_text())
+    except Exception:
+        return []
+    return rows[:n] if n else rows
+
+
+now = datetime.datetime.now(datetime.timezone.utc)
+actions = ds("actions")
+agents = {}
+for a in ("builder", "tester"):
+    mine = [x for x in actions if (x.get("agent") or "").lower() == a]
+    last = max((x.get("ts", "") for x in mine), default=None)
+    agents[a] = {"last_action": last, "recent_actions": sum(1 for x in mine if str(x.get("ts", "")).startswith(now.strftime("%Y-%m-%d")))}
+# The page LEADS with the curated board (bin/board): plain-words items written for the owner. Raw ledger rows
+# (guard blocks, shell lines) are NOT decisions — they only feed the activity counts.
+try:
+    board = json.loads((pathlib.Path(os.environ.get("PAIR_LEDGER_DIR") or pairconf.ledger_dir(CFG)) / "board.json").read_text())
+except Exception:
+    board = {}
+loops = ds("loops")
+health = ds("health")
+today = now.strftime("%Y-%m-%d")
+counts = {}
+for x in actions:
+    if str(x.get("ts", "")).startswith(today):
+        k = (x.get("agent") or "?") + "|" + (x.get("category") or "other")
+        counts[k] = counts.get(k, 0) + 1
+activity = sorted(({"agent": k.split("|")[0], "category": k.split("|")[1], "n": v} for k, v in counts.items()),
+                  key=lambda r: -r["n"])
+blocked_today = sum(r["n"] for r in activity if r["category"] == "deploy-blocked")
+loop_needs = [l for l in loops if l.get("state") in ("awaiting-deploy", "done", "escalated")]
+snap = {
+    "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "generated_by": pairconf.role(CFG),
+    # who/what this page is about — the page hard-codes no names; it titles itself from these
+    "project": str(pairconf.get(CFG, "project.name", "") or ""),
+    "owner": str(pairconf.get(CFG, "owner.short_name") or (pairconf.get(CFG, "owner.name") or "the owner").split()[0]),
+    "builder": pairconf.name(CFG, "builder"), "tester": pairconf.name(CFG, "tester"),
+    "stall_minutes": int(pairconf.get(CFG, "schedule.stall_minutes", 45) or 0),
+    "tick_minutes": int(pairconf.get(CFG, "schedule.tick_minutes", 3) or 3),
+    "summary": {
+        "needs_you": len(board.get("need", [])) + len(loop_needs),
+        "waiting_on_others": len(board.get("waiting", [])),
+        "loops_open": sum(1 for l in loops if l.get("state") != "done"),
+        "health_ok": sum(1 for h in health if h.get("ok")), "health_total": len(health),
+        "prs_open": len(ds("prs")), "alerts_open": sum(int(a.get("open") or 0) for a in ds("alerts")),
+        "guard_blocks_today": blocked_today,
+    },
+    "board": {"need": board.get("need", [])[:20], "waiting": board.get("waiting", [])[:20],
+              "done": [d for d in board.get("done", []) if str(d.get("at", "")).startswith(today)][:20]},
+    "loops": loops[:50], "scorecard": ds("scorecard"), "testruns": ds("testruns", 20), "requirements": ds("requirements", 40),
+    "prs": ds("prs"), "alerts": ds("alerts"), "health": health,
+    "activity": activity[:24], "agents": agents,
+    "approvals": ds("approvals"), "reports": ds("reports", 20), "actions": actions[:60],
+}
+text = json.dumps(snap, separators=(",", ":"))
+while len(text.encode()) > 200_000 and snap["actions"]:
+    snap["actions"] = snap["actions"][: len(snap["actions"]) // 2]
+    text = json.dumps(snap, separators=(",", ":"))
+out.parent.mkdir(parents=True, exist_ok=True)
+fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    f.write(text)
+for p in tmp.iterdir():
+    p.unlink()
+tmp.rmdir()
+print(f"{out}  {len(text.encode())} bytes  ts={snap['ts']}  needs_you={snap['summary']['needs_you']}")

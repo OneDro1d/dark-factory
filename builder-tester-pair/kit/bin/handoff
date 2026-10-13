@@ -1,0 +1,787 @@
+#!/usr/bin/env python3
+"""handoff — the tester ⇄ builder loop, without copy-paste. Test BEFORE deploy, then live.
+
+Roles (the builder/tester model): the TESTER is product owner + architect + tester; the BUILDER only builds.
+Display names, the owner, apps, rounds and paths all come from pair.yaml (kit/lib/pairconf.py).
+
+Flow: someone asks → builder forwards it VERBATIM (`request`) or the tester gets it directly → tester writes acceptance
++ design (`spec` / `spec-open`) → builder builds, PR at an exact commit (`fix`) → tester tests that commit LOCALLY (no
+deploy) → PASS → owner approves the deploy → tester retests LIVE → PASS = done → owner merges. A FAIL goes back to the
+builder; max rules.max_rounds local and live rounds, then escalated to the owner.
+
+A hand-over is one JSON file in <paths.ledger>/handoffs/<id>.json (shared disk, both workspaces); every step is also
+appended to handoffs/events.jsonl and offered to the team channel with `notices --steps`.
+
+States and who moves them:
+  to-tester-spec    builder forwarded a request          → tester writes acceptance + design
+  to-builder        spec written, bug opened, or a test failed → builder builds / fixes
+  to-tester-local   PR + commit ready                     → tester tests that commit locally, no deploy
+  waiting-decision  an agent asked a person               → `answer` relays the reply
+  awaiting-deploy   tester's local PASS                   → owner deploys, or opens an approval window
+  to-tester         deployed                              → tester retests live
+  done              tester: live PASS                     → owner reviews / merges
+  escalated         out of rounds, a leak marker found, or blocked → owner
+
+  handoff request   --app A --request "<verbatim>" --requester ".." [--where LINK]            (builder)
+  handoff spec      ID --acceptance ".." --design-file F --requirement REF                    (tester)
+  handoff spec-open --app A --request ".." --requester ".." --acceptance ".." --design-file F --requirement REF (tester)
+  handoff open      --app A --run RUN --failing ID.. --request .. --acceptance .. --requester .. --evidence ..  (tester: bug)
+  handoff fix       ID --pr URL --commit SHA --deploy-cmd-file F --rollback-file F [--note ..]  (builder)
+  handoff deployed  ID (--by-owner "where they said it" | --approval appr-…) [--note ..]       (builder)
+  handoff result    ID --stage local|live --run RUN --verdict PASS|FAIL|UNVERIFIED [--failing ..] [--note ..] (tester)
+  handoff ask | answer | escalate | show | list [--for builder|tester|owner|people] [--all]
+  handoff notices   [--steps] [--mark KEY ..]   (builder posts them; decision notices → owner, steps → team channel)
+  handoff guard-ack                             (tester, after telling the owner about new guard blocks)
+
+Integrity: role from hostname (pair.yaml), every load replays the history, and the spec, commit, PR and deploy
+command are sealed into a fingerprint. LIMIT: both agents share one disk and usually one OS user, so a determined
+agent can hand-edit files; the checks catch mistakes and make edits visible, they are not a security boundary.
+"""
+import argparse, hashlib, contextlib, datetime, fcntl, json, os, pathlib, re, socket, stat, sys, tempfile, uuid
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import textguard  # noqa: E402
+import canarylib  # noqa: E402
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+import pairconf  # noqa: E402
+CFG = pairconf.load()
+NAMES = {"builder": pairconf.name(CFG, "builder"), "tester": pairconf.name(CFG, "tester"),
+         "owner": pairconf.get(CFG, "owner.name", "the owner")}
+LEDGER = pathlib.Path(os.environ.get("PAIR_LEDGER_DIR") or pairconf.ledger_dir(CFG))
+D = LEDGER / "handoffs"
+MAX_ROUNDS = int(pairconf.get(CFG, "rules.max_rounds", 3))
+APPS = sorted(pairconf.apps(CFG)) or ["app"]
+QUEUE = {"builder": {"to-builder"}, "tester": {"to-tester-spec", "to-tester-local", "to-tester"},
+         "owner": {"awaiting-deploy", "done", "escalated"}, "people": {"waiting-decision"}}
+STATES = {"to-tester-spec", "to-builder", "to-tester-local", "waiting-decision", "awaiting-deploy", "to-tester", "done", "escalated"}
+LIVE = {"to-tester-spec", "to-builder", "to-tester-local", "to-tester", "awaiting-deploy"}
+SHA_RE = re.compile(r"[0-9a-f]{40}", re.ASCII)
+ID_RE = re.compile(r"ho-[0-9]{8}-[0-9a-f]{6}", re.ASCII)
+# event that must be LAST in history for each state, and the role allowed to have written it
+ANS = {("answered", "builder"), ("answered", "tester")}
+PRODUCED_BY = {
+    "to-tester-spec": {("requested", "builder")} | ANS,
+    "to-builder": {("opened", "tester"), ("spec-opened", "tester"), ("spec-written", "tester"), ("local-fail", "tester"), ("live-fail", "tester")} | ANS,
+    "to-tester-local": {("fix-ready", "builder"), ("feature-opened", "builder"), ("local-unverified", "tester")} | ANS,
+    "awaiting-deploy": {("local-pass", "tester")} | ANS,
+    "to-tester": {("deployed", "builder"), ("live-unverified", "tester")} | ANS,
+    "done": {("live-pass", "tester")},
+    "waiting-decision": {("asked", "builder"), ("asked", "tester")},
+    "escalated": {("local-max-rounds", "tester"), ("live-max-rounds", "tester"), ("canary-hit", "tester"), ("escalated", "builder"), ("escalated", "tester")},
+}
+NOTIFY = {
+    "awaiting-deploy": "{app}: PASSED {tester}'s local tests (local round {local_round}/3) — your call: DEPLOY or REVIEW FIRST. "
+                       "PR {pr} (commit {commit:.12}). Reply `approve <namespace> <minutes>` to let {builder} deploy, or "
+                       "`review {id}` to get the diff + test summary first (nothing deploys until you approve). "
+                       "After the deploy {tester} retests live.",
+    "done": "{app}: DONE — passed local AND live tests (live round {live_round}/3). Ready for your review/merge of PR {pr} "
+            "({builder} never merges). `handoff show {id}`",
+    "escalated": "{app}: STOPPED (local {local_round}/3, live {live_round}/3 rounds, or blocked) — needs you. `handoff show {id}`",
+    "waiting-decision": "{app}: decision asked of {asked_who} — waiting. `handoff show {id}`",
+}
+
+def _initial_namespaces():
+    """hostname is the role; refuse if this process could have set its own hostname (unshare -U -r -u).
+    Still a tripwire: both agents are one Unix user on a shared disk (say so, never claim more)."""
+    try:
+        return all(os.readlink(f"/proc/self/ns/{n}") == os.readlink(f"/proc/1/ns/{n}") for n in ("uts", "user"))
+    except OSError:
+        return False
+
+
+AGENT = pairconf.role(CFG)            # "builder" | "tester" | "unknown" — from hostname, set in pair.yaml
+SANDBOXED = not _initial_namespaces()  # could have set its own hostname → never trusted, not even in test mode
+if SANDBOXED:
+    AGENT = "untrusted"
+
+
+def _under_tmp_no_symlink(p):
+    r = p.resolve()
+    if not str(r).startswith("/tmp/"):
+        return False
+    cur = pathlib.Path(p).absolute()
+    for part in [cur] + list(cur.parents):
+        if part.is_symlink():
+            return False
+    return True
+
+
+if os.environ.get("HANDOFF_TEST_ROLE") in ("tester", "builder") and not SANDBOXED and _under_tmp_no_symlink(LEDGER) \
+        and (not D.exists() or (_under_tmp_no_symlink(D) and D.resolve() == LEDGER.resolve() / "handoffs")):
+    AGENT = os.environ["HANDOFF_TEST_ROLE"]
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def guard(*texts):
+    textguard.check(*texts)
+    # the tester never writes one of its leak canaries where the builder can read it (canarylib)
+    if canarylib.hits_in_text(" ".join(str(t) for t in texts)):
+        sys.exit("refused: this text contains one of the tester's leak canaries — describe the observation without it")
+
+
+def replay(hist):
+    """Recompute state, rounds, resume_state, commit and the tested fingerprint from history alone.
+    Returns (state, local_round, live_round, resume_state, commit, tested_fp) or raises ValueError."""
+    st, lr, vr, resume, commit, tested = None, 1, 0, None, None, None
+    for i, e in enumerate(hist):
+        ev, by, fp = e.get("event"), e.get("by"), e.get("fp")
+        if not fp:
+            raise ValueError("event without fingerprint")
+        if i == 0:
+            if (ev, by) in (("opened", "tester"), ("spec-opened", "tester")):
+                st = "to-builder"
+            elif (ev, by) == ("requested", "builder"):
+                st = "to-tester-spec"
+            elif (ev, by) == ("feature-opened", "builder"):
+                st, commit, tested = "to-tester-local", e.get("commit"), fp
+            else:
+                raise ValueError("bad first event")
+            continue
+        if (ev, by) == ("spec-written", "tester") and st == "to-tester-spec":
+            st = "to-builder"
+        elif (ev, by) == ("fix-ready", "builder") and st == "to-builder":
+            st, commit, tested = "to-tester-local", e.get("commit"), fp
+        elif (ev, by) == ("local-unverified", "tester") and st == "to-tester-local" and fp == tested:
+            pass
+        elif (ev, by) == ("live-unverified", "tester") and st == "to-tester" and fp == tested:
+            pass
+        elif (ev, by) == ("local-pass", "tester") and st == "to-tester-local":
+            if e.get("commit") != commit or fp != tested:
+                raise ValueError("local pass for a different commit/PR/command than was handed over")
+            st = "awaiting-deploy"
+        elif (ev, by) == ("local-fail", "tester") and st == "to-tester-local" and lr < MAX_ROUNDS:
+            st, lr, tested = "to-builder", lr + 1, None
+        elif (ev, by) == ("local-max-rounds", "tester") and st == "to-tester-local" and lr >= MAX_ROUNDS:
+            st = "escalated"
+        elif (ev, by) == ("deployed", "builder") and st == "awaiting-deploy" and fp == tested:
+            st, vr = "to-tester", min(vr + 1, MAX_ROUNDS)
+        elif (ev, by) == ("live-pass", "tester") and st == "to-tester" and fp == tested:
+            st = "done"
+        elif (ev, by) == ("live-fail", "tester") and st == "to-tester" and vr < MAX_ROUNDS:
+            st, tested = "to-builder", None
+        elif (ev, by) == ("live-max-rounds", "tester") and st == "to-tester" and vr >= MAX_ROUNDS:
+            st = "escalated"
+        elif ev == "asked" and by in ("builder", "tester") and st in LIVE:
+            resume, st = st, "waiting-decision"
+        elif ev == "answered" and by in ("builder", "tester") and st == "waiting-decision":
+            st, resume = resume, None
+        elif (ev, by) == ("canary-hit", "tester") and st in ("to-tester-local", "to-tester"):
+            st, resume = "escalated", None
+        elif ev == "escalated" and by in ("builder", "tester") and st in (LIVE | {"waiting-decision"}):
+            st, resume = "escalated", None
+        else:
+            raise ValueError(f"event {ev}/{by} not allowed in state {st}")
+        if st in ("to-tester-local", "awaiting-deploy", "to-tester", "done") and fp != tested and ev not in ("asked", "answered", "escalated"):
+            raise ValueError("commit/PR/command changed after it was handed over")
+    return st, lr, vr, resume, commit, tested
+
+
+def valid(h, fname_id=None):
+    """Return None if the hand-over is consistent, else the reason."""
+    try:
+        if fname_id is not None and h.get("id") != fname_id:
+            return "id does not match its file name"
+        if not ID_RE.fullmatch(str(h.get("id", ""))):
+            return "bad id"
+        if h.get("app") not in APPS or h.get("state") not in STATES:
+            return "unknown app/state"
+        lr, vr = h.get("local_round"), h.get("live_round")
+        if type(lr) is not int or not 1 <= lr <= MAX_ROUNDS or type(vr) is not int or not 0 <= vr <= MAX_ROUNDS:
+            return "round out of range"
+        if h.get("round") != max(lr, vr, 1) and h.get("round") not in (lr, vr):
+            return "round field inconsistent"
+        if "resume_state" in h and (h["state"] != "waiting-decision" or h["resume_state"] not in LIVE):
+            return "bad resume_state"
+        if h["state"] == "waiting-decision" and h.get("resume_state") not in LIVE:
+            return "waiting-decision without a live resume_state"
+        hist = h.get("history") or []
+        if not hist:
+            return "no history"
+        last = hist[-1]
+        if (last.get("event"), last.get("by")) not in PRODUCED_BY[h["state"]]:
+            return f"state '{h['state']}' not produced by last event {last.get('event')}/{last.get('by')}"
+        try:
+            st, lr2, vr2, resume, commit, tested = replay(hist)
+        except ValueError as e:
+            return f"history does not replay ({e})"
+        if (st, lr2, vr2) != (h["state"], lr, vr):
+            return "state/rounds do not match the replayed history"
+        if h["state"] == "waiting-decision" and h.get("resume_state") != resume:
+            return "resume_state does not match the replayed history"
+        if hist[-1].get("fp") != fingerprint(h):
+            return "commit/PR/command or spec (acceptance/design) edited after the last recorded step"
+        if h["state"] in ("to-tester-local", "awaiting-deploy", "to-tester", "done") and (h.get("commit") != commit or fingerprint(h) != tested):
+            return "commit/PR/command is not the one handed over to the tester"
+        if h["state"] in ("to-tester-local", "awaiting-deploy", "to-tester") and not (h.get("pr") and SHA_RE.fullmatch(str(h.get("commit", "")))):
+            return f"{h['state']} without a PR and an exact commit"
+        if h["state"] in ("awaiting-deploy", "to-tester") and not h.get("deploy_cmd"):
+            return f"{h['state']} without a deploy command"
+    except Exception as e:  # noqa: BLE001
+        return f"malformed ({type(e).__name__})"
+    return None
+
+
+def load(i):
+    if not ID_RE.fullmatch(i):
+        sys.exit(f"refused: '{i}' is not a hand-over id (ho-YYYYMMDD-xxxxxx)")
+    f = D / f"{i}.json"
+    if not f.exists():
+        sys.exit(f"no hand-over {i}")
+    try:
+        h = json.loads(f.read_text())
+    except Exception:
+        sys.exit(f"refused: {i} is not valid JSON — tell the owner, do not edit it")
+    why = valid(h, i)
+    if why:
+        sys.exit(f"refused: {i} failed its integrity check ({why}) — tell the owner, do not edit it")
+    if not audit_ok(h):
+        sys.exit(f"refused: {i} does not match the event log (edited or truncated history) — tell the owner, do not edit it")
+    return h
+
+
+def fingerprint(h):
+    """What the tester tested and what would be deployed: commit + PR + deploy + rollback commands."""
+    # + the spec (2026-10-12): the tester's acceptance/design is what the builder builds against — editing it later breaks the ledger
+    raw = "\x1f".join(str(h.get(k, "")) for k in ("commit", "pr", "deploy_cmd", "rollback", "acceptance", "design", "requirement"))
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def save(h, event, **kw):
+    if AGENT not in ("builder", "tester"):
+        sys.exit("refused: running inside a separate namespace — the agent identity cannot be trusted here")
+    h["updated"] = now()
+    entry = {**kw, "ts": h["updated"], "event": event, "by": AGENT, "fp": fingerprint(h)}   # `by` is ALWAYS the acting agent
+    h.setdefault("history", []).append(entry)
+    why = valid(h)
+    if why:
+        sys.exit(f"refused: this step would leave {h['id']} inconsistent ({why})")
+    D.mkdir(parents=True, exist_ok=True)
+    fd, tmpname = tempfile.mkstemp(dir=D, prefix=".tmp-", suffix=".json")
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps(h, indent=1))
+    os.chmod(tmpname, 0o600)
+    # log first, then replace the file: a crash in between leaves the old file + one extra log row, which
+    # load() reports plainly instead of a hand-over that silently disagrees with its log
+    with open(D / "events.jsonl", "a") as f:
+        f.write(json.dumps({"ts": h["updated"], "id": h["id"], "app": h["app"], "round": h["round"],
+                            "local_round": h["local_round"], "live_round": h["live_round"],
+                            "state": h["state"], "by": AGENT, "event": event, "fp": entry["fp"]}) + "\n")
+    os.replace(tmpname, D / f"{h['id']}.json")
+    print(f"{h['id']}  local {h['local_round']}/{MAX_ROUNDS} live {h['live_round']}/{MAX_ROUNDS}  state={h['state']}  ({event})")
+
+
+@contextlib.contextmanager
+def locked():
+    """One writer at a time across BOTH workspaces (shared disk): flock on handoffs/.lock around
+    load -> check -> save, so a concurrent PASS and FAIL can never both apply (third review, race test)."""
+    D.mkdir(parents=True, exist_ok=True)
+    with open(D / ".lock", "a") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
+
+
+CHAIN = ["local-pass", "deployed", "live-pass"]
+
+
+def audit_ok(h):
+    """Extra check before a hand-over is ANNOUNCED (notices, dashboard): every history entry must have its
+    matching row in events.jsonl (the tool writes both at the same second), and a 'done' must show the full
+    chain local-pass -> deployed -> live-pass with a PR and a commit. A hand-written file fails this.
+    Still a tripwire: the same Unix user can also append to events.jsonl."""
+    try:
+        mine = []   # this hand-over's rows in events.jsonl, in order
+        for line in (D / "events.jsonl").read_text().splitlines():
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            if e.get("id") == h["id"]:
+                mine.append((e.get("event"), e.get("ts"), e.get("by"), e.get("fp")))
+        hist = [(ent.get("event"), ent.get("ts"), ent.get("by"), ent.get("fp")) for ent in h.get("history", [])]
+        if mine != hist:   # same events, same order, nothing dropped (a truncated history would revive an escalated loop)
+            return False
+        if h["state"] == "done":
+            it = iter([e.get("event") for e in h["history"]])
+            if not all(any(x == want for x in it) for want in CHAIN) or not h.get("pr") or not SHA_RE.fullmatch(str(h.get("commit", ""))):
+                return False
+        return True
+    except Exception:
+        return False
+
+
+ALLOWED_CMD_DIRS = ("/tmp/", str(pairconf.get(CFG, "paths.shared_root", "/nonexistent")).rstrip("/") + "/")
+FORBIDDEN_PARTS = ("/.kube", "/.config", "/.ssh", "/.azure", "/.aws") + tuple(
+    "/" + str(d).strip("/").split("/")[-1] for d in (pairconf.get(CFG, "guard.credential_dirs") or []) if str(d).strip("/"))
+
+
+def _private_parts(p):
+    """pair.yaml tester.private_dir: the tester's private folder. A command/design file under it is refused, so
+    the builder can never route the tester's private material through a hand-over. A bare name (no '/') blocks
+    that folder name anywhere; a path blocks that folder (as given and with symlinks resolved)."""
+    p = str(p or "").strip()
+    if not p:
+        return ()
+    if "/" not in p and not p.startswith("~"):
+        return ("/" + p.strip("/") + "/",)
+    full = os.path.abspath(os.path.expanduser(p)).rstrip("/")
+    return tuple({full + "/", os.path.realpath(full).rstrip("/") + "/"})
+
+
+FORBIDDEN_PARTS += _private_parts(pairconf.get(CFG, "tester.private_dir", ""))
+CMD_VERBS = {"kubectl", "helm", "git", "bash", "az", "kustomize", "argus.sh", "make"} | set(pairconf.get(CFG, "guard.deploy_verbs") or [])
+
+
+def read_cmd_file(path):
+    """Deploy/rollback commands come from a small file the builder wrote: never a symlink, never a credential
+    location, never a private (0600) file, and the first word must be a known deploy verb."""
+    if os.path.islink(path):
+        sys.exit("refused: command file is a symlink")
+    rp = os.path.realpath(os.path.abspath(path))
+    if not rp.startswith(ALLOWED_CMD_DIRS) or any(x in rp for x in FORBIDDEN_PARTS) or rp.endswith(".env"):
+        sys.exit("refused: command files must live under /tmp or the shared root, outside credential folders")
+    fd = os.open(rp, os.O_RDONLY | os.O_NOFOLLOW)
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_size > 4000 or (st.st_mode & 0o077) == 0:
+        os.close(fd)
+        sys.exit("refused: command file must be a regular, non-private (not 0600) file under 4000 bytes")
+    with os.fdopen(fd) as f:
+        text = f.read().strip()
+    first = os.path.basename(text.split()[0]) if text.split() else ""
+    if first not in CMD_VERBS:
+        sys.exit(f"refused: a deploy/rollback command must start with one of {sorted(CMD_VERBS)}")
+    return text
+
+
+def need(h, *states):
+    if h["state"] not in states:
+        sys.exit(f"refused: {h['id']} is '{h['state']}', this step needs {' or '.join(states)}")
+
+
+def all_valid():
+    out = []
+    for f in sorted(D.glob("ho-*.json")):
+        try:
+            h = json.loads(f.read_text())
+        except Exception:
+            print(f"(skipped {f.name}: not JSON)", file=sys.stderr); continue
+        why = valid(h, f.stem)
+        if why:
+            print(f"(skipped {f.name}: {why})", file=sys.stderr); continue
+        out.append(h)
+    return out
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False)
+    s = p.add_subparsers(dest="cmd", required=True)
+    _orig = s.add_parser
+    s.add_parser = lambda *a, **k: _orig(*a, allow_abbrev=False, **k)
+    o = s.add_parser("open")
+    o.add_argument("--app", required=True, choices=APPS); o.add_argument("--run", required=True)
+    o.add_argument("--failing", nargs="+", required=True); o.add_argument("--request", required=True)
+    o.add_argument("--acceptance", required=True); o.add_argument("--requester", required=True)
+    o.add_argument("--evidence", required=True)
+    l = s.add_parser("list"); l.add_argument("--for", dest="who", choices=list(QUEUE)); l.add_argument("--all", action="store_true")
+    sh = s.add_parser("show"); sh.add_argument("id")
+    ft = s.add_parser("feature")
+    ft.add_argument("--app", required=True, choices=APPS); ft.add_argument("--request", required=True)
+    ft.add_argument("--acceptance", required=True); ft.add_argument("--requester", required=True)
+    ft.add_argument("--pr", required=True); ft.add_argument("--commit", required=True)
+    ft.add_argument("--deploy-cmd-file", required=True); ft.add_argument("--rollback-file", required=True)
+    # Builder/tester model: the tester is product owner + architect + tester; the builder only builds.
+    rq = s.add_parser("request")                        # the builder: forward a request VERBATIM to the tester
+    rq.add_argument("--app", required=True, choices=APPS); rq.add_argument("--request", required=True)
+    rq.add_argument("--requester", required=True); rq.add_argument("--where", default="")
+    sp = s.add_parser("spec"); sp.add_argument("id")    # the tester: acceptance + design for a forwarded request
+    sp.add_argument("--acceptance", required=True); sp.add_argument("--design-file", required=True)
+    sp.add_argument("--requirement", required=True, help="requirement node / ticket, e.g. TICKET-123 or the Engram title")
+    so = s.add_parser("spec-open")                      # the tester: a request it received directly
+    so.add_argument("--app", required=True, choices=APPS); so.add_argument("--request", required=True)
+    so.add_argument("--requester", required=True); so.add_argument("--acceptance", required=True)
+    so.add_argument("--design-file", required=True); so.add_argument("--requirement", required=True)
+    fx = s.add_parser("fix"); fx.add_argument("id"); fx.add_argument("--pr", required=True); fx.add_argument("--commit", required=True)
+    # the deploy/rollback COMMANDS are passed as files: typed inline, deploy-gate (rightly) reads them as a deploy
+    fx.add_argument("--deploy-cmd-file", required=True); fx.add_argument("--rollback-file", required=True)
+    fx.add_argument("--note", default="")
+    dp = s.add_parser("deployed"); dp.add_argument("id"); dp.add_argument("--note", default="")
+    g = dp.add_mutually_exclusive_group(required=True)
+    g.add_argument("--by-owner", help="where the owner said they deployed (Teams msg id/link or 'coder terminal')")
+    g.add_argument("--approval", help="the approve-deploy id the builder deployed under (appr-…)")
+    r = s.add_parser("result"); r.add_argument("id"); r.add_argument("--run", required=True)
+    r.add_argument("--stage", required=True, choices=["local", "live"])
+    r.add_argument("--verdict", required=True, choices=["PASS", "FAIL", "UNVERIFIED"]); r.add_argument("--failing", nargs="*", default=[])
+    r.add_argument("--note", default="")
+    # a fixed reason, never free text: free text here would be one more channel to the builder
+    r.add_argument("--canary-unchecked", default="", choices=["", "no-canaries-yet", "unknown-app-or-commit"],
+                   help="record a PASS although the leak-canary check could not run, and why")
+    a = s.add_parser("ask"); a.add_argument("id"); a.add_argument("--who", required=True)
+    a.add_argument("--question", required=True); a.add_argument("--channel", required=True, choices=["teams-chat", "teams-channel"])
+    an = s.add_parser("answer"); an.add_argument("id"); an.add_argument("--answer", required=True)
+    an.add_argument("--from", dest="frm", required=True); an.add_argument("--where", required=True)
+    e = s.add_parser("escalate"); e.add_argument("id"); e.add_argument("--reason", required=True)
+    nt = s.add_parser("notices"); nt.add_argument("--mark", nargs="+", metavar="KEY")
+    nt.add_argument("--steps", action="store_true", help="every step of every hand-over, for #ai-ops-change-management")
+    s.add_parser("guard-ack")
+    x = p.parse_args()
+
+    if AGENT not in ("builder", "tester") and x.cmd not in ("list", "show"):
+        sys.exit(f"refused: this machine ({socket.gethostname()}) is neither builder.host nor tester.host in "
+                 f"{CFG['_path']} — only the pair's own workspaces may change hand-overs")
+    if x.cmd == "notices":
+        # Rebuilt every time from VALIDATED hand-over files (never from a text log anyone could append to).
+        # Key = id|state|updated; delivered keys live in .delivered-<agent>.json; mark ONLY after the post worked.
+        if AGENT != "builder":
+            return print("(the tester does not deliver notices — the builder does)")
+        D.mkdir(parents=True, exist_ok=True)
+        if x.steps:
+            return step_notices(x)
+        dfile = D / ".delivered-builder.json"
+        try:
+            delivered = set(json.loads(dfile.read_text())) if dfile.exists() else set()
+        except Exception:
+            delivered = set()
+        pending_keys = {f"{h['id']}|{h['state']}|{h['updated']}" for h in all_valid() if h["state"] in NOTIFY and audit_ok(h)}
+        if x.mark:
+            bad = [k for k in x.mark if k not in pending_keys]
+            if bad:
+                sys.exit(f"refused: not a pending notice key: {bad[0][:60]}")
+            delivered |= set(x.mark)
+            tmp = D / ".delivered-builder.tmp"; tmp.write_text(json.dumps(sorted(delivered))); tmp.replace(dfile)
+            return print(f"marked {len(x.mark)}")
+        pending = []
+        for h in all_valid():
+            if h["state"] in NOTIFY and audit_ok(h):
+                key = f"{h['id']}|{h['state']}|{h['updated']}"
+                if key not in delivered:
+                    q = h.get("question") or {}
+                    pending.append((key, NOTIFY[h["state"]].format(asked_who=q.get("who", "?"), **NAMES, **h)))
+        for key, text in pending:
+            print(f"{key}\t{text}")
+        if not pending:
+            print("(no new notices)")
+        return
+
+    if x.cmd == "open":
+        if AGENT != "tester":
+            sys.exit("refused: only the tester (the tester) opens a hand-over")
+        with locked():
+            return open_new(x)
+    if x.cmd == "feature":
+        sys.exit("refused: the builder never writes acceptance criteria. "
+                 "Forward the request verbatim: `handoff request --app .. --request <verbatim> --requester ..`; "
+                 "the tester writes the acceptance and design, then you build and run `handoff fix`.")
+    if x.cmd == "request":
+        if AGENT != "builder":
+            sys.exit("refused: the tester writes a spec directly with `handoff spec-open`")
+        with locked():
+            return open_request(x)
+    if x.cmd == "spec-open":
+        if AGENT != "tester":
+            sys.exit("refused: only the tester (product owner + tester) writes a spec")
+        with locked():
+            return open_spec(x)
+    return main_rest(x)
+
+
+def open_new(x):
+    if True:
+        guard(x.failing, x.request, x.acceptance, x.evidence, x.run, x.requester)
+        h = {"id": f"ho-{datetime.date.today():%Y%m%d}-{uuid.uuid4().hex[:6]}", "app": x.app, "kind": "bug",
+             "round": 1, "local_round": 1, "live_round": 0,
+             "state": "to-builder", "created": now(), "request": x.request, "acceptance": x.acceptance,
+             "requester": x.requester, "runs": [x.run], "failing": x.failing, "evidence": x.evidence}
+        return save(h, "opened", run=x.run)
+
+
+def commit_ok(c):
+    if not SHA_RE.fullmatch(c or ""):
+        sys.exit("refused: --commit must be the full 40-character commit sha the tester should test")
+    return c
+
+
+def open_feature(x):
+    guard(x.request, x.acceptance, x.requester, x.pr)
+    commit_ok(x.commit)
+    dcmd = read_cmd_file(x.deploy_cmd_file); rcmd = read_cmd_file(x.rollback_file)
+    guard(dcmd, rcmd)
+    h = {"id": f"ho-{datetime.date.today():%Y%m%d}-{uuid.uuid4().hex[:6]}", "app": x.app, "kind": "feature",
+         "round": 1, "local_round": 1, "live_round": 0,
+         "state": "to-tester-local", "created": now(), "request": x.request, "acceptance": x.acceptance,
+         "requester": x.requester, "runs": [], "failing": [], "evidence": "",
+         "pr": x.pr, "commit": x.commit, "deploy_cmd": dcmd, "rollback": rcmd}
+    return save(h, "feature-opened", pr=x.pr, commit=x.commit)
+
+
+def req_guard(*texts):
+    """Requirement text goes TO the builder: expected behaviour is allowed, test cases and secrets are not."""
+    textguard.check_requirement(*texts)
+    if canarylib.hits_in_text(" ".join(str(t) for t in texts)):
+        sys.exit("refused: this text contains one of the tester's leak canaries")
+
+
+def read_design(path):
+    rp = os.path.realpath(os.path.abspath(path))
+    if os.path.islink(path) or not rp.startswith(ALLOWED_CMD_DIRS) or any(x in rp for x in FORBIDDEN_PARTS):
+        sys.exit("refused: design file must be a plain file under /tmp or the shared root, outside credential folders")
+    with open(rp) as f:
+        text = f.read(20001).strip()
+    if not text or len(text) > 20000:
+        sys.exit("refused: design file must be 1-20000 characters")
+    return text
+
+
+def open_request(x):
+    req_guard(x.request, x.requester, x.where)
+    h = {"id": f"ho-{datetime.date.today():%Y%m%d}-{uuid.uuid4().hex[:6]}", "app": x.app, "kind": "feature",
+         "round": 1, "local_round": 1, "live_round": 0,
+         "state": "to-tester-spec", "created": now(), "request": x.request, "acceptance": "",
+         "requester": x.requester, "runs": [], "failing": [], "evidence": "", "where": x.where}
+    return save(h, "requested", requester=x.requester)
+
+
+def open_spec(x):
+    design = read_design(x.design_file)
+    req_guard(x.request, x.requester, x.acceptance, design, x.requirement)
+    h = {"id": f"ho-{datetime.date.today():%Y%m%d}-{uuid.uuid4().hex[:6]}", "app": x.app, "kind": "feature",
+         "round": 1, "local_round": 1, "live_round": 0,
+         "state": "to-builder", "created": now(), "request": x.request, "acceptance": x.acceptance,
+         "requester": x.requester, "runs": [], "failing": [], "evidence": "",
+         "design": design, "requirement": x.requirement}
+    return save(h, "spec-opened", requirement=x.requirement)
+
+
+# Every step goes to the team change channel too (the owner 2026-10-12: "add every step to teams channel"),
+# so the whole trail survives outside the shared disk. One line per history event, from VALIDATED files only;
+# no request text, acceptance, design or test content — who did what, to which hand-over, and what's next.
+STEP_TEXT = {
+    "requested": "{builder} forwarded a request from {requester} to {tester} for a spec",
+    "spec-written": "{tester} wrote the spec (requirement {requirement}); {builder} to build",
+    "spec-opened": "{tester} wrote the spec (requirement {requirement}); {builder} to build",
+    "opened": "{tester} opened a bug for {builder} (run {run})",
+    "feature-opened": "{builder} handed in PR {pr} at commit {commit12}; {tester} to test locally",
+    "fix-ready": "{builder} handed in PR {pr} at commit {commit12}; {tester} to test locally",
+    "local-pass": "passed {tester}'s local tests; {owner} to choose deploy or review first",
+    "local-fail": "failed {tester}'s local tests; back to {builder}",
+    "local-unverified": "{tester}'s local test could not run (set-up); waiting, no round used",
+    "local-max-rounds": "still failing locally after 3 rounds; stopped for {owner}",
+    "deployed": "deployed by {deployed_by}; {tester} to retest live",
+    "live-pass": "passed {tester}'s live recheck; ready for {owner}'s review and merge",
+    "live-fail": "failed {tester}'s live recheck; back to {builder}",
+    "live-unverified": "{tester}'s live recheck could not run (no live runner); waiting",
+    "live-max-rounds": "still failing live after 3 rounds; stopped for {owner}",
+    "asked": "waiting on an answer from {who}",
+    "answered": "answer received; work continues",
+    "escalated": "escalated to {owner}",
+    "canary-hit": "stopped: possible test leak found in {builder}'s work; {owner} reviewing",
+}
+
+
+def step_notices(x):
+    dfile = D / ".delivered-steps.json"
+    try:
+        delivered = set(json.loads(dfile.read_text())) if dfile.exists() else set()
+    except Exception:
+        delivered = set()
+    pending = []
+    for h in all_valid():
+        for i, e in enumerate(h.get("history") or []):
+            key = f"{h['id']}|s{i}|{e.get('ts', '')}"
+            if key in delivered:
+                continue
+            f = {"requester": str(h.get("requester", "?")).split("<")[0].strip() or "?", "requirement": e.get("requirement") or h.get("requirement", "?"),
+                 "run": e.get("run", "?"), "pr": e.get("pr") or h.get("pr", "?"),
+                 "commit12": str(e.get("commit") or h.get("commit") or "?")[:12],
+                 "deployed_by": e.get("deployed_by", "?"), "who": e.get("who", "a person")}
+            what = STEP_TEXT.get(e.get("event"), "{event} by {by}").format(event=e.get("event"), by=NAMES.get(e.get("by"), e.get("by")), **NAMES, **f)
+            pending.append((key, f"{h['app']} {h['id']}: {what}"))
+    sc = D / "setup-changes.jsonl"     # a workspace's agent setup changed (setup-pair render): post every change
+    for r in ([json.loads(l) for l in sc.read_text().splitlines() if l.strip()] if sc.exists() else []):
+        key = f"setup|{r.get('role')}|{r.get('ts')}"
+        if key not in delivered:
+            pending.append((key, f"agent setup changed on the {r.get('role')} workspace ({r.get('name')}): rules re-rendered "
+                                 f"from pair.yaml (kit {r.get('kit') or '?'}, rules {r.get('rules')}, {r.get('repos')} repos, "
+                                 f"{r.get('standing')} standing rules). No app, cluster or data change."))
+    if x.mark:
+        keys = {k for k, _ in pending}
+        bad = [k for k in x.mark if k not in keys]
+        if bad:
+            sys.exit(f"refused: not a pending step key: {bad[0][:60]}")
+        delivered |= set(x.mark)
+        tmp = D / ".delivered-steps.tmp"; tmp.write_text(json.dumps(sorted(delivered))); tmp.replace(dfile)
+        return print(f"marked {len(x.mark)}")
+    for key, text in pending:
+        print(f"{key}\t{text}")
+    if not pending:
+        print("(no new steps)")
+
+
+GUARD_LOG = LEDGER / "guard-blocks.jsonl"          # written by argus-guard v9 on every BUILDER block
+SEEN = pathlib.Path.home() / ".cache" / "pair-guard-blocks.seen"
+
+
+def _guard_lines():
+    try:
+        return [l for l in GUARD_LOG.read_text().splitlines() if l.strip()]
+    except OSError:
+        return []
+
+
+def guard_blocks_report():
+    """the tester runs `handoff list --for tester` every tick: new builder blocks are shown until `handoff guard-ack`,
+    so a tripwire that fired always reaches the owner (the tester tells him in his self-chat, then acks)."""
+    lines = _guard_lines()
+    try:
+        seen = int(SEEN.read_text().strip())
+    except (OSError, ValueError):
+        seen = 0
+    new = lines[seen:] if seen <= len(lines) else lines
+    if not new:
+        return
+    print(f"GUARD BLOCKS: {len(new)} new on the builder's workspace — tell the owner in his self-chat "
+          "(time + rule, one line each), then run `handoff guard-ack`:")
+    for l in new[-10:]:
+        try:
+            r = json.loads(l)
+            who = {"agent": "the agent itself", "other-session": "ANOTHER Claude session on that workspace (not the agent)"}.get(
+                r.get("session_kind"), "session unknown")
+            print(f"  {r.get('at', '?')}  {r.get('tool', '?')}  [{who}{' ' + r['session'] if r.get('session') else ''}]  "
+                  f"{str(r.get('rule', ''))[:100]}")
+        except ValueError:
+            print("  (unreadable line)")
+
+
+def main_rest(x):
+    if x.cmd == "list":
+        D.mkdir(parents=True, exist_ok=True)
+        hs = all_valid()
+        if x.who:
+            hs = [h for h in hs if h["state"] in QUEUE[x.who]]
+        elif not x.all:
+            hs = [h for h in hs if h["state"] != "done"]
+        for h in hs:
+            print(f"{h['id']}  {h['app']:6} local {h['local_round']}/3 live {h['live_round']}/3  {h['state']:16} {h['request'][:60]}")
+        if not hs:
+            print("(none)")
+        if AGENT == "tester":
+            guard_blocks_report()
+        return
+    if x.cmd == "guard-ack":
+        if AGENT != "tester":
+            sys.exit("refused: only the tester acknowledges guard blocks (after telling the owner)")
+        n = len(_guard_lines())
+        SEEN.parent.mkdir(parents=True, exist_ok=True); SEEN.write_text(str(n))
+        return print(f"guard blocks acknowledged up to line {n}")
+
+    if x.cmd == "show":
+        return print(json.dumps(load(x.id), indent=1))
+    with locked():
+        h = load(x.id)          # re-read UNDER the lock, so the state check sees the latest write
+        return mutate(x, h)
+
+
+def mutate(x, h):
+    if x.cmd == "spec":
+        if AGENT != "tester":
+            sys.exit("refused: only the tester (product owner + tester) writes the acceptance and design")
+        need(h, "to-tester-spec")
+        design = read_design(x.design_file)
+        req_guard(x.acceptance, design, x.requirement)
+        h.update(state="to-builder", acceptance=x.acceptance, design=design, requirement=x.requirement)
+        return save(h, "spec-written", requirement=x.requirement)
+    if x.cmd == "fix":
+        if AGENT != "builder":
+            sys.exit("refused: the tester never writes fixes")
+        need(h, "to-builder")
+        try:
+            dcmd = read_cmd_file(x.deploy_cmd_file); rcmd = read_cmd_file(x.rollback_file)
+        except OSError as err:
+            sys.exit(f"refused: cannot read command file ({err.strerror})")
+        guard(x.note, x.pr, dcmd, rcmd)
+        commit_ok(x.commit)
+        # every fix goes to the tester's LOCAL tests first — no deploy until it passes there
+        h.update(state="to-tester-local", pr=x.pr, commit=x.commit, deploy_cmd=dcmd, rollback=rcmd)
+        return save(h, "fix-ready", pr=x.pr, commit=x.commit, note=x.note)
+    if x.cmd == "deployed":
+        if AGENT != "builder":
+            sys.exit("refused: the tester never marks a deploy (the owner deploys, or the builder inside their approval window)")
+        need(h, "awaiting-deploy"); guard(x.note, x.by_owner)
+        if x.approval and not re.fullmatch(r"appr-[0-9]{8}T[0-9]{6}Z-[0-9]{1,5}", x.approval, re.ASCII):
+            sys.exit("refused: --approval must be an approval id (appr-YYYYMMDDTHHMMSSZ-N); the id is only format-checked here; the owner's approval itself is checked by deploy-gate when the deploy command runs")
+        h["state"] = "to-tester"
+        h["live_round"] = min(h["live_round"] + 1, MAX_ROUNDS); h["round"] = h["live_round"]
+        return save(h, "deployed", note=x.note, deployed_by=("owner" if x.by_owner else "builder"),
+                    evidence=x.by_owner or x.approval)
+    if x.cmd == "result":
+        if AGENT != "tester":
+            sys.exit("refused: only the tester records a retest result")
+        need(h, "to-tester-local" if x.stage == "local" else "to-tester"); guard(x.failing, x.note, x.run, x.canary_unchecked)
+        h["runs"].append(x.run)
+        if x.verdict == "UNVERIFIED":
+            # the harness could not test it (set-up, missing tool, no runner): not a code failure, no round used.
+            # the tester tells the owner what blocked it; the hand-over waits here until a real PASS/FAIL is recorded.
+            return save(h, f"{x.stage}-unverified", run=x.run, note=x.note or "could not be tested — see the run log")
+        if x.verdict == "PASS":
+            # leak canaries (2026-10-12): a canary in the builder's PR or shared notes = he saw a check → no PASS
+            crc, clines = canarylib.scan(h.get("app", ""), h.get("commit", ""))
+            print("\n".join(clines))
+            if crc == 4:
+                h["state"] = "escalated"
+                return save(h, "canary-hit", run=x.run,
+                            note="possible holdout leak: a the tester canary is in the builder's work — the owner to review "
+                                 f"({len(clines)} location(s), see the tester's run log)")
+            if crc == 2:
+                # a PASS needs the canary check; when it cannot run, the tester says why, on the record
+                if not x.canary_unchecked.strip():
+                    sys.exit("refused: the leak-canary check did not run (above), so this PASS is not recorded. Fix it "
+                             "(`canary new`, put the value in a scenario), or record the PASS with "
+                             "--canary-unchecked no-canaries-yet|unknown-app-or-commit — the reason goes on the hand-over for the owner.")
+                x.note = (x.note + " | " if x.note else "") + f"canary: NOT CHECKED ({x.canary_unchecked})"
+        if x.stage == "local":
+            if x.verdict == "PASS":
+                h["state"] = "awaiting-deploy"
+                return save(h, "local-pass", run=x.run, commit=h["commit"], note=x.note)
+            h["failing"] = x.failing or h["failing"]
+            if h["local_round"] >= MAX_ROUNDS:
+                h["state"] = "escalated"
+                return save(h, "local-max-rounds", run=x.run, note=x.note or f"still failing locally after {MAX_ROUNDS} rounds")
+            h["local_round"] += 1; h["round"] = h["local_round"]; h["state"] = "to-builder"
+            return save(h, "local-fail", run=x.run, note=x.note)
+        if x.verdict == "PASS":
+            h["state"] = "done"
+            return save(h, "live-pass", run=x.run, note=x.note)
+        h["failing"] = x.failing or h["failing"]
+        if h["live_round"] >= MAX_ROUNDS:
+            h["state"] = "escalated"
+            return save(h, "live-max-rounds", run=x.run, note=x.note or f"still failing live after {MAX_ROUNDS} rounds")
+        h["state"] = "to-builder"
+        return save(h, "live-fail", run=x.run, note=x.note)
+    if x.cmd == "ask":
+        need(h, *sorted(LIVE)); guard(x.question, x.who)
+        h["resume_state"] = h["state"]; h["state"] = "waiting-decision"
+        h["question"] = {"who": x.who, "text": x.question, "channel": x.channel, "asked": now()}
+        return save(h, "asked", who=x.who)
+    if x.cmd == "answer":
+        need(h, "waiting-decision"); guard(x.answer, x.frm, x.where)
+        q = h.get("question") or {}
+        # the agent RELAYS a person's reply: who answered + where it can be checked; `by` stays the agent
+        h.setdefault("decisions", []).append({"q": q.get("text"), "a": x.answer, "answered_by": x.frm,
+                                              "asked_of": q.get("who"), "where": x.where,
+                                              "relayed_by": AGENT, "ts": now()})
+        h["state"] = h.pop("resume_state"); h.pop("question", None)
+        return save(h, "answered", answered_by=x.frm, where=x.where)
+    if x.cmd == "escalate":
+        need(h, *sorted(LIVE | {"waiting-decision"})); guard(x.reason)
+        h.pop("resume_state", None); h.pop("question", None)
+        h["state"] = "escalated"
+        return save(h, "escalated", reason=x.reason)
+
+
+if __name__ == "__main__":
+    main()

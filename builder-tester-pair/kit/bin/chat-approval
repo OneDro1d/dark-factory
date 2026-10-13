@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""chat-approval — turn the OWNER's own chat message "approve <namespace> <minutes>" into a deploy approval window.
+
+  chat-approval teams <chat_id> <message_id>      # the owner's Teams self-chat (48:notes) or one of their DMs
+  chat-approval slack <channel_id> <message_ts>   # a watched Slack channel or the owner's Slack DM
+  chat-approval --selftest
+
+The agent only names WHERE the message is. This tool fetches the message ITSELF through the MCP connector named in
+pair.yaml (not from the agent's words) and refuses unless ALL hold:
+  * the author is the owner: owner.teams_user_id / owner.slack_user_id
+  * the text (tags stripped) is exactly `approve <namespace> <minutes>` (optional "min"/"mins"/"minutes"), optionally
+    addressed first to the builder or tester by name ("forge — approve pay-api 30")
+  * it does not start with "[bot" and is at most 15 minutes old
+  * the message has never been used before (single use)
+  * namespace is a plain k8s name and not protected; minutes 1..120
+Then it writes the same approval record the owner's approval command writes, with by = "<owner> via <surface> <id>".
+TRIPWIRE, NOT PROOF: the agents post as the owner in Teams and Slack, so a determined agent could forge the message.
+pair-guard blocks agents from posting approval-shaped text; typing the approval command in the workspace is the only
+unforgeable path. Use this only if the owner accepts that trade-off.
+
+pair.yaml keys: owner.{name,short_name,teams_user_id,slack_user_id}, teams.{hub_workspace_id,mcp_server,
+list_messages_tool}, slack.{mcp_server,read_channel_tool}, paths.{mcp_json,approvals,ledger},
+guard.protected_namespaces, builder.name, tester.{name,host}.
+"""
+import datetime, json, os, re, socket, subprocess, sys, time, uuid
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+
+MAX_AGE_MIN, MAX_WINDOW = 15, 120
+BASE_PROTECTED = {"kube-system", "kube-public", "kube-node-lease", "default"}
+
+
+def die(msg):
+    print("refused: " + msg)
+    sys.exit(1)
+
+
+class Settings:
+    def __init__(self, cfg=None, **override):
+        import pairconf
+        g = (lambda k, d=None: pairconf.get(cfg, k, d)) if cfg else (lambda k, d=None: d)
+        self.owner_teams = str(g("owner.teams_user_id") or "")
+        self.owner_slack = str(g("owner.slack_user_id") or "")
+        self.owner = str(g("owner.short_name") or (g("owner.name") or "owner").split()[0])
+        self.protected = BASE_PROTECTED | set(g("guard.protected_namespaces") or [])
+        names = [n for n in (g("builder.name"), g("tester.name")) if n]
+        self.address = "|".join(re.escape(str(n)) for n in names) or r"(?!x)x"
+        self.tester_host = str(g("tester.host") or "")
+        self.teams_ws = str(g("teams.hub_workspace_id") or "")
+        self.teams_server = str(g("teams.mcp_server") or "")
+        self.teams_tool = str(g("teams.list_messages_tool") or "microsoft_list_chat_messages")
+        self.slack_server = str(g("slack.mcp_server") or "")
+        self.slack_tool = str(g("slack.read_channel_tool") or "slack_read_channel")
+        root = str(g("paths.shared_root") or ".")
+        self.mcp_json = os.path.expanduser(str(g("paths.mcp_json") or os.path.join(root, ".mcp.json")))
+        ledger = str(pairconf.ledger_dir(cfg)) if cfg else "/nonexistent"
+        self.appr_dir = os.environ.get("PAIR_APPROVALS_DIR") or str(g("paths.approvals") or os.path.join(ledger, "approvals"))
+        self.__dict__.update(override)
+        self.used = os.path.join(self.appr_dir, ".chat-approvals-used.json")
+        self.approve_re = re.compile(
+            r"^(?:@?(?:" + self.address + r")\s*[-,:—]*\s*)?approve\s+([a-z0-9](?:[-a-z0-9]{4,61}[a-z0-9]))\s+(\d{1,3})"
+            r"\s*(?:m|min|mins|minutes)?\s*$", re.I)
+
+
+def strip_tags(s):
+    s = re.sub(r"<[^>]+>", " ", s or "")
+    s = s.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def mcp_call(S, server, tool, args, timeout=45):
+    if not server:
+        die("no MCP server configured for this surface in pair.yaml (teams.mcp_server / slack.mcp_server)")
+    s = json.load(open(S.mcp_json))["mcpServers"][server]
+    env = dict(os.environ, **(s.get("env") or {}))
+    p = subprocess.Popen([s["command"]] + s.get("args", []), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
+    def send(m): p.stdin.write(json.dumps(m) + "\n"); p.stdin.flush()
+    def wait(i):
+        end = time.time() + timeout
+        while time.time() < end:
+            line = p.stdout.readline()
+            if not line:
+                time.sleep(0.1); continue
+            try:
+                m = json.loads(line)
+            except Exception:
+                continue
+            if m.get("id") == i:
+                return m
+    try:
+        send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "chat-approval", "version": "1"}}})
+        wait(1); send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        send({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": tool, "arguments": args}})
+        r = wait(2)
+    finally:
+        p.terminate()
+    if not r or r.get("error") or (r.get("result") or {}).get("isError"):
+        die(f"could not read the message through {server} ({tool})")
+    return " ".join(c.get("text", "") for c in r["result"].get("content", []))
+
+
+def fetch_teams(S, chat_id, msg_id):
+    raw = mcp_call(S, S.teams_server, S.teams_tool, {"workspace_id": S.teams_ws, "chat_id": chat_id, "max_results": 25})
+    try:
+        msgs = json.loads(raw)
+    except Exception:
+        die("Teams answer was not JSON")
+    for m in msgs:
+        if str(m.get("id")) == msg_id:
+            return {"author": ((m.get("from") or {}).get("user") or {}).get("id"),
+                    "text": strip_tags((m.get("body") or {}).get("content")),
+                    "created": m.get("createdDateTime")}
+    die("message not found in that chat (only the 25 newest are checked)")
+
+
+def fetch_slack(S, channel, ts):
+    if not re.fullmatch(r"\d{10}\.\d{6}", ts):
+        die("Slack ts must look like 1791377161.984319")
+    raw = mcp_call(S, S.slack_server, S.slack_tool,
+                   {"channel_id": channel, "oldest": f"{float(ts) - 1:.6f}", "latest": f"{float(ts) + 1:.6f}",
+                    "limit": 10, "response_format": "concise"})
+    try:
+        raw = json.loads(raw).get("messages", raw)
+    except Exception:
+        pass
+    for block in re.split(r"(?m)^=== Message from ", raw)[1:]:
+        head, _, rest = block.partition("\n")
+        m_user = re.search(r"\((U[A-Z0-9]{6,})\) at ", head)
+        m_ts = re.search(r"(?m)^Message TS:\s*(\S+)", rest)
+        if m_ts and m_ts.group(1) == ts:
+            body = rest[m_ts.end():]
+            body = re.split(r"(?m)^(Thread: |Files: |Reactions: )", body)[0]
+            return {"author": m_user.group(1) if m_user else None, "text": strip_tags(body),
+                    "created": datetime.datetime.fromtimestamp(float(ts), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    die("message not found in that channel at that ts")
+
+
+def check_and_parse(S, surface, msg, now=None):
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    want = S.owner_teams if surface == "teams" else S.owner_slack
+    if not want or msg.get("author") != want:
+        die(f"the message is not from {S.owner}'s own account")
+    text = msg.get("text") or ""
+    if text.lower().startswith("[bot"):
+        die("bot-marked messages are never approvals")
+    m = S.approve_re.match(text)
+    if not m:
+        die("text must be exactly: approve <namespace> <minutes>")
+    ns, mins = m.group(1).lower(), int(m.group(2))
+    if ns in S.protected:
+        die(f"{ns} is a protected namespace — approve it in the workspace")
+    if not 1 <= mins <= MAX_WINDOW:
+        die(f"minutes must be 1..{MAX_WINDOW}")
+    try:
+        created = datetime.datetime.fromisoformat(str(msg.get("created")).replace("Z", "+00:00"))
+    except Exception:
+        die("message time unreadable")
+    age = (now - created).total_seconds() / 60
+    if age > MAX_AGE_MIN or age < -2:
+        die(f"message is {age:.0f} min old (limit {MAX_AGE_MIN})")
+    return ns, mins
+
+
+def write_approval(S, ns, mins, surface, ref):
+    os.makedirs(S.appr_dir, mode=0o700, exist_ok=True)
+    try:
+        used = set(json.load(open(S.used)))
+    except Exception:
+        used = set()
+    key = f"{surface}:{ref}"
+    if key in used:
+        die("that message was already used for an approval (single use)")
+    now = datetime.datetime.now(datetime.timezone.utc)
+    exp = now + datetime.timedelta(minutes=mins)
+    aid = f"appr-{now:%Y%m%dT%H%M%SZ}-{uuid.uuid4().int % 100000}"
+    rec = {"id": aid, "scope": ns, "note": f"chat approval ({surface} {ref})", "created": int(now.timestamp()),
+           "expires": int(exp.timestamp()), "expires_iso": exp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "by": f"{S.owner.lower()} via {surface} {ref}"}
+    path = os.path.join(S.appr_dir, aid + ".json")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(rec, f)
+    used.add(key)
+    tmp = S.used + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(sorted(used), f)
+    os.replace(tmp, S.used)
+    print(f"approved: {aid}  scope={ns}  for {mins} min (until {exp:%H:%M}Z)  from {surface} {ref}")
+
+
+def selftest():
+    S = Settings(None, owner_teams="owner-teams-id", owner_slack="U0OWNER", owner="Jane",
+                 address="Forge|Sentinel", protected=BASE_PROTECTED | {"ops-system"})
+    now = datetime.datetime(2026, 10, 10, 12, 0, tzinfo=datetime.timezone.utc)
+    ok = lambda **k: {"author": "owner-teams-id", "text": "approve pay-frontend 30", "created": "2026-10-10T11:55:00Z", **k}
+    cases = [(ok(), True), (ok(text="Approve pay-frontend 30 min"), True),
+             (ok(author="someone-else"), False), (ok(text="[bot — Forge] approve pay-frontend 30"), False),
+             (ok(text="please approve pay-frontend 30"), False), (ok(text="approve kube-system 30"), False),
+             (ok(text="approve ops-system 30"), False),
+             (ok(text="approve pay-frontend 500"), False), (ok(created="2026-10-10T11:00:00Z"), False),
+             (ok(text="approve pay-frontend 30; also prod"), False), (ok(text="approve ab 30"), False),
+             (ok(text="forge- approve pay-frontend 30"), True), (ok(text="@Sentinel: approve pay-frontend 30 min"), True),
+             (ok(text="forge please approve pay-frontend 30"), False)]
+    bad = 0
+    for msg, want in cases:
+        try:
+            check_and_parse(S, "teams", msg, now); got = True
+        except SystemExit:
+            got = False
+        bad += got != want
+        print("PASS" if got == want else "FAIL", want, msg["text"][:50], msg["author"][:12])
+    print("ALL PASS" if not bad else f"{bad} FAILED")
+    sys.exit(1 if bad else 0)
+
+
+def main():
+    if sys.argv[1:2] == ["--selftest"]:
+        return selftest()
+    if len(sys.argv) != 4 or sys.argv[1] not in ("teams", "slack"):
+        print(__doc__); sys.exit(2)
+    import pairconf
+    S = Settings(pairconf.load())
+    if S.tester_host and socket.gethostname() == S.tester_host:
+        die("the tester never deploys — chat approvals are for the builder's workspace")
+    surface, where, ref = sys.argv[1:]
+    msg = fetch_teams(S, where, ref) if surface == "teams" else fetch_slack(S, where, ref)
+    ns, mins = check_and_parse(S, surface, msg)
+    write_approval(S, ns, mins, surface, ref)
+
+
+if __name__ == "__main__":
+    main()

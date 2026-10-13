@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# ./setup — the ONE command that sets up a builder/tester pair on this workspace, step by step.
+#
+#   ./setup            fill every answer it can measure or derive, ask the rest one at a time (Enter keeps the
+#                      default), show a summary of every answer and its source to confirm (change any key there),
+#                      then run each setup step, asking before each one. Stop any time (Ctrl-C); run ./setup again
+#                      to continue where you left.
+#   ./setup --steps    skip the questions; just run the steps (e.g. on the second workspace, same pair.yaml)
+#
+# In Claude instead: /pair-setup — same questions, same order, same steps (it looks ids up for you).
+set -u
+KIT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+SP="$KIT/setup-pair"
+
+step() {  # step "<what>" <command...>  — asks, runs, reports; never stops the whole setup on one failure
+  local what="$1"; shift
+  printf '\n── %s\n   %s\n' "$what" "$*"
+  read -r -p "   run it now? [Y/n/q] " ans
+  case "${ans,,}" in
+    q*) echo "stopped — run ./setup again to continue"; exit 0 ;;
+    n*) echo "   skipped"; return 0 ;;
+  esac
+  if "$@"; then echo "   ✓ done"; else echo "   ✗ failed (exit $?) — fix it and run ./setup --steps again"; fi
+}
+
+if [ "${1:-}" != "--steps" ]; then
+  python3 "$SP" ask || exit 1   # auto-fill → ask what is left → summary + "Change anything?" (kit/lib/wizard.py)
+fi
+
+PAIR="$(python3 "$KIT/kit/lib/pairconf.py" path 2>/dev/null)" || { echo "pair.yaml not found — run ./setup (questions) first"; exit 1; }
+ROLE="$(python3 "$KIT/kit/lib/pairconf.py" role)"
+echo
+echo "pair.yaml: $PAIR"
+echo "this workspace ($(hostname)) is the: $ROLE"
+[ "$ROLE" = builder ] || [ "$ROLE" = tester ] || echo "   (not builder.host or tester.host — fix those answers: ./setup-pair set builder.host \$(hostname))"
+
+# the org pack named in `extends:` (a string or a list, inline or block) decides which pack's hooks get installed
+PACK="$(python3 - "$PAIR" <<'PY'
+import re, sys
+try:
+    import yaml
+    ext = (yaml.safe_load(open(sys.argv[1])) or {}).get("extends")
+except Exception:
+    ext = None
+for e in ([ext] if isinstance(ext, str) else list(ext or [])):
+    m = re.search(r"packs/([^/]+)/pair\.[^/]+\.yaml", str(e))
+    if m:
+        print("--pack " + m.group(1)); break
+PY
+)"
+
+ensure_other() {  # exit 2 = it printed steps for a person: that is not a setup failure
+  bash "$KIT/kit/scripts/ensure-workspace.sh" "$@"; local rc=$?
+  if [ "$rc" = 2 ]; then echo "   → do the steps above (or later), then run ./setup --steps again"; return 0; fi
+  return "$rc"
+}
+case "$ROLE" in builder) OTHER=tester ;; tester) OTHER=builder ;; *) OTHER=both ;; esac
+step "Make sure the other workspace exists (creates it if this workspace can, else prints the steps)" \
+  ensure_other "$OTHER"
+
+step "Install hooks, agents and skills into ~/.claude (idempotent)" bash "$KIT/install.sh" $PACK
+step "Render this workspace's rules and its start command" python3 "$SP" render
+step "Clone / check the repos" python3 "$SP" repos --clone
+step "Memory spaces: what to create in Engram" python3 "$SP" engram
+if [ "$ROLE" = builder ]; then
+  step "Knowledge base: pin every repo and set up the library (the builder then BUILDS the graph for all repos on its first start)" python3 "$SP" knowledge init
+  if [ ! -x "$KIT/kit/bin/approve-deploy" ]; then
+    printf '\n── Deploy approvals tool\n   only the OWNER adds kit/bin/approve-deploy (agents are blocked from writing approval tools).\n'
+    printf '   Run it yourself, then re-run ./install.sh. See docs/SETUP.md "Deploy approvals".\n'
+  fi
+fi
+step "Check everything (writes a setup record to the ledger)" python3 "$SP" check
+SC="$(python3 "$KIT/kit/lib/rules.py" get "$ROLE.start_command" 2>/dev/null)"
+printf '\nNext: sign in to your MCP hub / gh / runner on this workspace (docs/SETUP.md), then start the agent:\n'
+printf '   bash %s/kit/scripts/start-agent.sh      (or in Claude: /%s)\n' "$KIT" "${SC:-<start_command>}"
+printf 'On the OTHER workspace: clone the kit into the same shared folder and run ./setup --steps\n'

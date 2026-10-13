@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""testrun — record a finished test run so the dashboard shows it, and gate what the builder may post.
+
+  testrun add --app <app> --kind e2e|local|argus|unit --total N --passed N --failed N --ref <run id / commit / log>
+              [--note "<redacted one-liner>"] [--verdict PASS|FAIL|UNVERIFIED]
+              [--recheck-of <ts of the builder's run>]      (tester only)
+  testrun list [--n 20]
+  testrun pending-recheck                                  (tester: builder runs with no recheck yet)
+  testrun release <ts>                                     (builder: the ONLY way to post a test result)
+  testrun --selftest
+
+POSTING RULE: the builder never posts a test result to any channel on its own counts. `release` prints the post
+text only when the tester has recorded a recheck of that run through the independent checker (--kind argus), and
+the text leads with the TESTER's verdict. No recheck → refused, nothing to post.
+
+RECHECK RULE: every test the builder runs is rechecked by the tester, independently, through the checker (the
+tester's own hidden scenarios). Until the checker's runners are live, the tester rechecks what it can read-only and
+records UNVERIFIED — never PASS on the builder's word. A recheck must cover at least as many checks as the
+builder's run (superset rule).
+
+Counts must come from a real parser (test runner output, result files), never from a summary line. One JSON line
+per run in <paths.ledger>/testruns.jsonl; <app> is one of pair.yaml repos[].app. `by` is the host's role, not an
+argument.
+"""
+import argparse, datetime, json, os, pathlib, re, shutil, socket, subprocess, sys, tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+import pairconf  # noqa: E402
+
+
+def _initial_ns():
+    """Refuse inside an unshare'd namespace, where any process can set its own hostname (role spoof)."""
+    try:
+        return all(os.readlink(f"/proc/self/ns/{n}") == os.readlink(f"/proc/1/ns/{n}") for n in ("uts", "user"))
+    except OSError:
+        return False
+
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv[:1] == ["--selftest"]:
+        return selftest()
+    cfg = pairconf.load()
+    names = {"builder": pairconf.name(cfg, "builder"), "tester": pairconf.name(cfg, "tester")}
+    L = pairconf.ledger_dir(cfg) / "testruns.jsonl"
+    ap = argparse.ArgumentParser(allow_abbrev=False, description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    a = sub.add_parser("add", allow_abbrev=False)
+    a.add_argument("--app", required=True, choices=sorted(pairconf.apps(cfg)))
+    a.add_argument("--kind", required=True, choices=["e2e", "local", "argus", "runner", "unit"],
+                   help="runner = the tester's independent end-to-end runner (argus is the same kind under its product name)")
+    for k in ("total", "passed", "failed"):
+        a.add_argument("--" + k, required=True, type=int)
+    a.add_argument("--ref", required=True); a.add_argument("--note", default="")
+    a.add_argument("--verdict", choices=["PASS", "FAIL", "UNVERIFIED"])
+    a.add_argument("--recheck-of", default="")
+    l = sub.add_parser("list", allow_abbrev=False); l.add_argument("--n", type=int, default=20)
+    sub.add_parser("pending-recheck", allow_abbrev=False)
+    rl = sub.add_parser("release", allow_abbrev=False); rl.add_argument("ts")
+    x = ap.parse_args(argv)
+    if getattr(x, "kind", None) == "runner":
+        x.kind = "argus"  # one kind, two names: the rules say "runner", older records say "argus"
+    if not _initial_ns():
+        sys.exit("refused: running inside a separate namespace — the agent identity cannot be trusted here")
+    BY = pairconf.role(cfg)
+
+    def rows():
+        return [json.loads(s) for s in L.read_text().splitlines() if s.strip()] if L.exists() else []
+
+    if x.cmd == "add":
+        if BY not in ("builder", "tester"):
+            sys.exit("refused: only the pair's own workspaces (builder.host / tester.host in pair.yaml) record runs")
+        if x.recheck_of:
+            if BY != "tester":
+                sys.exit("refused: only the tester records a recheck")
+            orig = [r for r in rows() if r["ts"] == x.recheck_of and r["by"] == "builder"]
+            if not orig:
+                sys.exit("refused: --recheck-of must be the ts of a builder run (see `testrun pending-recheck`)")
+            if x.kind != "argus" and (x.verdict or "UNVERIFIED") != "UNVERIFIED":
+                sys.exit("refused: a recheck decides PASS/FAIL only through the independent checker (--kind argus); otherwise --verdict UNVERIFIED")
+            if x.kind != "argus":
+                x.verdict = "UNVERIFIED"
+            if x.kind == "argus" and x.verdict != "UNVERIFIED" and x.total < orig[0]["total"]:
+                sys.exit(f"refused: the recheck ran {x.total} checks but the builder's run had {orig[0]['total']} — cover at least as many (superset rule)")
+            if x.kind == "argus" and x.verdict == "PASS" and not (x.total > 0 and x.passed == x.total and x.failed == 0):
+                sys.exit("refused: a checker PASS needs every check passed (passed == total, failed == 0)")
+            if x.kind == "argus" and x.verdict == "FAIL" and x.failed == 0:
+                sys.exit("refused: FAIL with zero failed checks")
+            if x.kind == "argus" and not re.fullmatch(r"[A-Za-z0-9_.:-]{6,120}", x.ref.strip()):
+                sys.exit("refused: --ref must be the checker's run id")
+        if not (0 <= x.passed <= x.total and 0 <= x.failed <= x.total and x.passed + x.failed <= x.total <= 100000):
+            sys.exit("refused: counts do not add up (passed + failed must be <= total)")
+        ref, note = x.ref.strip()[:200], x.note.strip()[:200]
+        if re.search(r"[A-Za-z0-9+/_-]{40,}", note) or re.search(r"(?i)(password|secret|token)\s*[:=]", note + ref):
+            sys.exit("refused: note/ref looks like it carries a secret; keep it a plain one-liner")
+        verdict = x.verdict or ("FAIL" if x.failed else ("PASS" if x.passed == x.total and x.total else "UNVERIFIED"))
+        if verdict == "PASS" and not (x.total > 0 and x.passed == x.total and x.failed == 0):
+            sys.exit("refused: PASS needs every check passed (passed == total > 0, failed == 0)")
+        if verdict == "FAIL" and x.failed == 0:
+            sys.exit("refused: FAIL with zero failed checks")
+        row = {"ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"), "by": BY, "app": x.app,
+               "kind": x.kind, "total": x.total, "passed": x.passed, "failed": x.failed, "verdict": verdict, "ref": ref, "note": note,
+               **({"recheck_of": x.recheck_of} if x.recheck_of else {})}
+        L.parent.mkdir(parents=True, exist_ok=True)
+        with open(L, "a") as f:
+            f.write(json.dumps(row) + "\n")
+        print("recorded", row["ts"], x.app, x.kind, f"{x.passed}/{x.total}", verdict)
+    elif x.cmd == "release":
+        rs = rows(); m = [r for r in rs if r["ts"] == x.ts and r["by"] == "builder"]
+        if not m:
+            sys.exit("refused: no builder run with that ts")
+        v = [r for r in rs if r["by"] == "tester" and r.get("recheck_of") == x.ts and r["kind"] == "argus"]
+        if not v:
+            sys.exit("refused: the tester has not decided this run through the checker yet — nothing may be posted to a channel")
+        m, v = m[0], v[-1]
+        ok = (v.get("verdict") in ("PASS", "FAIL", "UNVERIFIED") and all(type(v.get(k)) is int for k in ("total", "passed", "failed"))
+              and not (v["verdict"] == "PASS" and not (v["total"] > 0 and v["passed"] == v["total"] and v["failed"] == 0))
+              and not (v["verdict"] == "FAIL" and v["failed"] == 0)
+              and re.fullmatch(r"[A-Za-z0-9_.:-]{6,120}", str(v.get("ref", ""))) is not None
+              and (v["verdict"] == "UNVERIFIED" or v["total"] >= m["total"]))
+        if not ok:
+            sys.exit("refused: the tester's recheck row fails the re-check (counts do not support its verdict) — nothing may be posted")
+        print(f"{m['app'].upper()} {m['kind']} — {names['tester']}'s recorded verdict: {v['verdict']} ({v['passed']}/{v['total']} passed, "
+              f"checker run {v['ref']} — run id recorded by {names['tester']}, not yet cross-checked with the checker)"
+              + (f" — {v['note']}" if v['note'] else "")
+              + f". {names['builder']}'s own run: {m['passed']}/{m['total']} passed (ref {m['ref']}).")
+    elif x.cmd == "pending-recheck":
+        rs = rows(); done = {r.get("recheck_of") for r in rs if r["by"] == "tester" and r.get("verdict") in ("PASS", "FAIL")}
+        for r in rs:
+            if r["by"] == "builder" and r["ts"] not in done:
+                print(r["ts"], r["app"], r["kind"], f'{r["passed"]}/{r["total"]}', r["verdict"], "|", r["ref"][:80], "|", r["note"][:80])
+    else:
+        for r in rows()[-x.n:]:
+            print(r["ts"], r["by"], r["app"], r["kind"], f'{r["passed"]}/{r["total"]}', r["verdict"], r["ref"][:60])
+    return 0
+
+
+def selftest():
+    base = pathlib.Path(f"/tmp/claude-{os.getuid()}") if pathlib.Path(f"/tmp/claude-{os.getuid()}").is_dir() else pathlib.Path(tempfile.gettempdir())
+    t = pathlib.Path(tempfile.mkdtemp(prefix="testrun-selftest-", dir=base))
+    host = socket.gethostname()
+    bad = 0
+
+    def cfg(role):
+        p = t / f"pair-{role}.yaml"
+        bh, th = (host, "other-host") if role == "builder" else ("other-host", host)
+        p.write_text(f"project: {{name: S, slug: s}}\nowner: {{name: O}}\nbuilder: {{name: Bob, host: {bh}}}\n"
+                     f"tester: {{name: Tess, host: {th}}}\npaths: {{shared_root: {t}, ledger: {t}/ledger}}\n"
+                     "repos:\n  - {app: api, github: example/api, base: main}\n")
+        return str(p)
+
+    def run(role, *a):
+        env = dict(os.environ, PAIR_CONFIG=cfg(role))
+        return subprocess.run([sys.executable, os.path.realpath(__file__), *a], env=env, capture_output=True, text=True)
+
+    def expect(name, r, ok, must=""):
+        nonlocal bad
+        good = (r.returncode == 0) == ok and (must in r.stdout)
+        bad += not good
+        print("PASS" if good else "FAIL", name, "" if good else (r.stdout + r.stderr)[-200:])
+        return r
+
+    try:
+        r = expect("builder records a run", run("builder", "add", "--app", "api", "--kind", "e2e", "--total", "10", "--passed", "10", "--failed", "0", "--ref", "job-1"), True)
+        ts = r.stdout.split()[1] if r.stdout.split()[:1] == ["recorded"] else ""
+        expect("counts that don't add up refused", run("builder", "add", "--app", "api", "--kind", "e2e", "--total", "3", "--passed", "3", "--failed", "1", "--ref", "x"), False)
+        expect("builder may not release before a recheck", run("builder", "release", ts), False)
+        expect("builder may not record a recheck", run("builder", "add", "--app", "api", "--kind", "argus", "--total", "10", "--passed", "10", "--failed", "0", "--ref", "argus-run-1", "--verdict", "PASS", "--recheck-of", ts), False)
+        expect("non-checker recheck cannot PASS", run("tester", "add", "--app", "api", "--kind", "local", "--total", "10", "--passed", "10", "--failed", "0", "--ref", "l-1", "--verdict", "PASS", "--recheck-of", ts), False)
+        expect("recheck smaller than the run refused", run("tester", "add", "--app", "api", "--kind", "argus", "--total", "5", "--passed", "5", "--failed", "0", "--ref", "argus-run-1", "--verdict", "PASS", "--recheck-of", ts), False)
+        expect("pending-recheck lists the run", run("tester", "pending-recheck"), True, "job-1")
+        expect("tester records a checker recheck", run("tester", "add", "--app", "api", "--kind", "runner", "--total", "12", "--passed", "12", "--failed", "0", "--ref", "argus-run-1", "--verdict", "PASS", "--recheck-of", ts), True)
+        expect("release leads with the tester's verdict", run("builder", "release", ts), True, "Tess's recorded verdict: PASS")
+        expect("unknown app refused", run("builder", "add", "--app", "nope", "--kind", "e2e", "--total", "1", "--passed", "1", "--failed", "0", "--ref", "x"), False)
+    finally:
+        shutil.rmtree(t, ignore_errors=True)
+    print("ALL PASS" if not bad else f"{bad} FAILED")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

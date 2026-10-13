@@ -1,0 +1,222 @@
+# The setup questions — ONE list used by both front ends:
+#   terminal:  ./setup            (asks one question at a time, Enter keeps the default)
+#   Claude:    /pair-setup        (asks one question at a time, looks ids up with its tools when `lookup` says how)
+# Answers are written with `./setup-pair set <key> <value>`, so a session can stop and resume anywhere.
+#
+# Fields: key (pair.yaml dotted key) · ask (the question) · default (value, or detect:<what> / derive:<what>)
+#         type text|list|bool|choice|repos|rules|channels|environments|areas|lines|suites · choices · help · lookup (how Claude finds the value)
+#         when: <key> — only asked when that key is set / true · section gate: `use` question skips the section.
+#         auto: true — the plain default is safe to take without asking (`./setup-pair ask --auto`; shown in the summary
+#         to confirm); auto: false — never fill it automatically. Without it, --auto fills only measured (detect:) and
+#         derived (derive:) values, answers already in the file or its pack, and bool / non-empty list defaults.
+
+sections:
+  - name: Start
+    questions:
+      - {key: extends, ask: "Start from an organisation pack? (its rules and conventions; your answers win)", type: choice,
+         choices: ["none", "packs/sample/pair.sample.yaml"], default: none,
+         help: "A pack adds the organisation's standing rules, Jira card rules, look-alike orgs to ignore, etc."}
+      - {key: project.name, ask: "Project name (shown in posts)", default: "My Project"}
+      - {key: project.slug, ask: "Short lowercase slug (folder and memory names)", default: "derive:slug"}
+      - {key: paths.shared_root, ask: "Shared folder both workspaces mount (agents start here)", default: "detect:shared_root",
+         help: "This kit should be cloned at <shared_root>/builder-tester-agents."}
+      - {key: paths.ledger, ask: "Hand-over ledger folder (hand-overs, tool-call ledger, guard-block log)", default: "derive:ledger"}
+
+  - name: Owner and identity
+    questions:
+      - {key: owner.name, ask: "Your name (you approve deploys and merges)", default: "detect:identity.git_name"}
+      - {key: owner.email, ask: "Your email", default: "detect:identity.git_email"}
+      - {key: owner.short_name, ask: "How the agents address you in posts", default: "derive:short_name"}
+      - {key: identity.git_name, ask: "Commit author name the agents must use", default: "detect:identity.git_name",
+         help: "Measured from git inside a repo under the shared folder (scoped identities count)."}
+      - {key: identity.git_email, ask: "Commit author email the agents must use", default: "detect:identity.git_email"}
+      - {key: identity.gh_account, ask: "GitHub account the agents push with", default: "detect:identity.gh_account",
+         help: "The ACTIVE `gh` account on this workspace."}
+      - {key: team.decision_contact.name, ask: "Who decides when a requester cannot answer? (blank = you)", default: ""}
+      - {key: team.decision_contact.teams_user_id, ask: "Their Teams user id (blank = not on Teams / look up later)", default: "",
+         when: team.decision_contact.name, lookup: "microsoft_search_contacts or jira_search_users by their name → the id"}
+
+  - name: The two agents
+    questions:
+      - {key: builder.name, ask: "Builder agent's name (writes the code; a chat word: '<name> restart')", default: Builder}
+      - {key: builder.workspace, ask: "Builder's workspace name", default: "detect:workspace"}
+      - {key: builder.host, ask: "Builder's hostname (`hostname` in that workspace)", default: "detect:hostname"}
+      - {key: builder.start_command, ask: "Command that starts the builder (/<this>)", default: "derive:builder_start"}
+      - {key: tester.name, ask: "Tester agent's name (product owner + architect + tester)", default: Tester}
+      - {key: tester.workspace, ask: "Tester's workspace name", default: ""}
+      - {key: tester.host, ask: "Tester's hostname", default: "",
+         help: "Run `hostname` in the tester workspace (Claude: ask the person to run it there)."}
+      - {key: tester.start_command, ask: "Command that starts the tester (/<this>)", default: "derive:tester_start"}
+      - {key: tester.k8s_namespace, ask: "Tester workspace's Kubernetes namespace (blank if none)", default: "",
+         lookup: "inside the tester workspace: cat /var/run/secrets/kubernetes.io/serviceaccount/namespace"}
+      - {key: tester.kits_dir, auto: true, ask: "Tester's private test folder (in its own home, never shared)", default: "~/test-kits"}
+      - {key: tester.private_dir, ask: "Tester's other private folder, if any", default: ""}
+      - {key: owner.coder_user, ask: "Your Coder user name (owns both workspaces: coder create <user>/<workspace>; blank if not Coder)",
+         default: ""}
+      - {key: owner.coder_url, ask: "Coder URL for `coder login` (blank = not Coder / shown as a placeholder)", default: ""}
+      - {key: tester.coder_template, ask: "Coder template for the tester's workspace (blank = never create it; print the steps)",
+         default: "", lookup: "coder templates list (run by the person, signed in) → the template name"}
+      - {key: tester.coder_parameters, ask: "Tester template parameters as JSON (blank = none)", default: "",
+         help: "A map name -> value, e.g. {\"namespace\": \"jane-pay-tester-01\", \"size\": \"large\"}."}
+      - {key: tester.onboarding, ask: "Admin onboarding the tester workspace needs first: path of a manifest / runbook (blank = none)",
+         default: "", help: "e.g. a namespace + home share + quota yaml an admin applies once. Shown in the steps, never applied."}
+      - {key: builder.coder_template, ask: "Coder template for the builder's workspace (blank = never create it; print the steps)",
+         default: ""}
+      - {key: builder.coder_parameters, ask: "Builder template parameters as JSON (blank = none)", default: "",
+         help: "A map name -> value, e.g. {\"namespace\": \"jane-pay-builder-01\"}."}
+
+  - name: Repos
+    questions:
+      - {key: repos, ask: "Repos the pair works on", type: repos,
+         help: "For each: app name, GitHub owner/name (or remote URL), base branch PRs target, deployed branch (optional), aliases.",
+         lookup: "gh api repos/<owner/name> --jq .full_name to check access; never switch gh accounts"}
+
+  - name: Scope
+    questions:
+      - {key: project.topics, ask: "In-scope topics beyond the apps (programme, contract), comma separated", type: list, default: []}
+      - {key: scope.exclude, ask: "Look-alike orgs / products that are OUT of scope even when keywords match (comma separated)",
+         type: list, default: []}
+      - {key: listener.extra_keywords, ask: "Extra words that make a chat message worth reading (comma separated, whole words)",
+         type: list, default: []}
+
+  - name: MCP hub sign-in
+    use: "Does each agent sign in to an MCP hub (Teams/Jira/Slack/Engram)?"
+    questions:
+      - {key: hub.server_name, ask: "MCP server name for the hub (tools become mcp__<name>__*)", default: "",
+         help: "Each workspace signs in separately with kit/scripts/hub-login.sh — a login is never copied between workspaces."}
+      - {key: hub.url, ask: "Hub URL", default: ""}
+      - {key: hub.client_bin, ask: "Path to the hub client binary (on the shared disk, so both workspaces see it)", default: ""}
+      - {key: hub.client_args, ask: "Arguments for the client's MCP run (comma separated; {url} = the hub URL)", type: list, default: []}
+      - {key: hub.url_env, ask: "Environment variable the client reads the URL from (blank = none)", default: "",
+         lookup: "the client's --help; without it some clients default to another host and sign in to nothing"}
+      - {key: hub.home_dir, ask: "Isolated home folder for the client's login (blank = ~/.<server name>-home)", default: ""}
+      - {key: hub.login_args, ask: "Sign-in command arguments (comma separated)", type: list, default: [login, --device]}
+      - {key: hub.login_check, ask: "File inside that home that exists once signed in (checked for presence only)", default: "",
+         lookup: "after one sign-in: ls -a <home_dir> (names only — never open the file)"}
+
+  - name: Microsoft Teams
+    use: "Do the agents use Microsoft Teams?"
+    questions:
+      - {key: teams.mcp_server, ask: "MCP server name exposing the Teams tools (as in mcp__<name>__microsoft_*)", default: "",
+         lookup: "list your tools; the prefix before __microsoft_list_chats"}
+      - {key: teams.hub_workspace_id, ask: "Hub's Microsoft account id", default: "", lookup: "list_workspaces / microsoft_list_accounts"}
+      - {key: teams.tenant_id, ask: "Microsoft tenant id (DMs only from this tenant)", default: "", lookup: "microsoft_get_profile"}
+      - {key: owner.teams_user_id, ask: "Your Teams user id", default: "", lookup: "microsoft_get_profile id"}
+      - {key: owner.teams_self_chat, auto: true, ask: "Your Teams self-chat id (the command inbox)", default: "48:notes",
+         help: "48:notes is Teams' standard id for 'chat with yourself' — the same for everyone."}
+      - {key: owner.mention_names, ask: "Display names that count as tagging you (comma separated)", type: list, default: "derive:owner_name"}
+      - {key: teams.team_id, ask: "Team id", default: "", lookup: "microsoft_list_teams → let the person pick"}
+      - {key: teams.change_channel_id, ask: "Channel for every hand-over step and change notice", default: "",
+         lookup: "microsoft_list_channels → let the person pick"}
+      - {key: teams.watch_channels, ask: "Other channels to watch", type: channels, default: []}
+
+  - name: Slack
+    use: "Do the agents read Slack?"
+    questions:
+      - {key: slack.mcp_server, ask: "MCP server name exposing the Slack tools", default: ""}
+      - {key: owner.slack_user_id, ask: "Your Slack user id (U…)", default: "",
+         lookup: "slack_read_user_profile with response_format detailed and no user_id → 'User ID:' line"}
+      - {key: owner.slack_self_dm, ask: "Your Slack self-DM channel id (D…)", default: ""}
+      - {key: owner.slack_not_self, ask: "Look-alike Slack ids that are NOT you (comma separated, e.g. 'U0123 (Name)')",
+         type: list, default: [], lookup: "slack_search_users with your name → every other id with a similar name"}
+      - {key: slack.watch_channels, ask: "Slack channels to watch", type: channels, default: []}
+      - {key: slack.retired_channels, ask: "Slack channel ids never to read again (e.g. a replaced group DM; comma separated)",
+         type: list, default: []}
+      - {key: slack.workspace_org, ask: "Does the Slack workspace belong to another organisation? Name it (blank = no)", default: ""}
+      - {key: rules.never_post, ask: "Channels the agents read but must never post to", type: list, default: [slack]}
+
+  - name: Jira
+    use: "Do the agents work Jira tickets?"
+    questions:
+      - {key: jira.project, ask: "Jira project key", default: ""}
+      - {key: jira.mcp_server, ask: "MCP server name exposing the Jira tools", default: ""}
+      - {key: jira.hub_workspace_id, ask: "Jira hub workspace id", default: "", lookup: "list_workspaces"}
+      - {key: jira.builder_label, ask: "Label that assigns a ticket to the builder", default: "derive:builder_label"}
+      - {key: jira.tester_label, ask: "Label that assigns a ticket to the tester", default: "derive:tester_label"}
+      - {key: jira.card_rules.required_labels, ask: "Labels every card must carry, exactly (comma separated)", type: list, default: []}
+      - {key: jira.card_rules.label_families, ask: "Label families: one label from each, mirrored from the parent (comma separated)",
+         type: list, default: [], help: "e.g. D<n>, m0…m4 — a family is described in words; the agent copies the parent's label."}
+      - {key: jira.card_rules.issue_type, ask: "Issue type for new cards (blank = any)", default: ""}
+      - {key: jira.card_rules.require_parent, ask: "Must every card have a parent epic?", type: bool, default: false}
+      - {key: jira.card_rules.require_points, ask: "Must every card have story points?", type: bool, default: false}
+      - {key: jira.card_rules.priority, ask: "Deliberate default priority for new cards (blank = none)", default: ""}
+      - {key: jira.closed_statuses, ask: "Statuses only you may move a card to", type: list, default: [Done]}
+      - {key: jira.scope_authority, ask: "Who owns deliverables/epics (agents never invent one)?", default: ""}
+      - {key: jira.audience, auto: true, ask: "Who a card is written for", default: "a reviewer who was in none of our conversations"}
+      - {key: jira.ignore_labels, ask: "Look-alike labels that are NOT assignments (comma separated)", type: list, default: [],
+         lookup: "jira_get_labels → labels resembling the builder/tester label"}
+
+  - name: Memory (Engram)
+    questions:
+      - {key: engram.knowledge, ask: "Knowledge base space (shared, code-cited)", default: "derive:slug-knowledge"}
+      - {key: engram.builder_memory, ask: "Builder memory space", default: "derive:slug-builder-memory"}
+      - {key: engram.builder_behaviors, ask: "Builder lessons space", default: "derive:slug-builder-behaviors"}
+      - {key: engram.tester_memory, ask: "Tester memory space", default: "derive:slug-tester-memory"}
+      - {key: engram.tester_behaviors, ask: "Tester lessons space", default: "derive:slug-tester-behaviors"}
+      - {key: engram.sessions_builder, ask: "Builder session-log space", default: "derive:slug-builder-sessions"}
+      - {key: engram.sessions_tester, ask: "Tester session-log space", default: "derive:slug-tester-sessions"}
+      - {key: engram.team, ask: "Team-wide space for team lessons (blank = none)", default: ""}
+      - {key: engram.org_rules, ask: "Organisation rules space to read before Jira/posts (blank = none)", default: ""}
+
+  - name: Knowledge base
+    when: engram.knowledge
+    questions:
+      - {key: knowledge.branch, auto: true, ask: "Branch it grows from: deployed, base, or a branch name", default: deployed}
+      - {key: paths.knowledge_drafts, ask: "Folder for the knowledge pages", default: "derive:knowledge_drafts"}
+      - {key: paths.knowledge_src, ask: "Folder for the read-only source worktrees", default: "derive:knowledge_src"}
+      - {key: knowledge.areas, ask: "Knowledge areas (one research agent each; blank = one per app plus cross)", type: areas, default: []}
+      - {key: knowledge.lines, ask: "Other deployed lines of the same app to track too (e.g. per cloud; blank = none)", type: lines,
+         default: []}
+      - {key: knowledge.requirements_index, ask: "Title of the node every requirement is linked from (blank = none)", default: ""}
+
+  - name: Where work may go
+    questions:
+      - {key: environments, ask: "Environments (name, cluster, branches, team requests allowed or owner-only)", type: environments, default: []}
+      - {key: rules.deploy_rulebook, ask: "Path of your deploy rulebook (blank = none)", default: ""}
+      - {key: rules.shared_writes, ask: "What counts as a shared-data write that needs your OK (blank = data other people use)",
+         default: ""}
+      - {key: registry.push_host, ask: "Image registry host images are pushed to (blank = none)", default: ""}
+      - {key: registry.pull_host, ask: "Registry host clusters pull from (blank = same as push)", default: ""}
+      - {key: registry.project, ask: "Registry project / namespace for this pair's images", default: ""}
+
+  - name: Process
+    questions:
+      - {key: dark_factory.enabled, ask: "Run every task through the Dark Factory loop?", type: bool, default: false}
+      - {key: dark_factory.skills_dir, ask: "Folder holding the df-* skills (blank = already installed)", default: "", when: dark_factory.enabled}
+      - {key: dark_factory.loop_skill, auto: true, ask: "Skill that runs the loop", default: dark-factory-build, when: dark_factory.enabled}
+      - {key: dark_factory.stage_gate, ask: "Also install the stage-gate hooks?", type: bool, default: false, when: dark_factory.enabled}
+      - {key: rules.reviewer, auto: true, ask: "Name of the independent reviewer agent", default: adversary}
+      - {key: rules.max_rounds, auto: true, ask: "Fix rounds (local and live) before escalating to you", default: 3}
+      - {key: rules.result_parsers, ask: "Tools that count test results, never a summary line (comma separated)", type: list, default: []}
+      - {key: schedule.tick_minutes, auto: true, ask: "Minutes between agent ticks", default: 3}
+      - {key: schedule.fresh_start_utc, ask: "UTC hours when the watchdog starts each agent fresh (comma separated)", type: list,
+         default: ["02", "14"]}
+      - {key: schedule.stall_minutes, auto: true, ask: "Restart the builder if its dashboard snapshot is older than (minutes; 0 = off)", default: 45}
+      - {key: paths.heartbeat, ask: "Builder's heartbeat file for the stall check (blank = none)", default: ""}
+
+  - name: Guards
+    questions:
+      - {key: guard.credential_dirs, ask: "Extra credential folders the guards protect (comma separated, relative to home)",
+         type: list, default: []}
+      - {key: guard.deploy_verbs, ask: "Script names that count as a deploy (gated on your approval; comma separated)", type: list,
+         default: []}
+
+  - name: Your standing rules
+    questions:
+      - {key: rules.standing, ask: "Your standing rules, verbatim (one at a time; blank to finish)", type: rules,
+         help: "Each rule: the text, optionally why, and for: both | builder | tester."}
+
+  - name: Tester runner (optional)
+    use: "Does the tester use an independent end-to-end runner (Argus)?"
+    questions:
+      - {key: argus.url, ask: "Runner control-plane URL", default: ""}
+      - {key: argus.apps, ask: "Apps that have runner workspaces", type: list, default: []}
+      - {key: argus.execution_hub, ask: "Hub the runner's validation steps call tools through (blank = none)", default: ""}
+      - {key: argus.existing_suites, ask: "Suites someone else already owns (reuse once they OK it; blank = none)", type: suites,
+         default: []}
+
+  - name: Dashboard
+    use: "Do you want a live dashboard page? (your OWN private page)"
+    questions:
+      - {key: dashboard.artifact_url, ask: "URL of YOUR published copy of templates/dashboard/control-room.html", default: "",
+         help: "Claude publishes it for you as a new private artifact (docs/SETUP.md 'Your own dashboard'); never reuse another person's URL."}

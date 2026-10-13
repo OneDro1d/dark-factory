@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""restart-request — ask this workspace's watchdog to restart its agent (the owner 2026-10-12: "<builder> restart" /
+"<tester> restart" from Teams or Slack, so the owner can restart either agent without opening the workspace).
+
+  restart-request <teams|slack> <message_id> [--check]
+
+Duplicates are ignored (exit 3, nothing written): a request while one is still pending, a message id already
+honoured, or a message sent before the last restart finished (its id is its send time). `--check` answers the same question
+without writing, so the agent can reply "Restart requested" or "Already restarting" truthfully.
+
+the builder (or the tester) calls this ONLY for the owner's own `<builder> restart` (or `<tester> restart`) — see listener config
+`restart_command`. It writes ~/.cache/agent-watchdog.restart-request in the CALLER's home, so each workspace's
+watchdog (agent-watchdog.sh) only sees its own agent's request; it waits 30 s so the agent can finish posting
+its reply, then sends /clear and /ms (or /vs). The watchdog keeps the message ids it already
+honoured, so if the new session re-reads the same restart message (watermark not saved yet) it is
+dropped, never a restart loop. A restart is harmless (fresh context + listener restart), so this is a
+convenience, not a security boundary.
+"""
+import datetime
+import json
+import os
+import pathlib
+import re
+import sys
+
+FLAG = pathlib.Path.home() / ".cache" / "agent-watchdog.restart-request"
+DONE = pathlib.Path.home() / ".cache" / "agent-watchdog.restart-done"   # the watchdog appends each honoured id
+GRACE_S = 120   # a message sent up to 2 min after the last restart was honoured is still part of that restart
+
+if len(sys.argv) not in (3, 4) or sys.argv[1] not in ("teams", "slack") or not re.fullmatch(r"[\w.:@-]{1,200}", sys.argv[2]) \
+        or (len(sys.argv) == 4 and sys.argv[3] != "--check"):
+    sys.exit("usage: restart-request <teams|slack> <message_id> [--check]")
+check_only = len(sys.argv) == 4
+now = datetime.datetime.now(datetime.timezone.utc)
+
+
+def sent_at():
+    """When the chat message was SENT: a Teams message id is epoch milliseconds, a Slack ts is epoch seconds."""
+    try:
+        v = float(sys.argv[2])
+    except ValueError:
+        return None
+    if sys.argv[1] == "teams" and v > 1e12:
+        return v / 1000
+    if sys.argv[1] == "slack" and 1e9 < v < 1e10:
+        return v
+    return None
+
+
+def duplicate():
+    """the owner 2026-10-12: a repeat of the same request is ignored. A repeat = a request while one is still pending,
+    a message id already honoured, or a message SENT before the last restart finished (+GRACE_S). A message sent after
+    that is a new request, however soon. → reason string, or None."""
+    if FLAG.exists():
+        return "a restart is already pending (the watchdog acts on it within about 90 s)"
+    if DONE.exists():
+        if sys.argv[2] in DONE.read_text().split():
+            return "this message was already honoured"
+        last = DONE.stat().st_mtime
+        sent = sent_at()
+        at = datetime.datetime.fromtimestamp(last, datetime.timezone.utc).strftime("%H:%MZ")
+        if sent is None:
+            if now.timestamp() - last < 180:
+                return f"restarted at {at}, under 3 min ago (message time unknown)"
+        elif sent <= last + GRACE_S:
+            return f"this message was sent before the restart at {at} finished — it is the same request"
+    return None
+
+
+why = duplicate()
+if why:
+    # exit 3 = DUPLICATE: do NOT reply "Restart requested"; reply once "Already restarting — <why>. Ignored the repeat."
+    print(f"DUPLICATE — ignored: {why}")
+    sys.exit(3)
+if check_only:
+    print("OK — not a duplicate; reply 'Restart requested', then run this again without --check as the tick's last action")
+    sys.exit(0)
+FLAG.parent.mkdir(parents=True, exist_ok=True)
+tmp = FLAG.with_suffix(".tmp")
+tmp.write_text(json.dumps({"source": sys.argv[1], "id": sys.argv[2], "at": now.strftime("%Y-%m-%dT%H:%M:%SZ")}) + "\n")
+os.replace(tmp, FLAG)
+print(f"restart requested ({sys.argv[1]} {sys.argv[2]}); the watchdog restarts the agent within about 90 s")

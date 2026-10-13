@@ -1,0 +1,22 @@
+<p><b>Commands for ${builder.name} and ${tester.name}</b> (send them in your Teams self-chat or a Teams DM; only your own messages count)</p>
+<p><b>${tester.name} (product owner + tester)</b></p>
+<ul>
+<li><code>help-${derived.tester_lc}</code> (or <code>${derived.tester_lc} help</code>): this list</li>
+<li><code>${derived.tester_lc} &lt;new work or a change&gt;</code>: ${tester.name} agrees the details with you, writes the acceptance criteria and design, and hands them to ${builder.name} to build. Example: <code>${derived.tester_lc} TICKET-123: refuse payments over the account limit</code></li>
+<li><code>${derived.tester_lc} &lt;question&gt;</code>: ask anything about requirements or testing. Example: <code>${derived.tester_lc} what did the last retest find?</code></li>
+<li><code>${derived.tester_lc} take TICKET-123</code>: ${tester.name} picks up that ticket as product owner (same as labelling it <code>${jira.tester_label}</code>)</li>
+<li><code>${derived.tester_lc} restart</code>: a fresh copy of ${tester.name} in about 2 minutes (send it once; repeats while it restarts are ignored)</li>
+</ul>
+<p><b>${builder.name} (builder)</b></p>
+<ul>
+<li><code>help-${derived.builder_lc}</code> (or <code>${derived.builder_lc} help</code>, or just <code>help</code>): this list</li>
+<li><code>${derived.builder_lc} &lt;what you want&gt;</code>: ask ${builder.name} anything. New work is forwarded to ${tester.name} for a spec first.</li>
+<li><code>${derived.builder_lc} take TICKET-123</code>: ${builder.name} forwards that ticket to ${tester.name}, then builds it once the spec is ready (same as labelling it <code>${jira.builder_label}</code>)</li>
+<li><code>review &lt;hand-over id&gt;</code>: before deploying, get the PR link, diff, ${tester.name}'s local result, deploy and rollback commands. Example: <code>review ho-20261012-3f2a1c</code></li>
+<li><code>approve &lt;namespace&gt; &lt;minutes&gt;</code>: open a deploy window for ${builder.name} (max 120 min; the message must be under 15 min old; used once). Example: <code>approve my-namespace 30</code></li>
+<li><code>deployed &lt;hand-over id&gt;</code>: tell ${builder.name} you deployed it yourself, so ${tester.name} retests live</li>
+<li><code>close it</code>: reply this when ${builder.name} asks to close a ticket; nothing goes to Done without it</li>
+<li><code>${derived.builder_lc} restart</code>: a fresh copy of ${builder.name} in about 2 minutes (send it once; repeats while it restarts are ignored)</li>
+</ul>
+<p><b>Both</b>: <code>status</code>, <code>answer &lt;hand-over id&gt; &lt;text&gt;</code>, <code>stop</code> / <code>start</code> (stop or resume picking up new work).</p>
+<p>Merges and secrets always need you directly. Every hand-over step is posted to the team's change channel.</p>

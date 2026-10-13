@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""ledger — what the builder and tester did, from <paths.ledger>/<day>.jsonl (written by kit/hooks/action-ledger.py).
+
+  ledger                 today: counts per agent x category, then what changed something, then what needs the owner
+  ledger 2026-10-10      a given day (UTC)
+  ledger --all           every action that day, one line each
+  ledger --needs         only what is waiting on the owner (e.g. blocked deploys)
+  ledger --writes        only actions that changed something (cluster, git push, PR, posts, Jira, images)
+  ledger --selftest
+
+Ledger folder: $PAIR_LEDGER_DIR, else pair.yaml paths.ledger (kit/lib/pairconf.py). Rows are masked when the hook
+writes them; this viewer masks the summary again before printing (belt and braces) and never prints other fields.
+"""
+import collections, datetime, json, os, pathlib, re, shutil, subprocess, sys, tempfile
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "lib"))
+sys.path.insert(0, str(HERE.parent / "hooks"))
+import pairconf  # noqa: E402
+
+WRITES = {"cluster-write", "git-push", "pr", "outbound-post", "jira-write", "confluence-write", "deploy-blocked",
+          "build-push", "ci-trigger"}
+DAY_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
+
+
+def main(argv):
+    args = [a for a in argv if not a.startswith("--")]
+    flags = {a for a in argv if a.startswith("--")}
+    unknown = flags - {"--all", "--needs", "--writes"}
+    if unknown or len(args) > 1:
+        print(__doc__)
+        return 2
+    try:
+        from ledger_common import mask
+    except Exception:
+        mask = None
+    if mask is None:
+        print("refused: kit/hooks/ledger_common.py (the mask) could not be loaded — nothing printed")
+        return 1
+    cfg = pairconf.load()
+    owner = pairconf.get(cfg, "owner.name", "the owner")
+    d = pathlib.Path(os.environ.get("PAIR_LEDGER_DIR") or pairconf.ledger_dir(cfg))
+    day = args[0] if args else datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    if not DAY_RE.fullmatch(day):
+        print(f"refused: day must be YYYY-MM-DD, got {day[:20]!r}")
+        return 2
+    f = d / f"{day}.jsonl"
+    if not f.exists():
+        print(f"no ledger for {day} at {f}")
+        return 0
+    rows = []
+    for line in f.read_text().splitlines():
+        try:
+            r = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(r, dict):
+            rows.append(r)
+
+    def show(r):
+        need = f"  <-- NEEDS {owner.upper()}" if r.get("needs") == "owner" else ""
+        who = str(r.get("name") or r.get("agent") or "?")
+        print(f'{str(r.get("ts", ""))[11:19]}Z {who[:10]:10} {str(r.get("category", "")):14} '
+              f'{str(r.get("tool", "")).split("__")[-1][:28]:28} {mask(str(r.get("summary", "")))[:110]}{need}')
+
+    if "--all" in flags:
+        for r in rows:
+            show(r)
+    elif "--needs" in flags:
+        for r in rows:
+            if r.get("needs") == "owner":
+                show(r)
+    elif "--writes" in flags:
+        for r in rows:
+            if r.get("category") in WRITES:
+                show(r)
+    else:
+        c = collections.Counter((str(r.get("name") or r.get("agent") or "?"), str(r.get("category", ""))) for r in rows)
+        print(f"Ledger {day}: {len(rows)} actions\n")
+        for agent in sorted({a for a, _ in c}):
+            print(f"  {agent}:", ", ".join(f"{cat} {n}" for (a, cat), n in sorted(c.items()) if a == agent))
+        print("\nChanged something (cluster / git push / PR / posts / Jira / images):")
+        w = [r for r in rows if r.get("category") in WRITES]
+        for r in w:
+            show(r)
+        if not w:
+            print("  nothing")
+        print(f"\nWaiting on {owner}:")
+        n = [r for r in rows if r.get("needs") == "owner"]
+        for r in n:
+            show(r)
+        if not n:
+            print("  nothing")
+    return 0
+
+
+def selftest():
+    base = pathlib.Path(f"/tmp/claude-{os.getuid()}") if pathlib.Path(f"/tmp/claude-{os.getuid()}").is_dir() else pathlib.Path(tempfile.gettempdir())
+    t = pathlib.Path(tempfile.mkdtemp(prefix="ledger-selftest-", dir=base))
+    bad = 0
+
+    def run(*a):
+        env = dict(os.environ, PAIR_CONFIG=str(t / "pair.yaml"))
+        env.pop("PAIR_LEDGER_DIR", None)
+        return subprocess.run([sys.executable, str(pathlib.Path(__file__).resolve()), *a], env=env, capture_output=True, text=True)
+
+    def check(name, ok, detail=""):
+        nonlocal bad
+        bad += not ok
+        print("PASS" if ok else "FAIL", name, "" if ok else str(detail)[-300:])
+
+    try:
+        led = t / "ledger"
+        led.mkdir()
+        (t / "pair.yaml").write_text(f"project: {{name: S, slug: s}}\nowner: {{name: Olive}}\nbuilder: {{name: Bob, host: h1}}\n"
+                                     f"tester: {{name: Tess, host: h2}}\npaths: {{shared_root: {t}, ledger: {led}}}\n")
+        tok = "ghp_" + "Z9y8X7w6V5u4T3s2R1q0P9o8"   # a fake token shape, assembled at run time
+        rows = [
+            {"ts": "2026-01-02T09:00:00Z", "agent": "builder", "name": "Bob", "category": "git-push", "tool": "Bash", "summary": "git push origin fix-1"},
+            {"ts": "2026-01-02T09:01:00Z", "agent": "builder", "name": "Bob", "category": "deploy-blocked", "tool": "Bash",
+             "summary": "kubectl apply -n api-dev -f x", "needs": "owner"},
+            {"ts": "2026-01-02T09:02:00Z", "agent": "tester", "name": "Tess", "category": "read", "tool": "Read", "summary": "/tmp/notes"},
+            {"ts": "2026-01-02T09:03:00Z", "agent": "builder", "name": "Bob", "category": "other", "tool": "Bash",
+             "summary": f"curl -H 'Authorization: Bearer {tok}' https://x"},
+        ]
+        (led / "2026-01-02.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n{broken\n")
+        r = run("2026-01-02")
+        check("summary: counts per agent", r.returncode == 0 and "4 actions" in r.stdout and "Bob: deploy-blocked 1, git-push 1, other 1" in r.stdout, r.stdout + r.stderr)
+        check("summary: needs owner section", "Waiting on Olive:" in r.stdout and "NEEDS OLIVE" in r.stdout, r.stdout)
+        r = run("2026-01-02", "--all")
+        check("--all: every row, broken line skipped", r.returncode == 0 and len(r.stdout.strip().splitlines()) == 4, r.stdout)
+        check("--all: token masked on print", tok not in r.stdout and "<MASKED>" in r.stdout, r.stdout)
+        r = run("2026-01-02", "--needs")
+        check("--needs: only owner rows", len(r.stdout.strip().splitlines()) == 1 and "kubectl apply" in r.stdout, r.stdout)
+        r = run("2026-01-02", "--writes")
+        lines = r.stdout.strip().splitlines()
+        check("--writes: push + blocked deploy only", len(lines) == 2 and all(("git-push" in l or "deploy-blocked" in l) for l in lines), r.stdout)
+        r = run("2026-01-03")
+        check("missing day: says so, exit 0", r.returncode == 0 and "no ledger for 2026-01-03" in r.stdout, r.stdout)
+        r = run("../../etc/passwd")
+        check("bad day refused", r.returncode == 2 and "refused" in r.stdout, r.stdout)
+        r = run("--bogus")
+        check("unknown flag -> usage", r.returncode == 2, r.stdout)
+    finally:
+        shutil.rmtree(t, ignore_errors=True)
+    print("ALL PASS" if not bad else f"{bad} FAILED")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["--selftest"]:
+        sys.exit(selftest())
+    sys.exit(main(sys.argv[1:]))
