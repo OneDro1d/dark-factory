@@ -58,6 +58,18 @@ editing approval tools). The owner copies their organisation's approved version 
 writes one: `approve-deploy <scope> [minutes]`, `--list`, `--revoke-all`; scope at least 6 characters; at most 480
 minutes; files under `paths.approvals` written with umask 077) and re-runs `./install.sh`. `./setup` reminds you.
 
+**What the approval window is, and is not.** The read-only cluster credential (`k8s/agent-readonly.yaml`, applied by the owner with
+`kit/scripts/make-agent-kubeconfig.sh`) is the BOUNDARY: a token that cannot write fails every write however it is spelled. The approval window and the
+deploy-gate regexes are a TRIPWIRE on top, not a boundary:
+- `deploy-gate` honours any well-formed `appr-*.json` in `paths.approvals` (by, created, unexpired expires, a scope of 6+ characters); it cannot tell who
+  wrote the file. If the builder's Linux user can write that directory, the party the window restrains can open its own window. This is the case when
+  the ledger lives on a shared disk that both workspaces mount under the same uid (mode bits then isolate nothing, `drwx------` included).
+- Check it for YOUR deployment, as the builder's user: `test -w <paths.approvals> && echo "WRITABLE: the window is only a tripwire here"`. If it is
+  writable, put `paths.approvals` where the builder cannot write (a different owner, or a different filesystem the builder mounts read-only), or accept
+  that the control is the read-only credential plus the builder's own instructions.
+- The 6-character minimum for a scope is enforced in BOTH `deploy-gate.py` and the chat approval step, deliberately. Consequence: a namespace such as
+  `dev`, `api` or `prod` can never be approved by any path, chat or command. If you need that, change the bound in both places; do not change one.
+
 ## Steps
 
 1. **Clone the kit into the shared folder** (once):

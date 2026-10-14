@@ -13,8 +13,10 @@
 #   __SA_NAMESPACE__   a namespace the owner controls, where the ServiceAccount lives (e.g. the builder workspace's)
 #
 # Apply / mint / revoke: run  kit/scripts/make-agent-kubeconfig.sh  — it prints the exact commands for the owner.
-# Narrower alternative: replace the ClusterRoleBinding with one RoleBinding per app namespace (roleRef kind ClusterRole,
-# name agent-readonly) to limit the agent to the pair's namespaces.
+# RECOMMENDED DEFAULT: bind per namespace, not cluster-wide. Replace the ClusterRoleBinding with one RoleBinding per app
+# namespace (roleRef kind ClusterRole, name agent-readonly) so the agent reads only the pair's own namespaces. The
+# cluster-wide binding is the exception: configmaps and pods/log routinely carry endpoints, connection strings and
+# sometimes credentials people should not have put there, so "read-only" on the whole cluster is still broad data access.
 ---
 apiVersion: v1
 kind: ServiceAccount
