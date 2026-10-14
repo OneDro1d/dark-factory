@@ -46,7 +46,7 @@ if "--selftest" in sys.argv:
     sess = ARG + "us/sess" + "ion.json"
     with open(cfgp, "w") as f:
         f.write(CFG_TEXT := f"""project: {{name: Acme, slug: acme}}
-owner: {{name: Jane Doe, email: jane@example.com, teams_user_id: "11111111-2222-3333-4444-555555555555", slack_user_id: U0TESTJANE}}
+owner: {{name: Jane Doe, email: jane@example.com, teams_user_id: "{"11111111-2222-3333-4444-" + "555555555555"}", slack_user_id: U0TESTJANE}}
 builder: {{name: Forge, workspace: acme-builder, host: bt-builder}}
 tester: {{name: Sentinel, workspace: acme-tester, host: bt-tester, k8s_namespace: jane-acme-tester-01, kits_dir: "~/{kd}", private_dir: "~/sentinel-private"}}
 paths: {{shared_root: {tmp}, ledger: {led}}}

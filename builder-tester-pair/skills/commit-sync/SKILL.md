@@ -33,9 +33,16 @@ Only touch what this change actually affects. Cite sources; no guessing.
 
 ## Step 3 — Safety gate (block on any hit)
 ```bash
-git diff --cached -U0 | grep -nEi 'api[_-]?key|secret|password|token|sk-ant|BEGIN .*PRIVATE KEY|bearer ' || echo "no obvious secrets"
+# Exit codes: 0 = scan ran and found nothing it knows how to find; 1 = a hit (stop); 2 = the scan could NOT run (treat as NOT clean).
+DIFF="$(git diff --cached -U0)" || { echo "SCAN DID NOT RUN: git diff failed - this is NOT a clean result"; exit 2; }
+printf '%s\n' "$DIFF" | grep -nEi 'api[_-]?key|secret|password|token|sk-ant|BEGIN .*PRIVATE KEY|bearer '; rc=$?
+case $rc in
+  0) echo "POSSIBLE SECRET on the lines above: STOP and check before committing"; exit 1 ;;
+  1) echo "no match for the NAMES this scan looks for (api key, secret, password, token, bearer, private key). It cannot catch an unlabelled high-entropy value; look at the diff yourself" ;;
+  *) echo "SCAN DID NOT RUN: grep failed (exit $rc) - this is NOT a clean result"; exit 2 ;;
+esac
 ```
-Also confirm no PII in fixtures/data. If anything trips, STOP and report — do not commit.
+A name-based scan is a floor, not a verdict: a bare value with no label walks through it. Read the staged diff for values that look like credentials, and use the repo's value-shaped secret check if it has one. Also confirm no PII in fixtures/data. If anything trips, or the scan could not run, STOP and report: do not commit.
 
 ## Step 4 — Handle the gitignored knowledge files
 If `.claude/**` and new `CLAUDE.md` files are gitignored in this repo, and the user wants them shared, **force-add explicitly** and say so:

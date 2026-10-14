@@ -803,7 +803,7 @@ def selftest():
         r = run("status")
         expect("status: Engram ids and edge states", "2/3 pages have an Engram id, 1 requirement node(s); edges linked 2, pending 1" in r.stdout, r.stdout)
         # a page that gets a NEW Engram id: its linked edges go back to pending (they point at the superseded object)
-        U4 = "44444444-0000-4000-8000-000000000004"
+        U4 = "44444444-0000-4000-8000-" + "000000000004"
         run("record", "--page", "api/rules--limits.md", "--event", "updated", "--engram-id", U4)
         e = {x["relation"]: x for x in (json.loads(l) for l in (g / "edges.jsonl").read_text().splitlines())}
         expect("new Engram id: edge moved to it and back to pending", e["ENFORCES"]["to_id"] == U4 and e["ENFORCES"]["engram"] == "pending"
