@@ -4,7 +4,7 @@
 # auth header; it is moved file-to-file by Python and NEVER printed. Only the named server is copied.
 #
 #   sudo bash mcp-register.sh <target-user> <server-name> [--from <file>] [--dry-run]
-#   e.g.  sudo bash mcp-register.sh wong synapse-pwwdev --from /home/coder/Code/.mcp.json
+#   e.g.  sudo bash mcp-register.sh <agent> <server> --from /path/to/.mcp.json
 #
 # Sources searched in order: --from (a .mcp.json), then the owner's ~/.claude.json (user-scope servers).
 # The target's ~/.claude.json is created (mode 600, owned by the target) or merged; nothing else in it is touched.

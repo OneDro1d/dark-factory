@@ -4,6 +4,7 @@
 Run:  python3 kit/tests/test_pairconf_single_mode.py
 The unshare test REFUSES (exit 2, "SKIP") when unprivileged user namespaces are unavailable, so it can never report
 "no gap" on a box where it could not look. Each test was run against the previous code first and failed there."""
+import json
 import os
 import pathlib
 import subprocess
@@ -15,17 +16,15 @@ LIB = pathlib.Path(__file__).resolve().parents[1] / "lib"
 sys.path.insert(0, str(LIB))
 import pairconf  # noqa: E402
 
-CFG_SINGLE = """\
-guard: {workspace_mode: single}
-builder: {name: B, host: "*", user: %(me)s}
-tester: {name: T, host: "*", user: someone-else}
-"""
+# Fixtures are written as JSON, which is also valid YAML: pairconf falls back to json when PyYAML is missing, so both parsers read them.
+CFG_SINGLE = {"guard": {"workspace_mode": "single"}, "builder": {"name": "B", "host": "*", "user": "%(me)s"},
+              "tester": {"name": "T", "host": "*", "user": "someone-else"}}
 
 
-def _cfg(text):
+def _cfg(obj):
     d = tempfile.mkdtemp()
     p = pathlib.Path(d) / "pair.yaml"
-    p.write_text(text % {"me": pairconf._current_user()})
+    p.write_text(json.dumps(obj).replace("%(me)s", pairconf._current_user()))
     return str(p)
 
 
@@ -60,10 +59,10 @@ class SingleMode(unittest.TestCase):
         self.assertEqual(outside, "True", "control: the same probe outside the namespace is trusted")
 
     def test_single_mode_requires_role_user(self):
-        cfg = pairconf.load(_cfg("guard: {workspace_mode: single}\nbuilder: {name: B, host: '*'}\n"
-                                 "tester: {name: T, host: '*'}\n"))
+        cfg = pairconf.load(_cfg({"guard": {"workspace_mode": "single"}, "builder": {"name": "B", "host": "*"},
+                                  "tester": {"name": "T", "host": "*"}}))
         self.assertEqual(pairconf.role(cfg, host="anything"), "unknown")      # was: everything resolved to builder
-        sep = pairconf.load(_cfg("builder: {name: B, host: '*'}\ntester: {name: T, host: '*'}\n"))
+        sep = pairconf.load(_cfg({"builder": {"name": "B", "host": "*"}, "tester": {"name": "T", "host": "*"}}))
         self.assertEqual(pairconf.role(sep, host="anything"), "builder")      # separate mode unchanged
 
 
