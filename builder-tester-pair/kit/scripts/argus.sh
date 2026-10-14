@@ -49,7 +49,7 @@ CTX="${ARGUS_KUBE_CONTEXT:-$(PC get argus.kube_context)}"
 CA="$HOME/.config/argus/ca-bundle.crt"
 ARGUS="${ARGUS_BIN:-$HOME/.local/bin/argus}"
 OUT="${ARGUS_OUT:-$HOME/.cache/argus-out}"
-INGRESS_IP=10.36.64.17
+INGRESS_IP="${ARGUS_INGRESS_IP:-$(PC get argus.ingress_ip)}"
 # The self-signed estate wildcard is trusted ONLY for Argus calls. Exporting SSL_CERT_FILE globally
 # replaced the system trust for git too, and git's Coder credential helper then failed with
 # "x509: certificate signed by unknown authority" (seen on the tester workspace, 2026-10-10).
@@ -67,6 +67,7 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
 setup)
   mkdir -p "$(dirname "$CA")" "$HOME/.local/bin"
+  [ -n "$INGRESS_IP" ] || die "set argus.ingress_ip (the IP of the Argus ingress, where the TLS certificate is fetched from) in pair.yaml, or ARGUS_INGRESS_IP"
   echo | openssl s_client -connect "$INGRESS_IP:443" -servername "$CP_HOST" 2>/dev/null \
     | openssl x509 -out "$HOME/.config/argus/aks-dev-scus-wildcard.crt"
   cp /etc/ssl/certs/ca-certificates.crt "$CA"

@@ -118,6 +118,7 @@ slack:
   retired_channels: []          # channel ids never read again (e.g. a replaced group DM)
   workspace_org: ""             # set when the Slack workspace belongs to another organisation (most traffic is then out of scope)
   watch_channels: []            # [{key: dev, id: C0123, name: "#payments-dev"}]
+  relay_url: ""                 # YOUR Slack bot relay endpoint for the morning digest DM (POST {ai_name, channel, message}); empty = no digest is sent
 
 jira:
   project: ""                   # e.g. PAY
@@ -184,6 +185,7 @@ argus:                          # optional: independent end-to-end checker (kit/
   control_namespace: ""         # namespace of the control plane (holds the registry pull secret)
   instance_suffix: "dev"        # instance ids are <app>-<suffix>
   egress_script: ""             # path inside the Argus source to its egress allow-list script, optional
+  ingress_ip: ""                # IP of YOUR Argus ingress (`argus.sh setup` fetches the TLS certificate from it); required for `setup`, or set ARGUS_INGRESS_IP
   existing_suites: []           # [{app: api, owner: "Team X"}] — reuse once the owner OKs, never duplicate
 
 schedule:

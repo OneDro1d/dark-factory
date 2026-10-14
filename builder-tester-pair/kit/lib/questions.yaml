@@ -122,6 +122,7 @@ sections:
       - {key: slack.watch_channels, ask: "Slack channels to watch", type: channels, default: []}
       - {key: slack.retired_channels, ask: "Slack channel ids never to read again (e.g. a replaced group DM; comma separated)",
          type: list, default: []}
+      - {key: slack.relay_url, ask: "URL of YOUR Slack bot relay for the morning digest DM (blank = no digest)", default: ""}
       - {key: slack.workspace_org, ask: "Does the Slack workspace belong to another organisation? Name it (blank = no)", default: ""}
       - {key: rules.never_post, ask: "Channels the agents read but must never post to", type: list, default: [slack]}
 

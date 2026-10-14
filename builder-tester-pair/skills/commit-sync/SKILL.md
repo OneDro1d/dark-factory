@@ -35,6 +35,7 @@ Only touch what this change actually affects. Cite sources; no guessing.
 ```bash
 # Exit codes: 0 = scan ran and found nothing it knows how to find; 1 = a hit (stop); 2 = the scan could NOT run (treat as NOT clean).
 DIFF="$(git diff --cached -U0)" || { echo "SCAN DID NOT RUN: git diff failed - this is NOT a clean result"; exit 2; }
+[ -n "$DIFF" ] || { echo "SCAN MEASURED NOTHING: no staged changes (git add first) - this is NOT a clean result"; exit 2; }
 printf '%s\n' "$DIFF" | grep -nEi 'api[_-]?key|secret|password|token|sk-ant|BEGIN .*PRIVATE KEY|bearer '; rc=$?
 case $rc in
   0) echo "POSSIBLE SECRET on the lines above: STOP and check before committing"; exit 1 ;;
@@ -65,7 +66,7 @@ git add -A        # plus any -f from step 4
 <what changed and WHY — the problem it solves, not a file list>
 <contracts/migrations touched; F-###/D-### references if any>
 
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Co-Authored-By: <the model that wrote this, as your harness names it> <noreply@anthropic.com>
 ```
 `type` ∈ feat|fix|test|docs|refactor|chore. `scope` = service (e.g. `service-a`). Reference the issue/ticket key if known.
 
