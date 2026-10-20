@@ -122,6 +122,44 @@ if the target is not a notepad — a Handoff only belongs in a notepad. It also 
 empty body and any argument it does not take: there is no `--body-file` flag — pass the body
 on stdin, or a file path as the third argument.
 
+### Then record the session in durable memory
+
+What Engram is, and how a machine is authorised to reach it, is documented in exactly one place: [Engram](../../../../../starter-kit/instance/AUTHENTICATION.md#engram).
+
+A handoff is the notepad's entry point. It is **not** reachable from another notepad, another
+machine, or a session six weeks from now that never opens this repo. So after publishing, write
+one session record to Engram:
+
+```bash
+df-engram write --kind session --collection loom-sessions \
+  --title "<what this session actually changed, in a sentence>" \
+  --body-file <the handoff body, or a tighter summary> \
+  --mission "<mission id, when there is one>" \
+  --relates-query "<a one-sentence paraphrase of the outcome>" \
+  --corrects <document-id>        # only for a record this supersedes, and only if you name it
+```
+
+- **`--relates-query` is not decoration.** It is the second search leg: the title finds keyword
+  neighbours, the paraphrase finds vector ones, and the two sets barely overlap. Omit it and the
+  tool falls back to the body's first sentence, which is a floor, not a substitute.
+- **`--corrects` is a claim, so it is never inferred.** Pass it only for a document this record
+  genuinely supersedes. It takes the FULL document id — the eight-hex references in this estate's
+  notes are the first segment of a UUID and `engram_link` rejects them. Resolve the full
+  `document_id` from a search hit.
+- **A TIMEOUT PROVES NOTHING.** `df-engram` parks the record `UNPROVEN` and does not retry, and it
+  is right not to: the indexing lag between a timed-out write and a findable document is 60-90 s,
+  and retrying inside it is what created duplicates by hand for months. Run `df-engram reconcile`
+  on a LATER turn.
+- If the record cannot be sent at all (no token in this environment) the finding is still queued on
+  disk under `<notepad>/pending-engram/`. Nothing is lost; say so and move on.
+
+The write also refreshes `<notepad>/.df/engram-recall.txt`, which is the line SessionStart injects
+so the next cold session knows the store exists.
+
+⚠️ **This is the one write that is NOT a second home for a fact.** The handoff points at artefacts
+inside this notepad; the Engram record is how a session that has never seen this notepad finds the
+work at all. Two different readers, not two copies.
+
 ### Suggested body sections
 
 - **Objective / current goal** — one line; the done-criteria from `SCOPE.md`.

@@ -124,6 +124,331 @@ FF="$(grep -l '^title: F$' "$NP"/pending-engram/*.md 2>/dev/null | head -1)"
 [ -n "$FF" ] && ok "F: the finding is still QUEUED on disk — never lost to a missing token" \
              || bad "F: queued anyway" "no file"
 
+### ---------------------------------------------------------------------------------------------
+### THE GRAPH HALF. A record nobody can reach from anywhere is not memory, it is a landfill.
+###
+### ⛔ THIS HALF WAS NEARLY NOT BUILT, AND THE REASON IS WORTH KEEPING. On 2026-09-09 the estate
+### measured the graph layer INERT: `engram_link` returned `projection: "pending"`, and 45 s later
+### `engram_neighbors` and `engram_traverse` both returned `{"nodes": [], "relationships": []}`,
+### while `engram_search_graph` reported `graph_available: true` with `graph_score: 0` on every hit
+### — a false green. Engram `dde3d4fd`.
+###
+### RE-MEASURED 2026-09-22 before writing a line of this: `projection: "complete"`, the edge reads
+### back from `engram_neighbors` IMMEDIATELY, `engram_traverse` returns real paths, and
+### `search_graph` reports `graph_score: 0.52` with a NEW `graph_contributed: true` field — which is
+### what makes the old false green falsifiable at last. The 2026-09-09 finding is STALE, not wrong:
+### it was true when it was taken. THE LESSON IS THE ORDER — re-probe the layer, then build on it.
+###
+### These transports log every call, so the assertions below read WHAT WAS SENT to the hub, never
+### what the CLI says it sent. A tool's own summary of its behaviour is not evidence of it.
+### ---------------------------------------------------------------------------------------------
+export DFE_LOG="$T/calls.log"
+: > "$DFE_LOG"
+NPA="$T/npa"; mkdir -p "$NPA"; printf '# NOTES\n' > "$NPA/NOTES.md"
+printf 'Objective: prove the anchors.\n' > "$NPA/SCOPE.md"
+
+# ⚠️ EVERY ID HERE IS DISTINCT ON PURPOSE. The first draft of this fixture handed the same id back
+# for the notepad anchor AND the new record, so every edge the CLI tried was a self-edge, correctly
+# refused — and three assertions failed against CORRECT code. A fixture that cannot tell two nodes
+# apart cannot test a graph.
+#
+# ⚠️ AND DISTINCT IN THEIR FIRST 8 CHARACTERS, because that is the form the tests observe. The CLI
+# prints `rid[:8]` (bin/df-engram:529, :582) and two assertions below grep that displayed prefix. A
+# rename that kept the ids distinct but collided on the prefix reintroduced the exact defect above
+# through the DISPLAY path instead of the data path. The rule is not "distinct ids" — it is
+# "distinct in every form the test observes".
+#
+# ⛔ AND NOT UUID-SHAPED, which is not cosmetic. landmarks.example.conf's P4 class has a bare
+# 8-4-4-4-12 hex branch, deliberately: it is the only P4 branch that still works in CI, where the
+# real config is absent. UUID fixtures here made `gate-selftest.sh` report FINDINGS on main from
+# #220 (2026-09-23) until 2026-10-02 — ten days in which every PR carried an inherited red check
+# and no PR caused it. Fixed in the FIXTURE, not the gate: a path exclusion would let a real UUID
+# dropped into this file later sail straight through, and nothing in df-engram parses an id's shape.
+# ⚠️ The gate's own comment claimed "ZERO matches across this entire repository" — true when it was
+# measured, and a measurement is not a permanent property of a repo that keeps changing.
+D_ID="fxrecord1"   # the record a write returns
+A_ID="fxnotepad"   # the NOTEPAD anchor
+M_ID="fxmission"   # the MISSION anchor
+V_ID="fxvector1"   # findable ONLY by the paraphrase (vector leg)
+K_ID="fxkeyword"   # findable ONLY by the title   (keyword leg)
+
+# One transport for the whole graph half. It hands back a DIFFERENT neighbour per search leg, which
+# is how the suite proves two searches actually ran rather than trusting that they did.
+GRAPH_T="$(mk_transport graph-transport '
+printf "%s %s\n" "$1" "$(tr -d "\n" < "$2")" >> "$DFE_LOG"
+Q="$(cat "$2")"
+case "$1" in
+  *engram_write)
+     case "$Q" in
+       *Mission:*)  printf "{\"id\":\"fxmission\"}\n" ;;
+       *Notepad:*)  printf "{\"id\":\"fxnotepad\"}\n" ;;
+       *)           printf "{\"id\":\"fxrecord1\"}\n" ;;
+     esac ;;
+  *engram_search_graph)
+     printf "{\"results\":[{\"object_id\":\"fxgraph01\",\"title\":\"graph neighbour\"}]}\n" ;;
+  *engram_search)
+     case "$Q" in
+       *PARAPHRASE*) printf "{\"results\":[{\"document_id\":\"fxvector1\",\"document_title\":\"vector-leg neighbour\",\"score\":0.91}]}\n" ;;
+       *)            printf "{\"results\":[{\"document_id\":\"fxkeyword\",\"document_title\":\"keyword-leg neighbour\",\"score\":0.82}]}\n" ;;
+     esac ;;
+  *engram_link) printf "{\"status\":\"linked\",\"projection\":\"complete\"}\n" ;;
+  *) printf "{}\n" ;;
+esac')"
+
+# ⚠️ These read the TRANSPORT LOG, and they match from_id and to_id by POSITION, not by "the id
+# appears somewhere in the line". An earlier version grepped the line for both ids, which cannot
+# distinguish a self-edge from a correct one when from_id is the same node — it reported a self-link
+# that was never sent.
+linked() { # linked <relation> <to_id> -> was an edge of this relation sent TO this node?
+  grep "engram_link" "$DFE_LOG" 2>/dev/null | grep "\"relation\": \"$1\"" | \
+    grep -q "\"to_id\": \"$2\""
+}
+edge() { # edge <relation> <from_id> <to_id>: the whole triple, in one logged call
+  grep "engram_link" "$DFE_LOG" 2>/dev/null | grep "\"relation\": \"$1\"" | \
+    grep "\"from_id\": \"$2\"" | grep -q "\"to_id\": \"$3\""
+}
+
+echo "=== H: the notepad anchor is created ONCE and its id is recorded on disk ==="
+OUT="$(DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" anchor 2>&1)"; RC=$?
+eq "H: exit 0" "$RC" "0"
+AJ="$NPA/.df/engram-anchor.json"
+[ -f "$AJ" ] && ok "H: .df/engram-anchor.json exists" || bad "H: anchor file" "missing $AJ"
+contains "H: it records the notepad anchor id" "$A_ID" "$(cat "$AJ" 2>/dev/null)"
+contains "H: the anchor doc is titled for the notepad" "Notepad:" "$(cat "$DFE_LOG")"
+N_W="$(grep -c 'engram_write' "$DFE_LOG" || true)"
+eq "H: exactly one write so far" "$N_W" "1"
+OUT="$(DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" anchor 2>&1)"
+N_W2="$(grep -c 'engram_write' "$DFE_LOG" || true)"
+eq "H: ⛔ re-running writes NO second anchor (idempotent)" "$N_W2" "1"
+contains "H: and it says the anchor is already recorded" "already" "$OUT"
+
+echo "=== I: a mission anchor exists per mission and hangs off the notepad anchor ==="
+OUT="$(DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" anchor --mission M-TEST-1 2>&1)"
+contains "I: the mission anchor id is recorded under the mission" "$M_ID" "$(cat "$AJ")"
+contains "I: keyed by mission id" "M-TEST-1" "$(cat "$AJ")"
+edge FROM_NOTEPAD "$M_ID" "$A_ID" \
+  && ok "I: FROM_NOTEPAD runs mission-anchor -> notepad-anchor" \
+  || bad "I: FROM_NOTEPAD edge" "not in $DFE_LOG"
+
+echo "=== J: ⛔ a write is WIRED IN: notepad, mission, and BOTH search legs' neighbours ==="
+: > "$DFE_LOG"
+OUT="$(DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" write --title "J finding" \
+        --kind knowledge --collection loom-behaviors --body "the body of a durable finding" \
+        --mission M-TEST-1 --relates-query "PARAPHRASE of the finding in one sentence" 2>&1)"
+eq "J: exit 0" "$?" "0"
+N_S="$(grep -c 'engram_search ' "$DFE_LOG" || true)"
+eq "J: ⛔ TWO searches ran, not one" "$N_S" "2"
+edge RECORDED_BY_NOTEPAD "$D_ID" "$A_ID" \
+  && ok "J: RECORDED_BY_NOTEPAD runs record -> notepad anchor" \
+  || bad "J: RECORDED_BY_NOTEPAD" "not sent"
+linked FROM_MISSION "$M_ID" && ok "J: FROM_MISSION -> the mission anchor" \
+                            || bad "J: FROM_MISSION" "not sent"
+linked RELATES_TO "$V_ID" && ok "J: RELATES_TO the neighbour only the PARAPHRASE finds (vector leg)" \
+                          || bad "J: vector-leg neighbour" "not linked"
+linked RELATES_TO "$K_ID" && ok "J: RELATES_TO the neighbour only the TITLE finds (keyword leg)" \
+                          || bad "J: keyword-leg neighbour" "not linked"
+FJ="$(grep -l 'J finding' "$NPA"/pending-engram/*.md | head -1)"
+contains "J: the queue file records what was linked" "links: " "$(cat "$FJ")"
+
+echo "=== K: ⛔ never link a document to ITSELF ==="
+# ⚠️ THE CONTROL IS THE POINT. An earlier draft of this section asserted only "no self-edge", and
+# it passed against a CLI that sent no edges AT ALL — a check that cannot fail. So the fixture now
+# returns the new document AND a real neighbour: the neighbour MUST be linked (proving the linking
+# path ran) while the self-hit MUST NOT be.
+: > "$DFE_LOG"
+SELF_T="$(mk_transport self-transport '
+printf "%s %s\n" "$1" "$(tr -d "\n" < "$2")" >> "$DFE_LOG"
+case "$1" in
+  *engram_write)  printf "{\"id\":\"fxrecord1\"}\n" ;;
+  *engram_search) printf "{\"results\":[{\"document_id\":\"fxrecord1\",\"document_title\":\"itself\",\"score\":0.99},{\"document_id\":\"fxkeyword\",\"document_title\":\"a real neighbour\",\"score\":0.80}]}\n" ;;
+  *engram_link)   printf "{\"status\":\"linked\"}\n" ;;
+  *) printf "{}\n" ;;
+esac')"
+DF_ENGRAM_TRANSPORT="$SELF_T" "$CLI" --notepad "$NPA" write --title "K finding" --kind knowledge \
+  --collection loom-behaviors --body "a finding whose top hit is itself" >/dev/null 2>&1
+linked RELATES_TO "$K_ID" && ok "K: CONTROL — the real neighbour in the same result set IS linked" \
+                          || bad "K: control" "no edge at all was sent, so the next check is vacuous"
+edge RELATES_TO "$D_ID" "$D_ID" && bad "K: self-link" "the doc was linked to itself" \
+                                || ok "K: the search hit that IS the new document is skipped"
+
+echo "=== L: ⛔ an UNPROVEN write links NOTHING, and reconcile wires it up once it learns the id ==="
+: > "$DFE_LOG"
+TIMEOUT_L="$(mk_transport timeout-log-transport '
+printf "%s %s\n" "$1" "$(tr -d "\n" < "$2")" >> "$DFE_LOG"
+case "$1" in
+  *engram_write) printf "RPC request timed out\n" >&2; exit 7 ;;
+  *) printf "{\"results\":[]}\n" ;;
+esac')"
+DF_ENGRAM_TRANSPORT="$TIMEOUT_L" "$CLI" --notepad "$NPA" write --title "L finding" --kind knowledge \
+  --collection loom-behaviors --body "parked, so nothing to link to" --mission M-TEST-1 >/dev/null 2>&1
+N_L="$(grep -c 'engram_link' "$DFE_LOG" || true)"
+eq "L: ⛔ no link was attempted without an id" "$N_L" "0"
+FL="$(grep -l 'L finding' "$NPA"/pending-engram/*.md | head -1)"
+KEYL="$(sed -n 's/^key: //p' "$FL")"
+: > "$DFE_LOG"
+LANDED_L="$(mk_transport landed-log-transport '
+printf "%s %s\n" "$1" "$(tr -d "\n" < "$2")" >> "$DFE_LOG"
+case "$1" in
+  *engram_search) printf "{\"results\":[{\"document_id\":\"fxrecord1\",\"document_title\":\"t\",\"content\":\"ENGRAM-KEY '"$KEYL"'\"}]}\n" ;;
+  *engram_link)   printf "{\"status\":\"linked\"}\n" ;;
+  *) printf "{}\n" ;;
+esac')"
+OUT="$(DF_ENGRAM_TRANSPORT="$LANDED_L" DF_ENGRAM_MIN_AGE=0 "$CLI" --notepad "$NPA" reconcile 2>&1)"
+linked RECORDED_BY_NOTEPAD "$A_ID" \
+  && ok "L: reconcile links the record once the id is known" \
+  || bad "L: reconcile links" "no RECORDED_BY_NOTEPAD after reconcile"
+contains "L: and the queue file records it" "links: " "$(cat "$FL")"
+
+echo "=== M: a FAILED link never un-writes the record, and never passes silently ==="
+: > "$DFE_LOG"
+BADLINK_T="$(mk_transport badlink-transport '
+printf "%s %s\n" "$1" "$(tr -d "\n" < "$2")" >> "$DFE_LOG"
+case "$1" in
+  *engram_write)  printf "{\"id\":\"fxrecord1\"}\n" ;;
+  *engram_search) printf "{\"results\":[]}\n" ;;
+  *engram_link)   printf "graph unavailable\n" >&2; exit 9 ;;
+  *) printf "{}\n" ;;
+esac')"
+OUT="$(DF_ENGRAM_TRANSPORT="$BADLINK_T" "$CLI" --notepad "$NPA" write --title "M finding" \
+        --kind knowledge --collection loom-behaviors --body "written, but the graph is down" 2>&1)"
+eq "M: exit 0 — the record IS written; the graph is a second concern" "$?" "0"
+FM="$(grep -l 'M finding' "$NPA"/pending-engram/*.md | head -1)"
+contains "M: status stays written" "status: written" "$(cat "$FM")"
+contains "M: the failure is on the record, not swallowed" "FAILED" "$(cat "$FM")"
+contains "M: and it is said out loud" "link" "$OUT"
+
+echo "=== N: recall returns ids and titles, and respects a byte budget ==="
+: > "$DFE_LOG"
+OUT="$(DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" recall "PARAPHRASE of a topic" 2>&1)"
+contains "N: it prints a short id" "fxvector" "$OUT"
+contains "N: and the title next to it" "vector-leg neighbour" "$OUT"
+N_SR="$(grep -c 'engram_search ' "$DFE_LOG" || true)"
+eq "N: ⛔ recall also runs BOTH legs" "$N_SR" "2"
+contains "N: and expands through the graph" "graph neighbour" "$OUT"
+OUT="$(DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" recall "PARAPHRASE topic" --budget 80 2>&1)"
+NB="$(printf '%s' "$OUT" | wc -c | tr -d ' ')"
+[ "$NB" -le 80 ] && ok "N: --budget 80 is respected ($NB bytes)" \
+                 || bad "N: budget" "$NB bytes > 80"
+
+echo "=== O: ⛔ the graph claim in this file is DATED, because it was false once ==="
+# ⚠️ "grep for 2026-09-22" was the first version of this and it passed on the file's UNRELATED date
+# line — a date is not a claim. It must assert the SENTENCE that would have to change if the graph
+# went inert again, so a future reader can see what was measured and when.
+contains "O: the source dates the graph re-measurement" "re-measured 2026-09-22" "$(cat "$CLI")"
+contains "O: and names the stale finding it supersedes" "dde3d4fd" "$(cat "$CLI")"
+contains "O: and keeps the falsifiable field that ended the false green" "graph_contributed" "$(cat "$CLI")"
+
+echo "=== P0: ⛔ with no --relates-query the SECOND leg still runs, from the body ==="
+# This was a real defect, found because the cache test counted hub searches and got 1 where it
+# expected 2: with --relates-query unset, `two_leg_search` was handed None and quietly ran ONE
+# leg — so only keyword neighbours were ever linked, which is the precise failure the two-query
+# design exists to prevent, reintroduced by an unset default.
+: > "$DFE_LOG"
+DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" write --title "P0 finding" \
+  --kind knowledge --collection loom-behaviors \
+  --body "A PARAPHRASE sentence taken straight from the body. And a second sentence after it." \
+  >/dev/null 2>&1
+N_P0="$(grep -c 'engram_search ' "$DFE_LOG" || true)"
+eq "P0: two searches ran with no --relates-query given" "$N_P0" "2"
+linked RELATES_TO "$V_ID" && ok "P0: and the vector-leg neighbour IS linked from the body text" \
+                          || bad "P0: body fallback" "the paraphrase leg found nothing"
+
+echo "=== P: the SessionStart recall line is a LOCAL CACHE, refreshed on write ==="
+# ⛔ WHY A FILE AND NOT A SEARCH. DESIGN.md §7 had SessionStart CALL Engram for this line. Measured
+# 2026-09-22: one search costs 2.5-4.9 s, and the line needs two legs plus a graph query — ~10 s
+# added to EVERY session start, on the restore path, for a line that is usually not read. Worse,
+# SessionStart runs in a hook whose environment may not carry the token at all, so the feature
+# would fail exactly where it is least debuggable.
+#   The cache costs nothing at startup, needs no token, and is refreshed by the tool that already
+#   knows the answer. What it CANNOT do is show another session's writes until this notepad writes
+#   again — an acceptable trade, and stated in the file itself so no reader mistakes it for live.
+: > "$DFE_LOG"
+RC_F="$NPA/.df/engram-recall.txt"
+DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" write --title "P newest finding" \
+  --kind knowledge --collection loom-behaviors --body "the most recent thing written" >/dev/null 2>&1
+[ -f "$RC_F" ] && ok "P: the cache file is written" || bad "P: cache" "missing $RC_F"
+RCB="$(cat "$RC_F" 2>/dev/null)"
+contains "P: it carries the notepad anchor id" "fxnotepa" "$RCB"
+contains "P: and the newest record's title" "P newest finding" "$RCB"
+contains "P: and says it is a cache, not a live read" "cache" "$RCB"
+N_RC="$(wc -c < "$RC_F" | tr -d ' ')"
+[ "$N_RC" -le 600 ] && ok "P: it stays inside the restore budget ($N_RC bytes)" \
+                    || bad "P: budget" "$N_RC bytes — it will crowd out NOTES.md"
+N_NET="$(grep -c 'engram_search' "$DFE_LOG" || true)"
+eq "P: ⛔ refreshing the cache costs NO extra hub call" "$N_NET" "2"
+
+echo "=== Q: ⛔ the cache can never break the write it follows ==="
+# The record is the promise. A cache is a convenience, and a convenience that can fail a write is
+# a liability — so this proves the write still succeeds when the cache cannot be written at all.
+chmod 500 "$NPA/.df" 2>/dev/null
+OUT="$(DF_ENGRAM_TRANSPORT="$GRAPH_T" "$CLI" --notepad "$NPA" write --title "Q finding" \
+        --kind knowledge --collection loom-behaviors --body "written with the cache dir read-only" 2>&1)"
+eq "Q: the write still exits 0" "$?" "0"
+chmod 700 "$NPA/.df" 2>/dev/null
+FQ="$(grep -l 'Q finding' "$NPA"/pending-engram/*.md | head -1)"
+contains "Q: and the record is still recorded as written" "status: written" "$(cat "$FQ")"
+
+echo "=== R: the credential SOURCE is named, and a literal Authorization header is usable ==="
+# ⛔ THE MEASURED FAILURE, 2026-10-02 on the onedroid homelab box. `.mcp.json` held the bearer token
+# LITERALLY (as every MCP client there expects), not as `Bearer ${VAR}`. resolve_hub's regex found no
+# ${VAR}, silently fell back to the default var name SYNAPSE_ENGRAM_PAT -- which nothing had ever set
+# -- and the writer reported "SYNAPSE_ENGRAM_PAT is not set in this environment". Every word of that
+# was true and it pointed at a variable the config never mentioned, so it read as a missing-secret
+# problem rather than a config-form problem. A silent fallback to a DIFFERENT name is worse than a
+# refusal: the error names the guess, not the gap.
+#
+# `auth-check` exists so the source is checkable WITHOUT printing a credential. It is also this
+# suite's only seam into resolution, because DF_ENGRAM_TRANSPORT short-circuits ahead of it.
+AT="$T/authcheck"; mkdir -p "$AT/deep"; printf '# NOTES\n' > "$AT/NOTES.md"
+
+mk_mcp() { # mk_mcp <dir> <auth-header-value>
+  printf '{"mcpServers":{"hubname":{"type":"http","url":"https://example.invalid/mcp","headers":{"Authorization":"%s"}}}}\n' \
+    "$2" > "$1/.mcp.json"
+}
+
+# R1 — a LITERAL header. Usable as-is: nothing needs an env var at all.
+mk_mcp "$AT" 'Bearer sk-fixture-not-a-real-token'
+OUT="$(cd "$AT/deep" && env -u DF_ENGRAM_TRANSPORT -u DF_ENGRAM_HUB -u DF_ENGRAM_TOKEN_VAR \
+        DF_ENGRAM_SERVER=hubname "$CLI" --notepad "$AT" auth-check 2>&1)"; RC=$?
+eq "R1: a literal Authorization header resolves" "$RC" "0"
+contains "R1: and it says the header came from the config" "literal" "$OUT"
+contains "R1: naming the file it read" ".mcp.json" "$OUT"
+absent "R1: ⛔ and it NEVER prints the credential" "sk-fixture-not-a-real-token" "$OUT"
+absent "R1: nor does it fall back to the default var name" "SYNAPSE_ENGRAM_PAT" "$OUT"
+
+# R2 — a ${VAR} reference whose variable is UNSET. The refusal must name THAT var, not the default.
+mk_mcp "$AT" 'Bearer ${MY_ESTATE_PAT}'
+OUT="$(cd "$AT/deep" && env -u DF_ENGRAM_TRANSPORT -u DF_ENGRAM_HUB -u DF_ENGRAM_TOKEN_VAR \
+        -u MY_ESTATE_PAT DF_ENGRAM_SERVER=hubname "$CLI" --notepad "$AT" auth-check 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "R2: an unset referenced variable refuses" || bad "R2: refuses" "rc=$RC"
+contains "R2: and names the variable THE CONFIG asked for" "MY_ESTATE_PAT" "$OUT"
+absent "R2: ⛔ not the default it would otherwise have guessed" "SYNAPSE_ENGRAM_PAT" "$OUT"
+
+# R3 — nothing names a credential anywhere. The refusal must say it is GUESSING and name the config.
+printf '{"mcpServers":{"hubname":{"type":"http","url":"https://example.invalid/mcp"}}}\n' > "$AT/.mcp.json"
+OUT="$(cd "$AT/deep" && env -u DF_ENGRAM_TRANSPORT -u DF_ENGRAM_HUB -u DF_ENGRAM_TOKEN_VAR \
+        -u SYNAPSE_ENGRAM_PAT DF_ENGRAM_SERVER=hubname "$CLI" --notepad "$AT" auth-check 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "R3: no credential source at all refuses" || bad "R3: refuses" "rc=$RC"
+contains "R3: ⛔ it says the name is a GUESS, not something it was told" "guess" "$OUT"
+contains "R3: names the default it guessed" "SYNAPSE_ENGRAM_PAT" "$OUT"
+contains "R3: and names the config that failed to say" "hubname" "$OUT"
+
+# R4 — DF_ENGRAM_TOKEN_VAR wins over the config, and says so. This is the documented workaround.
+mk_mcp "$AT" 'Bearer ${MY_ESTATE_PAT}'
+OUT="$(cd "$AT/deep" && env -u DF_ENGRAM_TRANSPORT -u DF_ENGRAM_HUB \
+        DF_ENGRAM_TOKEN_VAR=CHOSEN_PAT CHOSEN_PAT=fixture-value \
+        DF_ENGRAM_SERVER=hubname "$CLI" --notepad "$AT" auth-check 2>&1)"; RC=$?
+eq "R4: an explicit DF_ENGRAM_TOKEN_VAR resolves" "$RC" "0"
+contains "R4: and it names the variable it was told to use" "CHOSEN_PAT" "$OUT"
+absent "R4: ⛔ never printing its value" "fixture-value" "$OUT"
+absent "R4: and the config's variable is not consulted" "MY_ESTATE_PAT" "$OUT"
+
+# R5 — the CONTROL. A check that cannot fail is not a check: the same command on a hub it cannot
+# resolve at all must refuse, or R1/R4's green says nothing.
+OUT="$(cd "$T" && env -u DF_ENGRAM_TRANSPORT -u DF_ENGRAM_HUB -u DF_ENGRAM_SERVER \
+        "$CLI" --notepad "$AT" auth-check 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "R5: CONTROL — no hub resolvable still refuses" || bad "R5: control fired" "rc=$RC"
+
 printf 'passed %s  failed %s\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %s\n' "$((PASS+FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1

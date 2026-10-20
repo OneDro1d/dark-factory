@@ -215,6 +215,12 @@ Useful knobs: `WT_PAD_SECONDS` (breath between beats, default 1.0), `WT_WIDTH`/`
 
 - video and audio streams exist, with the expected geometry and a plausible duration;
 - **audio RMS is above a floor** — proving the track is speech, not silence;
+- **loudness and true peak are in range** — EBU R128 integrated loudness inside
+  `WT_LUFS_MIN`…`WT_LUFS_MAX` (default −24…−12 LUFS) and true peak at or below `WT_TP_MAX`
+  (default 0 dBTP). RMS proves there is sound, not that anyone can hear it or that it does not
+  clip. A value that cannot be measured fails;
+- **no black stretch** of `WT_BLACK_SECONDS` (default 1 s) or more — a well-formed file can be
+  black for a minute when the app never painted;
 - the caption cue count matches the beat count;
 - and it extracts **one frame per section** to `verify/`.
 
