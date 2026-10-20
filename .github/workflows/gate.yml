@@ -28,6 +28,14 @@ jobs:
       # suite needs, the gate goes RED and names the tool — rather than shrinking by 90% and
       # still ticking. Remove this only together with the suites that honour it.
       WT_TESTS_REQUIRE_FULL: "1"
+      # Same interlock, different missing tool: three df-governed suites assert
+      # `claude plugin validate` and skipped it on every run before 2026-10-05, because the
+      # runner ships no claude CLI. ⚠️ TWO NAMES FOR ONE IDEA IS A WART — `WT_` is the
+      # walkthrough's ffmpeg/sox interlock and this is the repo-wide one. They should converge
+      # on `DF_TESTS_REQUIRE_FULL`; left as a follow-up rather than renaming a variable that
+      # PR #226 is mid-review on, because a silent rename is how a honoured interlock stops
+      # being honoured. Whoever converges them: grep both names, expect 8 sites.
+      DF_TESTS_REQUIRE_FULL: "1"
     steps:
       - name: Checkout (full history — P8 scans every blob ever committed)
         # Pinned to a commit SHA, not a tag: a tag is mutable and can be repointed at
@@ -65,6 +73,32 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends ffmpeg
           ffmpeg -version | head -1
           ffmpeg -hide_banner -filters | grep -c ' subtitles '
+
+      - name: Install the claude CLI — WITHOUT IT THE PLUGIN MANIFEST IS NEVER VALIDATED
+        # ⛔ MEASURED 2026-10-05 on gate run 37337141934, and the reason this step exists.
+        # `ubuntu-latest` ships no claude CLI, so three df-governed suites took their skip
+        # path on EVERY run and `claude plugin validate` had never once executed where it
+        # gates a merge: test-escalation-gate (-2 assertions), test-mission-tick (-1),
+        # test-plugin-invariants (-1). Local 3634 vs CI 3629 — both green, five apart.
+        #
+        # ⚠️ The skips were HONEST and still invisible: test-plugin-invariants' own SKIP text
+        # says "a run without the CLI has NOT proven I5", but `run-tests.sh` shows a child's
+        # output only on FAILURE, so it never reached the log. A declaration is not a control.
+        #
+        # ⚠️ NO CREDENTIAL IS NEEDED AND THAT IS LOAD-BEARING: `claude plugin validate` is
+        # static validation of .claude-plugin/plugin.json. Measured with an empty $HOME, no
+        # ANTHROPIC_API_KEY and a stripped environment — it printed "Validation passed". So
+        # this step adds no secret to the workflow, which matters because the job above is
+        # deliberately `pull_request` and must stay reachable by fork PRs.
+        #
+        # Pinned, not floating: an unpinned global install lets a new upstream release change
+        # what this gate does without a commit here. Bump it deliberately.
+        # ⚠️ The last line is an ASSERTION, not an echo — `run:` is `bash -e`, so if the CLI
+        # is absent or broken this step fails here, with a one-line message, instead of three
+        # steps later as a REFUSING TO DEGRADE from each suite.
+        run: |
+          npm install -g @anthropic-ai/claude-code@2.1.289
+          claude --version
 
       - name: Self-test — prove every pattern class can FAIL
         # Runs FIRST and on purpose. A gate that passes proves nothing until you have

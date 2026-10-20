@@ -51,6 +51,22 @@ if command -v claude >/dev/null 2>&1; then
     *"Validation passed"*) ok "validate: passed, no warnings" ;;
     *) bad "validate: passed" "$V" ;;
   esac
+elif [ -n "${DF_TESTS_REQUIRE_FULL:-}" ]; then
+  # ⛔ THE FINDING THIS REFUSAL EXISTS FOR, measured 2026-10-05 on gate run 37337141934.
+  # The SKIP below was correct and honest — it says in terms that a run without the CLI has
+  # NOT proven I5. It fired on EVERY CI run, because `ubuntu-latest` ships no claude CLI, so
+  # the plugin-manifest validator was asserted only on a maintainer's laptop. Two reasons it
+  # stayed invisible: `run-tests.sh` shows a child's output only on FAILURE, so the SKIP text
+  # never reached the log; and the only visible signal was an assertion count that a reader
+  # would have to already know the full value of to notice (3629 in CI vs 3634 locally).
+  # ⇒ A declaration is not a control. This is the same defect as the missing ffmpeg one commit
+  # earlier, one gate over — so the remedy is the same: REFUSE where merges are gated.
+  echo ""
+  echo "REFUSING TO DEGRADE: DF_TESTS_REQUIRE_FULL is set and the claude CLI is not on PATH."
+  echo "  I5 would not run — and this is the ONE place the plugin manifest is validated."
+  echo "  Install the claude CLI, or unset DF_TESTS_REQUIRE_FULL to accept reduced coverage knowingly."
+  printf 'ASSERTIONS: %s\n' "$((PASS + FAIL))"
+  exit 1
 else
   printf '  SKIP %s -- %s\n' "I5: validate" "claude CLI not on PATH here. This is the ONE place the validator is asserted, so a run without the CLI has NOT proven I5; run this suite where claude is installed before shipping"
 fi
