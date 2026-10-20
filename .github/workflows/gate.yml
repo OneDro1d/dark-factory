@@ -100,6 +100,32 @@ jobs:
           npm install -g @anthropic-ai/claude-code@2.1.289
           claude --version
 
+      - name: Install a browser — WITHOUT IT ONE SUITE REFUSES TO RUN
+        # `tests/test-walkthrough-browser.sh` covers the four things the node-only suites
+        # cannot: that a click lands on the pixel the cursor was DRAWN at, that the cursor
+        # comes back after an SPA replaces the body, that the ripple really re-triggers, and
+        # that `recordVideo` produces a decodable webm. Those were listed as NOT covered in
+        # `tests/README.md` for exactly one reason — a suite needing Chromium would not run
+        # here — so the answer is to make it run here.
+        #
+        # ⚠️ It honours WT_TESTS_REQUIRE_FULL, which this job sets, so **removing this step
+        # turns the gate RED rather than silently dropping 41 assertions.** That is the whole
+        # design: the ffmpeg step above exists because the opposite once happened.
+        #
+        # ⚠️ TWO SEPARATE DOWNLOADS, AND THE SECOND IS THE ONE PEOPLE MISS. Playwright does
+        # NOT encode video with the system ffmpeg installed above; it pipes screencast frames
+        # to its own pinned build. A runner with a perfect `ffmpeg` on PATH still fails the
+        # video case without `install ffmpeg` here.
+        #
+        # ⚠️ The last line is an ASSERTION, not an echo: `run:` executes under `bash -e`, so a
+        # browser that downloads but cannot launch (missing system libs) fails HERE, in one
+        # line, instead of as ten confusing suite failures two steps later.
+        run: |
+          npm install --prefix skills/df-app-walkthrough --no-audit --no-fund
+          node skills/df-app-walkthrough/node_modules/playwright-core/cli.js install --with-deps chromium
+          node skills/df-app-walkthrough/node_modules/playwright-core/cli.js install ffmpeg
+          node -e 'import("./skills/df-app-walkthrough/node_modules/playwright-core/index.mjs").then(async (m)=>{const b=await m.chromium.launch();console.log("chromium",b.version());await b.close();})'
+
       - name: Self-test — prove every pattern class can FAIL
         # Runs FIRST and on purpose. A gate that passes proves nothing until you have
         # seen it fail on an input it must catch; this plants a canary per class and
