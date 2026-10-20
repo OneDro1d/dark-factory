@@ -20,6 +20,14 @@ permissions:
 jobs:
   publish-gate:
     runs-on: ubuntu-latest
+    env:
+      # ⛔ THE INTERLOCK THAT STOPS COVERAGE SHRINKING SILENTLY AGAIN. Suites that can degrade
+      # when a tool is missing REFUSE to degrade while this is set, instead of quietly
+      # asserting less and reporting the same green. Installing the tool is what makes the
+      # gate pass; if that step is ever removed, or the runner image stops shipping what a
+      # suite needs, the gate goes RED and names the tool — rather than shrinking by 90% and
+      # still ticking. Remove this only together with the suites that honour it.
+      WT_TESTS_REQUIRE_FULL: "1"
     steps:
       - name: Checkout (full history — P8 scans every blob ever committed)
         # Pinned to a commit SHA, not a tag: a tag is mutable and can be repointed at
@@ -27,6 +35,36 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+
+      - name: Install ffmpeg — WITHOUT IT FOUR SUITES SILENTLY SHRINK
+        # ⛔ MEASURED 2026-10-05, AND IT IS THE REASON THIS STEP EXISTS. The runner image has
+        # no ffmpeg, so `df-app-walkthrough`'s artefact suites took their degraded paths and
+        # the run was GREEN at a fraction of the coverage: verify 20 -> 2 assertions,
+        # assemble 26 -> 2, stages 39 -> 21, mutations 36 -> 21. Among the 15 mutants that did
+        # not run was `the #224 black-frame defect, restored` — the regression guard for a
+        # defect that actually shipped. It was guarded on a maintainer's laptop and nowhere
+        # that enforces anything.
+        #
+        # ⚠️ AND THE SHRINKAGE WAS INVISIBLE. Each suite prints a `COVERAGE:` line naming what
+        # it skipped, but `run-tests.sh` captures child output and shows it only on FAILURE —
+        # so on a pass the declaration never reaches the log. The only visible signal was the
+        # assertion count, and a reader would have to already know the full number to notice.
+        # A suite that quietly measures less on the machine that gates merges is the same
+        # defect this repo keeps finding, one layer out: a check decaying with no signal.
+        #
+        # sox is deliberately NOT installed. The suites stub it (it is absent on plenty of
+        # machines), and one case asserts the behaviour when sox is missing — with a scoped
+        # PATH, so it holds either way.
+        # ⚠️ The last line is an ASSERTION, not an echo. GitHub runs `run:` under `bash -e`, so
+        # a `grep -c` finding zero exits 1 and fails this step — which is what we want: an
+        # ffmpeg built without libass has no `subtitles` filter, `assemble.mjs` cannot burn
+        # captions in, and the suites that cover it would pass against a tool that can never
+        # do the job. Fail here, where the message is one line, not three steps later.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg
+          ffmpeg -version | head -1
+          ffmpeg -hide_banner -filters | grep -c ' subtitles '
 
       - name: Self-test — prove every pattern class can FAIL
         # Runs FIRST and on purpose. A gate that passes proves nothing until you have
