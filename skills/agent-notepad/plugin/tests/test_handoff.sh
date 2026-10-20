@@ -319,4 +319,60 @@ test_commit_message_names_running_missions() {
   rm -rf "$(dirname "$np")"
 }
 
+# ⛔ THE ENGRAM RECORD MUST BE MECHANICAL, NOT A SENTENCE IN A SKILL FILE.
+#
+# #220 added the session record to the /handoff SKILL.md as a documented STEP. An agent that
+# forgets it, or is compacted before reaching it, writes nothing and nothing complains — and the
+# Engram record is the one artefact a session on ANOTHER machine can find, so its absence is
+# invisible exactly where it matters. The estate already learned this shape (Engram `8fac9e1d`):
+# hooks turn memory from "a tool I can choose" into "how memory works".
+#
+# This helper already owns the write, the redaction, the commit and the push. It is the natural
+# home for the record, and moving it here makes the guarantee mechanical.
+#
+# What Engram is, and how a machine is authorised to reach it, is documented in one place:
+# [Engram](../../../../starter-kit/instance/AUTHENTICATION.md#engram)
+#
+# ⚠️ ORDER IS LOAD-BEARING: git first, Engram second. The commit is the promise this helper makes;
+# the hub is a second concern that must never be able to fail the checkpoint.
+test_publishing_writes_an_engram_record() {
+  local np stub log
+  np="$(_mk_notepad_no_remote)"
+  log="$(dirname "$np")/engram-calls.log"
+  stub="$(dirname "$np")/df-engram-stub"
+  # A stub standing in for df-engram: records how it was called, and fails loudly, to prove the
+  # handoff survives a broken hub.
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 3\n' "$log" > "$stub"
+  chmod +x "$stub"
+  printf 'the body of a handoff\n' | AGENT_NOTEPAD_DATE=2026-07-10 \
+    DF_ENGRAM_BIN="$stub" "$LIB" "$np" "engram wiring" >/dev/null 2>&1
+  local rc=$?
+  assert_eq "0" "$rc" "the handoff still succeeds when the Engram write fails"
+  local called; called="$(cat "$log" 2>/dev/null)"
+  assert_contains "$called" "write" "df-engram was invoked to write a record"
+  assert_contains "$called" "loom-sessions" "it goes to the sessions namespace"
+  assert_contains "$called" "engram wiring" "the topic reaches the title"
+  # the checkpoint itself must be intact regardless
+  local subj; subj="$(git -C "$np" log -1 --pretty=%s 2>/dev/null)"
+  assert_contains "$subj" "handoff:" "the git checkpoint committed anyway"
+  rm -rf "$(dirname "$np")"
+}
+
+# CONTROL: the opt-out really opts out. Without this, the assertions above would pass against a
+# helper that calls df-engram unconditionally and ignores the switch.
+test_engram_record_can_be_disabled() {
+  local np stub log
+  np="$(_mk_notepad_no_remote)"
+  log="$(dirname "$np")/engram-calls-2.log"
+  stub="$(dirname "$np")/df-engram-stub-2"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$log" > "$stub"
+  chmod +x "$stub"
+  printf 'body\n' | AGENT_NOTEPAD_DATE=2026-07-10 AGENT_NOTEPAD_NO_ENGRAM=1 \
+    DF_ENGRAM_BIN="$stub" "$LIB" "$np" "opted out" >/dev/null 2>&1
+  local made="no"
+  [ -s "$log" ] && made="yes"
+  assert_eq "no" "$made" "AGENT_NOTEPAD_NO_ENGRAM=1 suppresses the Engram write"
+  rm -rf "$(dirname "$np")"
+}
+
 run_tests
