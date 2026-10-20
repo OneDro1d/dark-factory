@@ -1,3 +1,4 @@
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
 """kb — the knowledge base's settings, read from the `knowledge:` section of pair.yaml, with safe defaults.
 
 Every knowledge tool (knowledge-refresh, ./setup-pair knowledge, the /knowledge-build skill) gets its areas, page

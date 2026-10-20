@@ -76,3 +76,5 @@ space; the library commit (`git -C <library> log -1 --oneline`). Then: "From now
 
 Never: secrets (name the key and where it comes from, never a value), the tester's scenarios, pages without
 citations, publishing a page the reviewer did not sample.
+
+Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)

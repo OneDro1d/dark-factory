@@ -26,3 +26,5 @@
    Presence checks use sizes or counts, never values.
 8. **Test grep before commit:** `grep -rniE "<your org, project, people and agent names>"` over `kit/`,
    `templates/`, `skills/` must find nothing except the credits line in the README.
+
+Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../starter-kit/instance/AUTHENTICATION.md#engram)

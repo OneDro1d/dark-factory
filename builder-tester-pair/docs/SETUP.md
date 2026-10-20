@@ -237,3 +237,5 @@ Optional `repos[]` keys read by `dashboard-export`: `health_url` (probed; only t
 row is labelled with the app name, never the URL), `health_expect` (default `"200"`), `health_insecure` (`true`
 skips TLS verification for self-signed dev certs). `tester.private_dir`, when set, is also refused by `handoff` as a
 location for deploy/rollback command files and design files.
+
+Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../starter-kit/instance/AUTHENTICATION.md#engram)

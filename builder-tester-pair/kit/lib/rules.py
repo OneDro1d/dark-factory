@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
 """rules.py — every operating rule the pair follows, generated from pair.yaml.
 
 One source for the rule text: setup-pair puts these into the listener configs (${derived.*}) and the

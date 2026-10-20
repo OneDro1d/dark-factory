@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
 # SessionStart — tell the agent which role it plays in this pair and the rules that go with it.
 # Role = this machine's hostname matched against builder.host / tester.host in pair.yaml (kit/lib/pairconf.py).
 # Kept terse: it is prepended to every session.

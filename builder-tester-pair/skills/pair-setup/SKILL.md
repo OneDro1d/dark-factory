@@ -196,3 +196,5 @@ would auto-approve it. Never publish it public; the owner shares it if they choo
 Ask them to send one small real request to the tester (`<tester-name> — <ticket>: <small change>`) and watch it go
 spec → build → local test → "deploy or review first?" in Teams, with every step in the change channel.
 Point them to `docs/SETUP.md` (the full guide) and `docs/TROUBLESHOOTING.md`.
+
+Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)

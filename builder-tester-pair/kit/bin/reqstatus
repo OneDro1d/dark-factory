@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
 """reqstatus — one row per requirement: its acceptance checks, the tester's coverage, the last verdict, the gaps,
 and the bugs that got past the pair.
 

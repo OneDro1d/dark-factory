@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
 # hub-login.sh — the OWNER runs this in each agent's workspace terminal (not an agent) to give THAT workspace's
 # agent its OWN MCP hub login (Teams / Jira / Slack / Engram through one hub client). Nothing is copied from the
 # other workspace: each workspace signs in separately, so each agent's token lives only in its own home.

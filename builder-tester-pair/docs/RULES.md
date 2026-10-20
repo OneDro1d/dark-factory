@@ -77,3 +77,5 @@ Both agents read the same `pair.yaml`. Each workspace knows its role from its ho
 `tester.host`), and `./setup-pair render` writes only that role's listener rules and start command
 (`builder.start_command` / `tester.start_command`, e.g. `/ms` and `/vs`), so each agent is started on its own
 workspace with its own command. A standing rule with `for: builder` or `for: tester` goes to that agent only.
+
+Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../starter-kit/instance/AUTHENTICATION.md#engram)

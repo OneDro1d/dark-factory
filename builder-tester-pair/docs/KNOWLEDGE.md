@@ -160,3 +160,5 @@ repos:
 `--full-stack` starts a local Postgres (all migrations applied) and Azurite, hands the connection string to the
 listed environment variables, then runs the integration test projects. No docker, no cloud. It is refused for an
 app with no `full_stack` block.
+
+Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../starter-kit/instance/AUTHENTICATION.md#engram)

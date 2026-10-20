@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../starter-kit/instance/AUTHENTICATION.md#engram)
 # ./setup — the ONE command that sets up a builder/tester pair on this workspace, step by step.
 #
 #   ./setup            fill every answer it can measure or derive, ask the rest one at a time (Enter keeps the

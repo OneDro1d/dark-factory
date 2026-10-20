@@ -1,3 +1,4 @@
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../starter-kit/instance/AUTHENTICATION.md#engram)
 # pair.yaml — one builder agent + one tester agent for one project.
 # extends: packs/<org>/pair.<org>.yaml   # optional: start from an organisation pack (its rules + conventions); this file wins
 # Copy to <shared_root>/pair.yaml (or run the /pair-setup wizard, which writes it for you).

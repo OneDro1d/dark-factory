@@ -1,3 +1,4 @@
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
 """Shared by action-ledger.py and deploy-gate.py — one place for masking, the tester's privacy rule and
 categories, so the two ledger writers can never disagree. Ledger folder and role come from pair.yaml."""
 import datetime, json, os, pathlib, re, socket, sys

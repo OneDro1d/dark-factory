@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
 """canary — the tester's leak canaries (see canarylib.py for why).
 
   canary new                       (the tester) mint a value `vgl-<16 hex>`; put it in ONE scenario (an id, a name, a

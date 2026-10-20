@@ -268,3 +268,5 @@ support is declared as a gap, not faked. Your local test folder (`tester.kits_di
 own home only. A check that exists only on disk is not yet protected; a check committed to git is readable by
 anyone with repo access — treat those as smoke tests only. For every change: a changed rule or behaviour with
 no check is a gap — write the check before saying PASS.
+
+Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)

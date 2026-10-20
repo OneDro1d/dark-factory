@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
 """wizard — the setup questions (kit/lib/questions.yaml), asked ONE at a time, by the terminal or by Claude.
 
 Both front ends share this engine, so they ask the same questions with the same defaults:

@@ -74,3 +74,5 @@ Both roles get the same list except the Jira label (builder: `jira.builder_label
 
 After rendering on a fresh home, seed every source's watermark to NOW (`/channel-listener init`) so old
 messages — including old self-chat notes — are never replayed as instructions.
+
+Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../starter-kit/instance/AUTHENTICATION.md#engram)

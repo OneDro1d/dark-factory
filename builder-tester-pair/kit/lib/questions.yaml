@@ -1,3 +1,4 @@
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
 # The setup questions — ONE list used by both front ends:
 #   terminal:  ./setup            (asks one question at a time, Enter keeps the default)
 #   Claude:    /pair-setup        (asks one question at a time, looks ids up with its tools when `lookup` says how)
