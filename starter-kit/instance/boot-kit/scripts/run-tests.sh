@@ -179,7 +179,21 @@ while IFS= read -r suite; do
   [ -n "$suite" ] || continue
   rel="${suite#$ROOT/}"
   start=$(date +%s)
-  if bash "$suite" >"$CAP" 2>&1; then
+  # ⛔ `</dev/null` IS LOAD-BEARING, AND ITS ABSENCE CORRUPTED TIER 1'S OWN SUITE LIST.
+  # The loop is fed by a here-doc, and a child inherits that as ITS stdin — so any suite whose
+  # child reads stdin consumes bytes the loop has not read yet, and the NEXT iteration starts
+  # mid-line. MEASURED in Tier 1's CI 2026-10-05: two suite paths arrived missing their leading
+  # bytes ("unner/work/…", "home/runner/…") and failed rc=127 "No such file or directory" — a
+  # defect attributed to the suites, which were fine. ffmpeg is the canonical offender: it polls
+  # stdin for keyboard input unless given `-nostdin`.
+  # ⚠️ TWO SEVERITIES, THE QUIETER ONE WORSE. A greedy child eats the WHOLE list and the run just
+  # looks short; a POLLING child eats a few bytes and hands you a CORRUPT PATH — worse, because it
+  # names a file and sends the reader somewhere specific and wrong.
+  # ⚠️ THIS IS THE FOURTH COPY OF THE LESSON THIS FILE'S HEADER ALREADY WARNS ABOUT. The fix landed
+  # in Tier 1's runner (`be55032`) and not here, so every instance minted in between carried it —
+  # exactly "a generator that lags its parent ships the lag to every consumer it stamps out".
+  # No suite has any business reading this runner's stdin, so close it for all of them.
+  if bash "$suite" >"$CAP" 2>&1 </dev/null; then
     rc=0
   else
     rc=$?

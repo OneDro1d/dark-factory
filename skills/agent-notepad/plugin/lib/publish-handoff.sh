@@ -162,6 +162,45 @@ publish_handoff() { # NOTEPAD_ROOT TOPIC [BODY_FILE]
   [ -n "$plog" ] && printf 'PUSH %s %s\n' "$root" "$hf" >> "$plog" 2>/dev/null || true
   git -C "$root" push >/dev/null 2>&1 || true
 
+  # ---- the durable record, AFTER the checkpoint is safe ----------------------------------
+  # ⛔ THIS BELONGS IN THE HELPER, NOT IN A SKILL FILE. It shipped in #220 as a documented STEP in
+  # the /handoff skill, and a documented step is one an agent can forget, skip, or be compacted
+  # before reaching — while the Engram record is the ONE artefact a session on another machine can
+  # find. Its absence is therefore invisible exactly where it matters most. The estate already
+  # learned this shape (Engram `8fac9e1d`): a hook turns memory from "a tool I may choose" into
+  # "how memory works". This helper already owns the write, the redaction, the commit and the
+  # push, so it is the honest home for the guarantee.
+  #
+  # ⚠️ ORDER IS LOAD-BEARING, AND SO IS BEST-EFFORT. git runs FIRST and has already returned by
+  # here: the commit is the promise this helper makes, and the hub is a second concern that must
+  # never be able to fail a checkpoint that is already on disk. df-engram writes its queue file
+  # before its own hub call, so even a total failure keeps the finding.
+  # What Engram is, and how a machine is authorised to reach it, is documented in one place:
+  # [Engram](../../../../starter-kit/instance/AUTHENTICATION.md#engram)
+  if [ -z "${AGENT_NOTEPAD_NO_ENGRAM:-}" ]; then
+    _eng="${DF_ENGRAM_BIN:-}"
+    if [ -z "$_eng" ]; then
+      for _c in "$(command -v df-engram 2>/dev/null || true)" \
+                "$HOME/.claude/skills/df-governed/bin/df-engram"; do
+        if [ -n "$_c" ] && [ -f "$_c" ]; then _eng="$_c"; break; fi
+      done
+    fi
+    if [ -n "$_eng" ] && [ -f "$_eng" ]; then
+      # The RUNNING mission, when there is one, so the record hangs off the mission anchor.
+      _m=""
+      for _st in "$root"/.df/missions/*/state; do
+        [ -f "$_st" ] || continue
+        [ "$(head -n1 "$_st" 2>/dev/null)" = "RUNNING" ] || continue
+        _mid="${_st%/state}"; _m="${_mid##*/}"; break
+      done
+      "$_eng" --notepad "$root" write \
+        --kind session --collection "${AGENT_NOTEPAD_ENGRAM_COLLECTION:-loom-sessions}" \
+        --title "Handoff ${date_stamp}: ${topic}" \
+        --body-file "$hf" ${_m:+--mission "$_m"} >/dev/null 2>&1 \
+        || printf 'note: the handoff is committed; the Engram record is NOT confirmed (queued under %s/pending-engram — run `df-engram reconcile` later)\n' "$root" >&2
+    fi
+  fi
+
   printf '%s\n' "$hf"
   return 0
 }

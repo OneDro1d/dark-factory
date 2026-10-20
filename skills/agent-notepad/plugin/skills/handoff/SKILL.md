@@ -122,43 +122,33 @@ if the target is not a notepad — a Handoff only belongs in a notepad. It also 
 empty body and any argument it does not take: there is no `--body-file` flag — pass the body
 on stdin, or a file path as the third argument.
 
-### Then record the session in durable memory
+### The durable record is written FOR you
+
+The helper writes a session record to Engram after it commits, hanging it off the notepad anchor
+and off the RUNNING mission when there is one. You do not run `df-engram write` for the handoff
+itself — doing so would store the same handoff twice.
+
+⚠️ **It is best-effort by design, and the ordering matters.** git runs first: the commit is the
+promise, and the hub must never be able to fail a checkpoint already on disk. If the hub is
+unreachable the record is queued under `<notepad>/pending-engram/` and the helper says so — the
+finding is not lost, it is unconfirmed. The next `df-engram write` reconciles it automatically.
+
+⛔ **A TIMEOUT PROVES NOTHING.** Never re-run the handoff to "make sure the record landed". The lag
+between a timed-out write and a findable document is 60-90 s, and retrying inside it is what
+created duplicates by hand for months.
+
+**What is still yours to do, because neither can be inferred:**
+
+- **A `CORRECTS` edge**, when this work supersedes a specific document. A correction is a claim, so
+  it is only ever made because you named the id — and it takes the FULL document id, not the
+  eight-hex prefix this estate's notes use, which `engram_link` rejects. Resolve the full
+  `document_id` from a search hit, then:
+  `df-engram write --kind knowledge --collection loom-behaviors --title "…" --body-file … --corrects <uuid>`
+- **A durable FINDING** that deserves its own record rather than a line in a session summary. The
+  handoff record summarises the session; a behaviour, trap or measured fact worth recalling on
+  another machine in six weeks is its own document, and that judgement is yours.
 
 What Engram is, and how a machine is authorised to reach it, is documented in exactly one place: [Engram](../../../../../starter-kit/instance/AUTHENTICATION.md#engram).
-
-A handoff is the notepad's entry point. It is **not** reachable from another notepad, another
-machine, or a session six weeks from now that never opens this repo. So after publishing, write
-one session record to Engram:
-
-```bash
-df-engram write --kind session --collection loom-sessions \
-  --title "<what this session actually changed, in a sentence>" \
-  --body-file <the handoff body, or a tighter summary> \
-  --mission "<mission id, when there is one>" \
-  --relates-query "<a one-sentence paraphrase of the outcome>" \
-  --corrects <document-id>        # only for a record this supersedes, and only if you name it
-```
-
-- **`--relates-query` is not decoration.** It is the second search leg: the title finds keyword
-  neighbours, the paraphrase finds vector ones, and the two sets barely overlap. Omit it and the
-  tool falls back to the body's first sentence, which is a floor, not a substitute.
-- **`--corrects` is a claim, so it is never inferred.** Pass it only for a document this record
-  genuinely supersedes. It takes the FULL document id — the eight-hex references in this estate's
-  notes are the first segment of a UUID and `engram_link` rejects them. Resolve the full
-  `document_id` from a search hit.
-- **A TIMEOUT PROVES NOTHING.** `df-engram` parks the record `UNPROVEN` and does not retry, and it
-  is right not to: the indexing lag between a timed-out write and a findable document is 60-90 s,
-  and retrying inside it is what created duplicates by hand for months. Run `df-engram reconcile`
-  on a LATER turn.
-- If the record cannot be sent at all (no token in this environment) the finding is still queued on
-  disk under `<notepad>/pending-engram/`. Nothing is lost; say so and move on.
-
-The write also refreshes `<notepad>/.df/engram-recall.txt`, which is the line SessionStart injects
-so the next cold session knows the store exists.
-
-⚠️ **This is the one write that is NOT a second home for a fact.** The handoff points at artefacts
-inside this notepad; the Engram record is how a session that has never seen this notepad finds the
-work at all. Two different readers, not two copies.
 
 ### Suggested body sections
 
