@@ -85,6 +85,19 @@ EXCLUDE_PATHS=(
   # and needs to know what it is) does not hold: nobody meets a product here without
   # already reading the gate that consumes the file.
   "boot-kit/scripts/tier1-generic.conf"
+  # The kit's rendered templates. `setup-pair render` COPIES these into another
+  # workspace (`setup-pair:488`, `:608`, `:610`) and control-room.html is published as a
+  # web page (`:758`), so a repo-relative pointer would resolve here and be DEAD on
+  # arrival there — worse than none, because it renders as a working link. The two
+  # listener.json files additionally have no comment syntax to carry one, like
+  # mcp.template.json above.
+  "builder-tester-pair/templates/builder/listener.json"
+  "builder-tester-pair/templates/builder/start.md"
+  "builder-tester-pair/templates/dashboard/control-room.html"
+  "builder-tester-pair/templates/knowledge/BRIEF.md"
+  "builder-tester-pair/templates/knowledge/page-template.md"
+  "builder-tester-pair/templates/tester/listener.json"
+  "builder-tester-pair/templates/tester/start.md"
 )
 
 excluded() {

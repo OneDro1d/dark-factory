@@ -1,0 +1,11 @@
+# Sample organisation pack — shows the shape an org pack takes; not a real organisation's rules.
+# Use it from your own pair.yaml:   extends: packs/sample/pair.sample.yaml
+# Your pair.yaml wins on every value; `rules.standing` ADDS to the list below.
+# Replace this file's contents with your own organisation's conventions.
+
+rules:
+  standing:
+    - rule: "Never name a release after an agent. Use the application name and a real version."
+      by: "example org"
+    - rule: "Post every change to the team's change channel as it happens."
+      by: "example org"

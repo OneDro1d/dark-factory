@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
+"""canary — the tester's leak canaries (see canarylib.py for why).
+
+  canary new                       (the tester) mint a value `vgl-<16 hex>`; put it in ONE scenario (an id, a name, a
+                                   note field the system echoes back). Printed once, to the tester only.
+  canary count                     how many canaries exist (never the values)
+  canary scan --app A --commit SHA exit 0 clean · 4 HIT (possible leak) · 2 not checked. Prints locations only.
+                                   `handoff result … --verdict PASS` runs this itself and refuses PASS on a hit.
+Engram is not reachable from a shell: the tester also runs `engram_search` for each canary in the builder's memory spaces and the knowledge base (TESTER-BRIEF "Leak canaries").
+"""
+import argparse, os, sys
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import canarylib
+
+p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+s = p.add_subparsers(dest="cmd", required=True)
+s.add_parser("new"); s.add_parser("count")
+sc = s.add_parser("scan"); sc.add_argument("--app", required=True); sc.add_argument("--commit", required=True)
+x = p.parse_args()
+if x.cmd == "new":
+    print(canarylib.new())
+elif x.cmd == "count":
+    print(len(canarylib.load()))
+else:
+    rc, lines = canarylib.scan(x.app, x.commit)
+    print("\n".join(lines))
+    sys.exit(rc)

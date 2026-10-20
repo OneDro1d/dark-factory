@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""board — the curated, human-readable list the live Control Room leads with (
+"dashboard is not good" — raw guard blocks and shell lines are not decisions).
+
+Three lists in <paths.ledger>/board.json, each item plain words written for the owner:
+  need     something only the owner can do   {title, why, how (exact command or click), due?}
+  waiting  we are blocked on someone else  {title, who, since, link?}
+  done     finished today, in one line     {title, link?}
+
+  board add need    --title ".." --why ".." [--how ".."] [--due ISO]
+  board add waiting --title ".." --who ".." [--link URL]
+  board add done    --title ".." [--link URL]
+  board resolve ID [--note ".."]          (moves a need/waiting item out; keeps it in history)
+  board list
+Every text goes through bin/textguard.py (no secrets, no scenario content).
+"""
+import os, argparse, datetime, json, os, pathlib, sys, uuid
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import textguard  # noqa: E402
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+import pairconf  # noqa: E402
+CFG = pairconf.load()
+LEDGER = pathlib.Path(os.environ.get("PAIR_LEDGER_DIR") or pairconf.ledger_dir(CFG))
+F = LEDGER / "board.json"
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def load():
+    try:
+        b = json.loads(F.read_text())
+    except Exception:
+        b = {}
+    for k in ("need", "waiting", "done", "resolved"):
+        b.setdefault(k, [])
+    return b
+
+
+def save(b):
+    F.parent.mkdir(parents=True, exist_ok=True)
+    tmp = F.with_suffix(".tmp")
+    tmp.write_text(json.dumps(b, indent=1))
+    tmp.replace(F)
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    s = p.add_subparsers(dest="cmd", required=True)
+    a = s.add_parser("add"); a.add_argument("kind", choices=["need", "waiting", "done"])
+    a.add_argument("--title", required=True); a.add_argument("--why", default=""); a.add_argument("--how", default="")
+    a.add_argument("--due", default=""); a.add_argument("--who", default=""); a.add_argument("--link", default="")
+    r = s.add_parser("resolve"); r.add_argument("id"); r.add_argument("--note", default="")
+    s.add_parser("list")
+    x = p.parse_args()
+    b = load()
+    if x.cmd == "list":
+        for k in ("need", "waiting", "done"):
+            for i in b[k]:
+                print(f"{k:8} {i['id']}  {i['title']}")
+        return
+    if x.cmd == "add":
+        textguard.check(x.title, x.why, x.how, x.who, x.link)
+        if x.kind == "need" and not x.why:
+            sys.exit("refused: a need says WHY it matters (--why)")
+        if x.kind == "waiting" and not x.who:
+            sys.exit("refused: say who we are waiting on (--who)")
+        item = {"id": f"b-{uuid.uuid4().hex[:6]}", "title": x.title, "at": now()}
+        for k in ("why", "how", "due", "who", "link"):
+            if getattr(x, k):
+                item[k] = getattr(x, k)
+        if x.kind == "waiting":
+            item["since"] = item["at"]
+        b[x.kind].insert(0, item)
+        b["done"] = [d for d in b["done"] if d["at"][:10] == now()[:10]][:40]   # "done" = today only
+        save(b); return print(f"added {x.kind} {item['id']}")
+    if x.cmd == "resolve":
+        textguard.check(x.note)
+        for k in ("need", "waiting"):
+            for i in b[k]:
+                if i["id"] == x.id:
+                    b[k].remove(i); i.update(resolved_at=now(), note=x.note, kind=k); b["resolved"].insert(0, i)
+                    b["resolved"] = b["resolved"][:100]
+                    save(b); return print(f"resolved {x.id}")
+        sys.exit(f"no open item {x.id}")
+
+
+if __name__ == "__main__":
+    main()

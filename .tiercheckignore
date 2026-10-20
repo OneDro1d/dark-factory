@@ -13,3 +13,5 @@
 skills/agent-notepad/*.md -> proj-* # example notepad directory names in agent-notepad's own docs (`proj-arbbot`, `proj-bugs`), not components
 *.md -> platform-libs # a memory CATEGORY, paired with `patterns` in the same clause — where a lesson is filed, not a thing that is invoked
 skills/df-context-store/substrate-template/CLAUDE-stanza.md -> pre-commit # the git hook of that name, installed by the substrate; not a skill or agent
+builder-tester-pair/docs/MODEL.md -> pair-guard # the kit's own PreToolUse hook, shipped in this repo as builder-tester-pair/kit/hooks/pair-guard.py; a hook, not a skill or agent
+builder-tester-pair/docs/MODEL.md -> restart-request # the kit's own script, shipped in this repo as builder-tester-pair/kit/bin/restart-request; a script, not a skill or agent

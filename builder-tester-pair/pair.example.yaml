@@ -1,0 +1,255 @@
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../starter-kit/instance/AUTHENTICATION.md#engram)
+# pair.yaml — one builder agent + one tester agent for one project.
+# extends: packs/<org>/pair.<org>.yaml   # optional: start from an organisation pack (its rules + conventions); this file wins
+# Copy to <shared_root>/pair.yaml (or run the /pair-setup wizard, which writes it for you).
+# Nothing here is a secret: tokens are created by sign-in steps and stay in each workspace's home folder.
+
+project:
+  name: Payments API            # shown in posts and docs
+  slug: payments                # lowercase, used in folder and memory names
+  topics: []                    # in-scope topics beyond the apps (programme, contract), e.g. [Phase 2, Platform]
+
+scope:
+  exclude: []                   # look-alike orgs / products that are OUT of scope even when keywords match
+
+listener:                       # chat listener tuning (defaults shown)
+  extra_keywords: []            # extra words that make a message worth reading (whole words)
+  thread_window: 20
+  thread_max_age_days: 7
+  surge_threshold: 25
+  pending_max_items: 500
+  pending_max_age_days: 30
+
+owner:                          # the person who approves deploys and merges
+  name: Jane Doe
+  email: jane.doe@example.com
+  teams_user_id: ""             # Azure AD object id (Teams); the self-chat is 48:notes
+  slack_user_id: ""             # e.g. U0123456789; leave empty if Slack is not used
+  slack_self_dm: ""             # the owner's own Slack self-DM channel id (D…), optional
+  teams_self_chat: "48:notes"   # Teams' standard id for "chat with yourself" (same for everyone); the command inbox
+  short_name: ""                # how agents address the owner in posts (defaults to the first name)
+  mention_names: []             # display names that count as an @mention of the owner, e.g. ["Jane Doe (C)", "Jane"]
+  slack_not_self: []            # look-alike Slack ids that are NOT the owner (agents never treat them as self)
+  coder_user: ""                # the owner's Coder user name (`coder ssh <coder_user>/<workspace>`), e.g. janedoe
+  coder_url: ""                 # Coder URL for the `coder login` step ensure-workspace.sh prints (blank = a placeholder)
+
+team:
+  decision_contact: {}          # {name: .., teams_user_id: ..} who decides when the requester cannot (default: the owner)
+
+identity:                       # who the agents commit and push as — `./setup-pair init` MEASURES it on the workspace
+  git_name: ""                  #   (git user.name / user.email as git resolves them in shared_root, and the active gh
+  git_email: ""                 #   account) and asks you to confirm; `check` fails if a workspace drifts from it,
+  gh_account: ""                #   and the agents stop and ask before committing or pushing as anyone else
+
+builder:                        # writes code to the tester's spec, never sees the tests
+  name: Builder                 # agent name used in chat: "builder restart", "[bot — Builder, for Jane]"
+  workspace: payments-builder   # Coder workspace name
+  host: coder-jane-payments-builder   # `hostname` inside that workspace; may be a pattern (`*`, `?`) because a
+                                #   Kubernetes pod's hostname gets a new random suffix on every restart:
+                                #   coder-<workspace-id>-*  (`echo $CODER_WORKSPACE_ID`)
+  agent_home: ""                # optional: run this agent with its OWN home folder (absolute path), so several pairs can
+                                #   share one workspace. `bash kit/scripts/agent-home.sh init`, then run ./setup --steps
+                                #   with HOME set to it. Claude/gh/git sign-ins are linked from the real home.
+  start_command: builder-start  # slash command that starts it: /builder-start
+  coder_template: ""            # kit/scripts/ensure-workspace.sh: Coder template to create this workspace from
+                                #   (blank = never create it; print the steps for a person instead)
+  coder_parameters: {}          #   template parameters, name -> value, e.g. {namespace: jane-payments-builder-01}
+  onboarding: ""                #   optional admin manifest/runbook that must be applied first (shown, never applied)
+
+tester:                         # product owner + architect + tester; holds the tests
+  name: Tester
+  workspace: payments-tester
+  host: coder-jane-payments-tester    # exact hostname or pattern, as for the builder
+  agent_home: ""                # optional own home folder, as for the builder
+  k8s_namespace: jane-payments-tester-01   # the tester workspace's pod namespace (guard blocks exec into it)
+  start_command: tester-start
+  kits_dir: ~/argus-kits        # where the tester keeps its working test files (its own home only)
+  private_dir: ""               # optional private folder of the tester; the builder's tools refuse to touch it
+  coder_template: ""            # as for the builder: `./setup` on the builder creates the tester's workspace from this
+  coder_parameters: {}          #   e.g. {namespace: jane-payments-tester-01, size: large}
+  onboarding: ""                #   e.g. onboarding/tester.yaml (namespace + home share + quota) — relative to this file;
+                                #   ensure-workspace.sh shows it and `kubectl apply -f <it>` as a step for an ADMIN
+
+paths:
+  shared_root: /fleet/fleet/payments      # shared disk both workspaces mount; agents start here
+  ledger: /fleet/fleet/payments/pair-ledger   # hand-over log, tool-call ledger, guard-block log
+  knowledge_drafts: /fleet/fleet/payments/knowledge/drafts   # knowledge pages (<area>/<kind>--<slug>.md); see docs/KNOWLEDGE.md
+  knowledge_src: /fleet/fleet/payments/knowledge/src         # read-only worktrees pinned at the deployed commits (src/<app>)
+  findings_file: ""             # optional past-findings file: non-security items become regression checks
+
+repos:                          # the code the pair works on; connect as many as you need
+  - app: api
+    github: my-org/payments-api # or `remote: <any git URL or local path>` for repos not on GitHub
+    base: main                  # branch the builder's PRs target; the tester tests PR commits against it
+    deployed: ""                # branch or commit actually deployed (the knowledge base follows it); default = base
+    # knowledge_branch: main    # optional: the branch the knowledge base grows from for THIS repo (overrides knowledge.branch)
+    aliases: []                 # other words people use for this app in chat (helps the agents spot requests)
+    services: []                # service names inside this repo, same purpose
+    infra: []                   # infrastructure names (clusters, namespaces) tied to this app
+    # local_verify: {...}       # optional per-app build/test settings for local runs (docs/KNOWLEDGE.md)
+    sut_namespaces: []          # namespaces the tester's runner must reach (egress allow-list)
+    input_schemas: []           # schema files hostile test inputs are generated from (XSD, JSON schema…)
+  # - app: web
+  #   github: my-org/payments-web
+  #   base: release/2.4
+
+teams:                          # Microsoft Teams via your MCP hub (leave ids empty to skip)
+  hub_workspace_id: ""          # MCP hub's Microsoft account id
+  tenant_id: ""                 # your Microsoft tenant id: DMs are only acted on from users in this tenant
+  mcp_server: ""                # MCP server name that exposes the Teams tools (as in your tool names), optional
+  list_messages_tool: ""        # override the Teams list-messages tool name, optional
+  team_id: ""
+  change_channel_id: ""         # every hand-over step and deploy is posted here
+  watch_channels: []            # [{key: team-general, id: "19:…@thread.tacv2", name: General}]
+
+hub:                            # optional: each agent's OWN MCP hub sign-in (kit/scripts/hub-login.sh; empty = no hub)
+  server_name: ""               # MCP server name as Claude shows it (tools become mcp__<server_name>__*), e.g. my-hub
+  url: ""                       # hub URL, e.g. https://hub.example.com
+  client_bin: ""                # path to the hub client binary, e.g. on the shared disk: /fleet/fleet/payments/bin/hub-mcp
+  client_args: []               # arguments for the MCP proxy run; "{url}" is replaced by `url`, e.g. ["-url", "{url}"]
+  url_env: ""                   # environment variable the client reads the URL from, e.g. HUB_SERVER_URL (blank = none)
+  home_dir: ""                  # isolated HOME for the client, where its login lives (default ~/.<server_name>-home)
+  login_args: [login, --device] # the sign-in command: device code, so no browser is needed in the workspace
+  login_check: ""               # file inside home_dir that exists once signed in (checked for presence only, never read)
+
+slack:
+  mcp_server: ""                # MCP server name that exposes the Slack tools, optional
+  read_channel_tool: ""         # override the Slack read-channel tool name, optional
+  dm_search_tool: slack_search_public_and_private   # tool that lists the owner's Slack DMs
+  retired_channels: []          # channel ids never read again (e.g. a replaced group DM)
+  workspace_org: ""             # set when the Slack workspace belongs to another organisation (most traffic is then out of scope)
+  watch_channels: []            # [{key: dev, id: C0123, name: "#payments-dev"}]
+  relay_url: ""                 # YOUR Slack bot relay endpoint for the morning digest DM (POST {ai_name, channel, message}); empty = no digest is sent
+
+jira:
+  project: ""                   # e.g. PAY
+  builder_label: agent-builder
+  tester_label: agent-tester
+  hub_workspace_id: ""
+  mcp_server: ""                # MCP server name exposing the Jira tools (mcp__<this>__jira_*)
+  card_rules:                   # what every card the agents create must carry (empty = no rule)
+    required_labels: []         #   exact labels, copied byte-for-byte (a near-miss label is accepted silently by Jira)
+    label_families: []          #   one label from each family, mirrored from the parent, e.g. ["D<n>", "m0…m4"]
+    issue_type: ""              #   e.g. Story
+    require_parent: false
+    require_points: false
+    priority: ""                #   the deliberate default, e.g. Major
+  closed_statuses: [Done]       # statuses an agent never moves a card to (the owner's "close it" only)
+  scope_authority: ""           # who owns deliverables / epics (agents never invent one)
+  audience: "a reviewer who was in none of our conversations"
+  ignore_labels: []             # look-alike labels that are NOT assignments
+
+engram:                         # memory spaces the wizard creates (names are suggestions)
+  builder_memory: payments-builder-memory
+  builder_behaviors: payments-builder-behaviors
+  tester_memory: payments-tester-memory
+  tester_behaviors: payments-tester-behaviors
+  knowledge: payments-knowledge # shared, code-cited knowledge base (builder writes, tester reads)
+  sessions_builder: payments-builder-sessions
+  sessions_tester: payments-tester-sessions
+  team: ""                      # optional team-wide space: team-wide lessons go here
+  org_rules: ""                 # optional read-only organisation rules space, searched before Jira / Confluence / change posts
+
+knowledge:                      # the code-cited knowledge base + graph (all optional; docs/KNOWLEDGE.md)
+  branch: deployed              # which branch it grows from: deployed (repos[].deployed, else base) | base | a branch
+                                #   name such as main — or per app: {default: deployed, web: main}
+  areas: []                     # one research agent each; empty = one area per app plus `cross`
+  #  - {name: payments, apps: [api], focus: "payment intake, limits, refunds"}
+  #  - {name: cross, apps: [api, web], focus: "auth, messaging, deployment"}
+  lines: []                     # another deployed branch of the same app, tracked too (e.g. per cloud)
+  #  - {app: api, name: aws, branch: main}
+  kinds: []                     # page kinds; empty = service, flow, rules, links, concept, bug
+  #  - service                  #   a default kind by name, or your own: {name: runbook, about: "ops steps"}
+  relations: []                 # graph edge types; empty = REQUIRES, ENFORCES, USES, CALLS, FIXES, PUBLISHES_TO,
+                                #   CONSUMES_FROM, EXPLAINS, PART_OF, SEE_ALSO
+  grow_on:                      # what makes it grow (all on by default)
+    merge: true                 #   every merge on a followed branch: stale pages re-verified at the new commit
+    new_behaviour: true         #   new endpoints / rules / queues / config keys from a merge get pages
+    bug_fix: true               #   every fixed bug gets a `bug` page linked FIXES
+    test_flag: true             #   the tester flags pages a test contradicts
+    requirement: true           #   the tester links requirement nodes REQUIRES to pages
+  requirements_index: ""        # optional title of the node every requirement node is linked from
+  engram_title: "{AREA} · {kind} · {title}"   # how a page is titled in Engram
+  adversary_sample: 5           # claims per page the independent reviewer checks before a page is published
+  git_history: true             # the library folder is a git repo: every recorded change is a commit
+  ignore: []                    # changed files that never make a page stale; empty = vendor/, node_modules/, lock files
+  common_files: []              # extra file names too common to match by name alone (go.mod, Dockerfile… built in)
+  never_read: []                # extra folders research agents must never open (the tester's own folder is always added)
+
+argus:                          # optional: independent end-to-end checker (kit/scripts/argus.sh)
+  url: ""                       # control-plane URL, e.g. https://argus.example.com — empty = no Argus
+  apps: []                      # app names that have Argus workspaces
+  source_repo: ""               # git URL of the Argus source the CLI is built from
+  version: ""                   # Argus version string to build
+  kube_context: ""              # kubectl context where executors run
+  control_service: ""           # in-cluster control-plane URL the executors use
+  control_namespace: ""         # namespace of the control plane (holds the registry pull secret)
+  instance_suffix: "dev"        # instance ids are <app>-<suffix>
+  egress_script: ""             # path inside the Argus source to its egress allow-list script, optional
+  ingress_ip: ""                # IP of YOUR Argus ingress (`argus.sh setup` fetches the TLS certificate from it); required for `setup`, or set ARGUS_INGRESS_IP
+  existing_suites: []           # [{app: api, owner: "Team X"}] — reuse once the owner OKs, never duplicate
+
+schedule:
+  tick_minutes: 3               # how often each agent checks chats and hand-overs
+  fresh_start_utc: ["02", "14"] # hours when the watchdog replaces each agent with a fresh process
+  stall_minutes: 45             # builder only: restart if its dashboard snapshot is older (0 = off)
+
+rules:
+  max_rounds: 3                 # local and live fix rounds before escalating to the owner
+  reviewer: adversary           # name of the independent reviewer agent whose verdicts the tools accept
+  restart_grace_seconds: 120    # restart messages sent within this long after a restart are repeats
+  review_sample: 5              # the reviewer re-checks 1 in N routine test verdicts (every load-bearing one always)
+  never_post: []                # channels agents read but never post to, e.g. [slack]
+  result_parsers: []            # tools that count test results (never a summary line)
+  shared_writes: ""             # what counts as a shared-data write that needs the owner's OK
+  deploy_rulebook: ""           # path of the project's deploy rulebook, if any
+  standing: []                  # the owner's standing rules, verbatim; loaded into every session of both agents
+  #  - {rule: "Never deploy on Fridays.", why: "no weekend cover", by: Jane, date: 2026-10-01}
+
+environments: []                # where work may go; team requests only to `allowed` ones
+#  - {name: dev, cluster: dev-cluster, branches: ["release/*"], team_requests: allowed}
+#  - {name: prod, cluster: prod-cluster, branches: [main], team_requests: owner_only}
+
+registry: {}                    # {push_host: .., pull_host: .., project: ..} where images are pushed / pulled
+
+dark_factory:                   # run every task through the Dark Factory loop (needs its skills installed)
+  enabled: false
+  loop_skill: dark-factory-build
+  skills_dir: ""                # folder holding the df-* skills (install.sh links it into ~/.claude/skills)
+  stage_gate: false             # also install the stage-gate hooks (stage docs only from their owning skill)
+  skills: {}                    # override any stage skill; defaults: product_owner df-product-owner, architect
+                                #   df-solution-architect, build df-tdd-developer, adversary df-adversary-gate, qa df-qa,
+                                #   reading requirements-discovery, coverage [test-strategy, dependency-mapping],
+                                #   contracts contract-check, data_pipeline df-data-transform-lens, ui df-ui-verify,
+                                #   outcomes df-observability, auth security-threat-modeler, test_quality [critical-thinking]
+
+restore:                        # optional: rebuilt-workspace restore (kit/scripts/restore-home.sh; no secrets, ever)
+  memory_snapshot: {}           # per-role folder on the shared disk holding the agent's memory notes, e.g.
+                                #   {builder: /fleet/fleet/payments/home-snapshot/builder-memory, tester: …}
+  bins: []                      # helper binaries for ~/.local/bin, e.g. [{name: hub-mcp, from: /fleet/fleet/payments/bin/hub-mcp}]
+
+guard:
+  blocked_hosts: []              # hosts this pair must never talk to (commands and fetches are blocked)
+  workspace_mode: separate       # separate (DEFAULT) | single. How the two agents are deployed:
+                                 #   separate = builder and tester each in their OWN workspace. The kit's hand-over tools
+                                 #     (handoff, testrun, reqstatus, verdict, knowledge-refresh) then require a process that
+                                 #     shares PID 1's namespaces, and fail closed when they cannot prove it. Strongest.
+                                 #   single   = both agents in ONE workspace (e.g. as two Linux users). One of them can never
+                                 #     read PID 1, so the check compares with the oldest readable process of its own user
+                                 #     instead. It still catches a process that really unshared, but agents that share an
+                                 #     account can do anything that account can: choose this on purpose, and also set
+                                 #     builder.user / tester.user / tester.agent_home and guard.block_privilege_escalation.
+
+dashboard:
+  artifact_url: ""              # YOUR OWN live dashboard page (each person publishes their own copy of
+                                #   templates/dashboard/control-room.html — /pair-setup does it); empty = no dashboard
+
+# Optional, read by the guard hooks (safe defaults; see kit/hooks/HOOKS.md):
+#   paths.approvals             folder for deploy-approval windows (default <ledger>/approvals)
+#   paths.heartbeat             builder's heartbeat file for the stall check (default: none)
+#   paths.mcp_json              the project .mcp.json the guards protect (default <shared_root>/.mcp.json)
+#   argus.repos                 repos holding the tester's checks, which the builder must not read
+#   guard.credential_dirs       extra credential folders to protect
+#   guard.protected_namespaces  extra Kubernetes namespaces the builder must not open a shell in
+#   guard.safe_script_subs      script subcommands the deploy gate allows
+#   guard.secret_paths          extra paths treated as secret material

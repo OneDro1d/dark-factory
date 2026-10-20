@@ -1,0 +1,80 @@
+# Read-only cluster identity for the pair's agent sessions (builder and tester). The OWNER applies this; agents never do.
+#
+# Why: an agent session's kubectl otherwise runs as the owner (~/.kube/config) — typically with create/patch/delete
+# on workloads and get on secrets everywhere. A regex deploy gate on top of that is a tripwire, not a boundary: it
+# can be bypassed by spelling. A credential that cannot write is the boundary.
+#
+# What the agent gets: get/list/watch on workloads, services, ingresses, configmaps, events, pods and pods/log,
+# autoscalers, jobs. NOT included: secrets, pods/exec, pods/attach, pods/portforward, serviceaccounts/token, nodes/proxy,
+# or any create/update/patch/delete. So `kubectl apply|run|debug|cp|exec`, raw-API PATCHes and every other write fail
+# with 403 however they are spelled.
+#
+# Placeholders (make-agent-kubeconfig.sh fills them in when it prints the apply command):
+#   __SA_NAMESPACE__   a namespace the owner controls, where the ServiceAccount lives (e.g. the builder workspace's)
+#
+# Apply / mint / revoke: run  kit/scripts/make-agent-kubeconfig.sh  — it prints the exact commands for the owner.
+# RECOMMENDED DEFAULT: bind per namespace, not cluster-wide. Replace the ClusterRoleBinding with one RoleBinding per app
+# namespace (roleRef kind ClusterRole, name agent-readonly) so the agent reads only the pair's own namespaces. The
+# cluster-wide binding is the exception: configmaps and pods/log routinely carry endpoints, connection strings and
+# sometimes credentials people should not have put there, so "read-only" on the whole cluster is still broad data access.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-readonly
+  namespace: __SA_NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: builder-tester-agents
+  annotations:
+    purpose: "read-only identity for builder/tester agent sessions; deploys stay with the owner"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agent-readonly
+  labels:
+    app.kubernetes.io/part-of: builder-tester-agents
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, services, endpoints, configmaps, events, namespaces,
+                persistentvolumeclaims, replicationcontrollers, resourcequotas, limitranges, serviceaccounts]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets, daemonsets, controllerrevisions]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [get, list, watch]
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods, nodes]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agent-readonly
+  labels:
+    app.kubernetes.io/part-of: builder-tester-agents
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agent-readonly
+subjects:
+  - kind: ServiceAccount
+    name: agent-readonly
+    namespace: __SA_NAMESPACE__
