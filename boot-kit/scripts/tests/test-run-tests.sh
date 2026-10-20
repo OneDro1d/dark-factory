@@ -333,6 +333,89 @@ case "$SAW$OUT" in
   *) ok "E3  the machine's record never reaches the suite" ;;
 esac
 
+# ---------------------------------------------------------------- F: a suite that reads stdin
+# ⛔ MEASURED IN CI 2026-10-05, AND IT BLAMED THE WRONG FILE. The runner's loop is fed by a
+# here-doc, and until this was fixed a child INHERITED that as its own stdin. A suite whose
+# child reads stdin therefore consumed bytes the loop had not read yet, and the next iteration
+# began mid-line: two suite paths arrived missing their leading bytes ("unner/work/…",
+# "home/runner/…") and failed rc=127 "No such file or directory". The suites were fine. The
+# gate reported a defect in them.
+#
+# ffmpeg is the canonical offender — it polls stdin for keyboard interaction unless given
+# `-nostdin` — which is why this surfaced the moment the gate began installing it.
+#
+# ⚠️ TWO DISTINCT SEVERITIES, and the quieter one is worse. A greedy child (`cat`) eats the
+# WHOLE list, so the run is mysteriously short and nothing says why. A polling child eats a few
+# bytes, so you get a corrupt path that NAMES A FILE — and a name sends the reader to the wrong
+# place. The eater here is greedy because it is deterministic; the fix closes both.
+F="$WORK/stdineater"
+# ⚠️ WRITTEN BY HAND, NOT VIA mksuite, AND THAT IS THE POINT. mksuite ends the file with
+# `exit <n>`, so appending the stdin-eating line afterwards puts it AFTER the exit, where it
+# never runs. The first version of this block did exactly that: all seven F assertions passed
+# against a deliberately UN-fixed runner, because the eater never ate anything. An ablation
+# run is what exposed it. A regression test that passes against the defect is decoration.
+mkdir -p "$F"
+cat > "$F/test-a-eats-stdin.sh" <<'EATER'
+#!/usr/bin/env bash
+touch "$MARKDIR/$(basename "$0")"
+cat >/dev/null          # consume the runner's stdin, the way a stdin-polling tool does
+echo "ASSERTIONS: 1"
+exit 0
+EATER
+chmod +x "$F/test-a-eats-stdin.sh"
+mksuite "$F/test-b-after.sh" 0
+mksuite "$F/test-c-after.sh" 0
+mksuite "$F/test-d-after.sh" 0
+run_runner m_stdin --root "$F"
+check "F1  a suite that eats stdin does not stop the run"        "$RC" "0"
+check "F2  the eater itself ran"           "$(ran m_stdin test-a-eats-stdin.sh)" "yes"
+check "F3  the suite AFTER the eater still ran"  "$(ran m_stdin test-b-after.sh)" "yes"
+check "F4  …and the one after that"              "$(ran m_stdin test-c-after.sh)" "yes"
+check "F5  …and the last one"                    "$(ran m_stdin test-d-after.sh)" "yes"
+case "$OUT" in
+  *'4 passed'*) ok "F6  all four suites are accounted for, none swallowed" ;;
+  *) bad "F6  all four suites are accounted for, none swallowed" "$OUT" ;;
+esac
+
+# ---------------------------------------------------------------- G: a PARTIAL stdin reader
+# ⛔ THIS IS THE EXACT CI SYMPTOM, REPRODUCED. The F fixture above is GREEDY: it eats the whole
+# list, so the run goes short and no path is ever corrupted. A tool that merely POLLS stdin
+# eats a few bytes and leaves the rest of a line behind — and then the next `read` returns a
+# path missing its leading characters, which the runner dutifully reports as a missing FILE.
+# That is what CI printed: "unner/work/…" (minus "/home/r") and "home/runner/…" (minus "/").
+# ⚠️ Without this block, the "no corrupted path" assertion could not fail — a greedy eater
+# never produces one. Two fixtures, because the two severities have different signatures and
+# the quieter one is the one that misdirects the reader.
+G="$WORK/stdinnibbler"
+mkdir -p "$G"
+cat > "$G/test-a-nibbles-stdin.sh" <<'NIBBLER'
+#!/usr/bin/env bash
+touch "$MARKDIR/$(basename "$0")"
+head -c 7 >/dev/null    # eat SEVEN BYTES, leaving the rest of the next path behind
+echo "ASSERTIONS: 1"
+exit 0
+NIBBLER
+chmod +x "$G/test-a-nibbles-stdin.sh"
+mksuite "$G/test-b-after.sh" 0
+mksuite "$G/test-c-after.sh" 0
+mksuite "$G/test-d-after.sh" 0
+run_runner m_nibble --root "$G"
+check "G1  a suite that nibbles stdin does not corrupt the run" "$RC" "0"
+case "$OUT" in
+  *'No such file or directory'*) bad "G2  no suite path arrives missing its leading bytes" "$OUT" ;;
+  *) ok "G2  no suite path arrives missing its leading bytes" ;;
+esac
+check "G3  the suite after the nibbler ran"  "$(ran m_nibble test-b-after.sh)" "yes"
+# ⚠️ G4 is a SANITY COMPANION, not a regression guard, and the difference is worth stating: a
+# 7-byte nibble corrupts only the IMMEDIATELY following path, so this one still passes against
+# the unfixed runner. G1/G2/G3/G5 are the discriminating assertions here (verified by ablation:
+# they go red with `</dev/null` removed, this does not).
+check "G4  …and a later one too (sanity, not a guard)" "$(ran m_nibble test-d-after.sh)" "yes"
+case "$OUT" in
+  *'4 passed'*) ok "G5  all four ran — the list survived intact" ;;
+  *) bad "G5  all four ran — the list survived intact" "$OUT" ;;
+esac
+
 echo "ASSERTIONS: $((PASSED + FAILED))"
 
 echo

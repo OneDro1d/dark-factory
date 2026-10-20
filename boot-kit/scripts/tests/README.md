@@ -4,13 +4,18 @@ Every `test-*.sh` file in this repository is run by
 [`../run-tests.sh`](../run-tests.sh), and the gate workflow runs that.
 
 **A suite is enrolled by existing, and must declare what it measured.** There is no list
-to add yourself to — commit the file and CI runs it. Four directories currently hold
-suites:
+to add yourself to — commit the file and CI runs it. Suites live beside what they test,
+in `boot-kit/scripts/tests/` (the engine), under `starter-kit/` (the org layer, the
+generated instance and its boot kit), under `plugins/<name>/tests/`, and under
+`skills/<name>/tests/`.
 
-- `boot-kit/scripts/tests/` — this one, the engine
-- `starter-kit/tests/` — the org layer
-- `starter-kit/instance/tests/` — the generated instance's docs
-- `starter-kit/instance/boot-kit/tests/` — the instance's boot kit
+⚠️ **That sentence is deliberately not a list of directories, because the list it replaced
+had already rotted.** It named four, and by the time anyone read it there were seven —
+`plugins/df-governed/tests/`, `skills/df-ui-verify/test/` and
+`skills/agent-notepad/plugin/tests/` had all appeared without it being updated. A count in
+prose is the same hand-written registry the glob was introduced to kill, one level up, and
+it decays the same way: quietly, while looking authoritative. For the real answer, ask the
+runner — `bash boot-kit/scripts/run-tests.sh --list` prints exactly what would run.
 
 ## Why it works this way
 

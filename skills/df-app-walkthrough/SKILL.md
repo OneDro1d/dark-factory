@@ -170,10 +170,17 @@ is tuned for reading (`"SHA-256"`, `"API"`). One string cannot do both jobs well
 | `wait` | `ms` | explicit dwell |
 
 `role`+`name` is preferred over `selector`: it survives restyling and matches what a user
-sees. `name` is a regex.
+sees. `name` is a regex, matched case-insensitively; pass `nameFlags` to choose your own
+regex flags (`""` for a case-sensitive match), or `exact: true` for an exact string.
 
 Every action takes an optional `settle` (ms to wait after acting, default 1500) for views
-that load asynchronously.
+that load asynchronously. `settle: 0` means zero, not "use the default".
+
+A descriptor resolves against the **visible tab panel** when the page has one, because many
+frameworks render every tab and hide the inactive ones — a page-wide lookup then resolves
+against a hidden twin and returns plausible, wrong data. Pass `global: true` for chrome
+outside the panel (a nav bar, a toast). Among several matches the first **visible** one
+wins; `nth` overrides that and is honoured even when an earlier match is visible.
 
 ### Cards
 
@@ -215,6 +222,12 @@ Useful knobs: `WT_PAD_SECONDS` (breath between beats, default 1.0), `WT_WIDTH`/`
 
 - video and audio streams exist, with the expected geometry and a plausible duration;
 - **audio RMS is above a floor** — proving the track is speech, not silence;
+- **loudness and true peak are in range** — EBU R128 integrated loudness inside
+  `WT_LUFS_MIN`…`WT_LUFS_MAX` (default −24…−12 LUFS) and true peak at or below `WT_TP_MAX`
+  (default 0 dBTP). RMS proves there is sound, not that anyone can hear it or that it does not
+  clip. A value that cannot be measured fails;
+- **no black stretch** of `WT_BLACK_SECONDS` (default 1 s) or more — a well-formed file can be
+  black for a minute when the app never painted;
 - the caption cue count matches the beat count;
 - and it extracts **one frame per section** to `verify/`.
 
@@ -288,6 +301,11 @@ those steps, so:
 - `scripts/lib/session.mjs` — auth modes + the drawn cursor.
 - `scripts/lib/actions.mjs` — the action vocabulary.
 - `templates/narration.example.json` — a runnable example against a public site.
+- `tests/` — five suites over all seven scripts, needing no browser, network or app.
+  `tests/README.md` states what they cover and, explicitly, what they do not;
+  `tests/test-walkthrough-mutations.sh` plants 35 one-line defects and requires each to be
+  caught by the assertion that names it, because a green suite proves nothing until you
+  have seen it go red.
 
 Pairs with: `df-video-intake` (the inverse), `df-qa` (evidence discipline),
 `df-adversary-gate` (verify the evidence, never the self-report).

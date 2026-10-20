@@ -33,7 +33,11 @@ async function resolve(page, a) {
     loc = scope.locator(a.selector);
   } else if (a.role) {
     const opts = {};
-    if (a.name) opts.name = new RegExp(a.name, a.nameFlags || "i");
+    // ⚠️ `typeof`, not `||`: the empty string is the obvious way to ask for a CASE-SENSITIVE
+    // match, and `a.nameFlags || "i"` treated it as absent and silently handed back "i" —
+    // so the one value a caller would reach for was the one that could not work. Same
+    // falsy-vs-absent conflation `settle` already guards against with `typeof` below.
+    if (a.name) opts.name = new RegExp(a.name, typeof a.nameFlags === "string" ? a.nameFlags : "i");
     if (a.exact) opts.exact = true;
     loc = scope.getByRole(a.role, opts);
   } else if (a.text) {
