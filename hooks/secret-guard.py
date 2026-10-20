@@ -172,7 +172,12 @@ class Redactor:
             s = self.values_re.sub(REDACTED, s)
         for _, rx in _COMPILED:
             s = rx.sub(REDACTED, s)
-        s = _URL_PW.sub(lambda m: m.group(1) + REDACTED + m.group(3), s)
+        # The same exemption the key=value rules below use. Redacting `...` into [REDACTED]
+        # corrupts the documentation a reviewer is reading, for no gain — and it is what made
+        # the inconsistency invisible, because the redactor and the detector disagreed in the
+        # same direction and so never contradicted each other in a way anyone would notice.
+        s = _URL_PW.sub(lambda m: m.group(0) if _benign_value(m.group(2))
+                        else m.group(1) + REDACTED + m.group(3), s)
         s = _BEARER.sub(lambda m: m.group(1) + REDACTED, s)
         s = _JSON_KV.sub(lambda m: m.group(0) if _skip_kv(m.group(1), m.group(2)) else m.group(1) + REDACTED + m.group(3), s)
         s = _ASSIGN_KV.sub(lambda m: m.group(0) if _skip_kv(m.group(1), m.group(3)) else m.group(1) + m.group(2) + REDACTED, s)
@@ -189,11 +194,44 @@ class Redactor:
         return "\n".join(out)
 
 
+def _benign_value(val):
+    """True when a VALUE cannot be a credential, wherever in the text it appears.
+
+    ⚠️ THIS EXISTS BECAUSE THE POLICY HAD TWO HOMES AND THEY DRIFTED. The key=value rules
+    consulted the list below; the URL-password rule did not, in `findings()` OR in
+    `Redactor.text`. So the guard answered "is this a secret?" differently depending on
+    which rule happened to match, and looked perfectly consistent everywhere a reader would
+    check. The fix is one predicate called from all three sites, not a third copy of the list.
+
+    Measured cost of the drift, 2026-10-04: the operator asked a session where to find the
+    `amqps://argus-test:...@host/vhost` strings. `...` was captured as the password, the
+    prompt was REFUSED, and his message was destroyed in transit — while `$BROKER_PASS` in
+    the very same position was exempt, because `$` is on the list below and the URL rule
+    never read it.
+    """
+    if REDACTED in val:
+        return True
+    if val.startswith(("${", "$", "<", "EV[", "{{", "/", "./", "~/")):
+        return True
+    if val.isdigit():
+        return True
+    # A value with no letter or digit anywhere in it is punctuation STANDING IN for a secret:
+    # `...`, `…`, `***`, `---`. Nobody's credential is pure punctuation, and treating one as a
+    # finding is how documentation and a question about a connection string get refused.
+    # ⚠️ Deliberately narrow: `PASSWORD`, `xxx` and `changeme` still count as findings. They
+    # contain alphanumerics, and the moment this starts exempting WORDS it has to guess which
+    # words are nobody's real password — which is the kind of judgement that lets a real one
+    # through. Under-reaching here is recoverable; over-reaching is a silent false negative.
+    if not any(c.isalnum() for c in val):
+        return True
+    return False
+
+
 def _skip_kv(key, val):
     key = key.strip('"')
     if _NOT_SECRET_KEY.search(key.rsplit("_", 1)[0] if key.lower().endswith("token") else ""):
         return True
-    if REDACTED in val or val.startswith(("${", "$", "<", "EV[", "{{", "/", "./", "~/")) or val.isdigit():
+    if _benign_value(val):
         return True
     # ⚠️ source code that MENTIONS a secret-named identifier is not a credential. Masking
     # `token = generateToken(user)` corrupts the file a reviewer is reading, and teaches the
@@ -216,7 +254,7 @@ def findings(text, env=None, values_re=None):
     # guard that cries wolf on its own marker teaches everyone to reach for --no-verify,
     # and then a genuine finding gets waved through. `_skip_kv` and the gitleaks allowlist
     # already carry this exemption; this rule was the only one that did not.
-    if any(m.group(2) != REDACTED for m in _URL_PW.finditer(text)):
+    if any(not _benign_value(m.group(2)) for m in _URL_PW.finditer(text)):
         hits.append("url-password")
     if PEM_BEGIN.search(text):
         hits.append("private-key")
