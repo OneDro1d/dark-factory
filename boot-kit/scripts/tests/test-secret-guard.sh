@@ -244,6 +244,35 @@ if [ "$(decision "$OUT")" = "block" ] && ! printf '%s' "$OUT" | grep -qF "$FAKE_
 else bad "U2 env secret value prompt not blocked (or echoed)" "(value withheld)"; fi
 OUT="$(prompt "reinstall the workspace and check the syn_ prefix rule")"
 [ "$(decision "$OUT")" != "block" ] && ok "U3 ordinary prompt allowed" || bad "U3 ordinary prompt blocked" "$(reason "$OUT")"
+# U4-U6 a PLACEHOLDER in the password position is not a credential (2026-10-04).
+# ⛔ The regression, verbatim: the operator asked a session where to find the
+# `amqps://argus-test:...@host/vhost` strings. `...` was captured as the password, the prompt was
+# REFUSED, and because it had arrived from Slack over the bus his message was DESTROYED in
+# transit — the session never saw it and nothing told him. A guard that cries wolf on an obvious
+# placeholder does not merely annoy: on a delivery path it loses the message.
+# ⚠️ `$BROKER_PASS` in the same position was already exempt, because `$` is on the benign list
+# and the URL rule was the one rule that never consulted it. Both directions below, because an
+# exemption wide enough to swallow a real credential would be a silent false negative.
+OUT="$(prompt 'I don'"'"'t know where to fing the `<<amqps://argus-test>>:...@host/vhost` strings')"
+[ "$(decision "$OUT")" != "block" ] && ok "U4 the operator's own placeholder question is allowed" \
+  || bad "U4 a '...' placeholder is still read as a credential" "$(reason "$OUT")"
+U5FAIL=""
+for ph in '...' '***' '---' '<password>' '$BROKER_PASS' '${BROKER_PASS}' '[REDACTED]'; do
+  OUT="$(prompt "connect with amqps://argus-test:${ph}@host/vhost and report")"
+  [ "$(decision "$OUT")" = "block" ] && U5FAIL="$U5FAIL $ph"
+done
+[ -z "$U5FAIL" ] && ok "U5 every placeholder form is allowed in the password position" \
+  || bad "U5 placeholder(s) read as a credential:$U5FAIL" "the benign list is not reaching the URL rule"
+# The control. Without this, U4/U5 could be passing because the rule stopped working at all.
+OUT="$(prompt 'connect with amqps://argus-test:n0tApl4ceholderV4lue@host/vhost')"
+if [ "$(decision "$OUT")" = "block" ] && printf '%s' "$OUT" | grep -q 'url-password'; then
+  ok "U6 control: a real URL password is STILL blocked, by the url-password rule"
+else bad "U6 the exemption is too wide — a real URL password got through" "$(reason "$OUT")"; fi
+# U7 and the redactor must agree with the detector. They disagreed in the SAME direction, which
+# is why neither ever contradicted the other where a reader would look.
+OUT="$(printf 'see amqps://u:...@h/v\n' | env -i PATH="$PATH" HOME="$W/home" python3 "$GUARD" --filter)"
+printf '%s' "$OUT" | grep -qF '...' && ok "U7 --filter leaves a placeholder password intact" \
+  || bad "U7 --filter redacted a placeholder, corrupting the text a reviewer reads" "$OUT"
 
 echo
 echo "=== P: notepad pre-commit ==="
@@ -268,6 +297,28 @@ git -C "$R" commit -qm journal
 printf 'clean\n' >> "$R/NOTES.md"; git -C "$R" add NOTES.md
 pc >/dev/null; [ $? -eq 0 ] && ok "P3 clean change passes" || bad "P3 clean change refused" "$(pc)"
 git -C "$R" commit -qm clean
+# P8 the guard must not refuse its OWN redaction marker (2026-09-22). A journal it has
+# already redacted keeps `[REDACTED]` for ever, so without the exemption in findings() every
+# later commit touching that file is refused — and the cost is behavioural: a guard that cries
+# wolf on its own output teaches everyone to reach for --no-verify. Both directions, because an
+# exemption that is too wide would stop the rule catching a real one.
+printf 'url amqp://user:[REDACTED]@host:5672/v\n' > "$R/redacted.md"; git -C "$R" add redacted.md
+pc >/dev/null 2>&1
+[ $? -eq 0 ] && ok "P8a an already-redacted URL password is not a finding" \
+  || bad "P8a the guard refuses its own [REDACTED] marker" "$(pc | head -c 160)"
+git -C "$R" commit -qm redacted >/dev/null 2>&1
+printf 'url amqp://user:%s@host:5672/v\n' "$FAKE_PW" > "$R/real.md"; git -C "$R" add real.md
+OUT="$(pc)"; RC=$?
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q 'real.md' && ! printf '%s' "$OUT" | grep -qF "$FAKE_PW"; then
+  ok "P8b a REAL URL password is still refused, value withheld"
+else bad "P8b the exemption is too wide" "rc=$RC"; fi
+printf 'a amqp://u:[REDACTED]@h:5672/v\nb amqp://u:%s@h:5672/v\n' "$FAKE_PW" > "$R/real.md"
+git -C "$R" add real.md
+pc >/dev/null 2>&1
+[ $? -ne 0 ] && ok "P8c a marker earlier in the file does not mask a real one later" \
+  || bad "P8c a marker masked a real credential" "the check must be per-match, not per-text"
+git -C "$R" rm -q --cached real.md; rm -f "$R/real.md"
+
 # install into the repo, chaining a foreign hook
 HD="$(git -C "$R" rev-parse --git-path hooks)"; case "$HD" in /*) ;; *) HD="$R/$HD" ;; esac
 mkdir -p "$HD"; printf '#!/bin/sh\necho foreign-ran >> "%s/foreign.log"\n' "$W" > "$HD/pre-commit"; chmod +x "$HD/pre-commit"

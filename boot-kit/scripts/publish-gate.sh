@@ -377,9 +377,11 @@ if [ "$SCAN_HISTORY" -eq 1 ]; then
     PEND_MATCHES="$(hist_matches "$PEND_REVS")"
     # Blank lines are stripped from BOTH sides: printf on an empty variable emits one
     # empty line, which comm would otherwise report as a landmark present on one side.
-    PEND_NEW="$(comm -13 \
-      <(printf '%s\n' "$PUB_MATCHES"  | sed '/^$/d') \
-      <(printf '%s\n' "$PEND_MATCHES" | sed '/^$/d'))"
+    # LC_ALL=C: byte order. See the WAIVER note below — sort and comm disagree about
+    # lines starting with punctuation or a space under a UTF-8 locale, and these tokens do.
+    PEND_NEW="$(LC_ALL=C comm -13 \
+      <(printf '%s\n' "$PUB_MATCHES"  | LC_ALL=C sort -u | sed '/^$/d') \
+      <(printf '%s\n' "$PEND_MATCHES" | LC_ALL=C sort -u | sed '/^$/d'))"
 
     if [ -n "$PUB_HIT" ]; then
       # WAIVERS. The published remedy is "rebuild from a fresh git init" — correct for a
@@ -414,15 +416,25 @@ if [ "$SCAN_HISTORY" -eq 1 ]; then
 ${P8_WAIVED:-}
 EOF_W
 
-      PUB_UNWAIVED="$(comm -23 \
-        <(printf '%s\n' "$PUB_MATCHES"    | sed '/^$/d' | sort -u) \
-        <(printf '%s\n' "$WAIVED_TOKENS"  | sed '/^$/d' | sort -u))"
+      # ⚠️ LC_ALL=C IS LOAD-BEARING, NOT TIDINESS. Both sides are sorted, and `comm` still
+      # rejected their interleaving: a UTF-8 locale collates `\`acme.`, ` acme` and `|acme|`
+      # by ignoring the leading punctuation, while comm's merge compares differently. Measured
+      # 2026-10-15 on this repo: 22 published landmarks, 5 waivers, every one of the 5 present
+      # — and the subtraction returned 21 instead of 17, so FOUR reasoned waivers silently did
+      # not apply and P8 re-reported accepted findings. Nothing was dropped in the unsafe
+      # direction, but a waiver that stops working is how the gate becomes the thing people
+      # bypass, which is the failure the waiver mechanism exists to prevent.
+      # Byte order is the only order sort and comm agree on. Verified against `grep -Fxv -f`,
+      # which assumes no ordering at all: both give 17.
+      PUB_UNWAIVED="$(LC_ALL=C comm -23 \
+        <(printf '%s\n' "$PUB_MATCHES"    | sed '/^$/d' | LC_ALL=C sort -u) \
+        <(printf '%s\n' "$WAIVED_TOKENS"  | sed '/^$/d' | LC_ALL=C sort -u))"
 
       # A waiver matching nothing is protecting nothing, and would silently cover a later
       # arrival of that token. Same rule the reference-pointer suite applies to its own exclusions.
-      STALE_W="$(comm -13 \
-        <(printf '%s\n' "$PUB_MATCHES"   | sed '/^$/d' | sort -u) \
-        <(printf '%s\n' "$WAIVED_TOKENS" | sed '/^$/d' | sort -u))"
+      STALE_W="$(LC_ALL=C comm -13 \
+        <(printf '%s\n' "$PUB_MATCHES"   | sed '/^$/d' | LC_ALL=C sort -u) \
+        <(printf '%s\n' "$WAIVED_TOKENS" | sed '/^$/d' | LC_ALL=C sort -u))"
       # Only report stale waivers when the waiver list is what is DECIDING the verdict.
       # The warning exists to stop a waiver silently covering a token's later arrival — a
       # risk that only matters when waivers are the reason this run passes. If unwaived
