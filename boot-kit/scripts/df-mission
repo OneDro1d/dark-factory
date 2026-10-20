@@ -239,6 +239,25 @@ cmd_start() {
   else
     echo "df-mission: WARN df-operator-todo not found -- $NOTEPAD/operator-todo.md not created" >&2
   fi
+  # A mission gets a GRAPH ANCHOR, so the records it produces are reachable from something rather
+  # than floating loose in a namespace. Same resolution order and same WARN-never-fail contract as
+  # the operator page above: the anchor is how a LATER session finds this work, so its absence must
+  # not stop the mission that is starting now. Idempotent — re-running a start never mints a second
+  # anchor. ⚠️ It needs the hub token from the session environment; a headless start without one
+  # will WARN, and `df-engram anchor` can be re-run by hand from a session that has it.
+  # What Engram is, and how a machine is authorised to reach it, is documented in one place:
+  # [Engram](../../starter-kit/instance/AUTHENTICATION.md#engram)
+  _eng=""
+  for _c in "$SCRIPTS/../../plugins/df-governed/bin/df-engram" \
+            "$(command -v df-engram 2>/dev/null || true)" \
+            "$HOME/.claude/skills/df-governed/bin/df-engram"; do
+    if [ -n "$_c" ] && [ -f "$_c" ]; then _eng="$_c"; break; fi
+  done
+  if [ -n "$_eng" ]; then
+    python3 "$_eng" --notepad "$NOTEPAD" anchor --mission "$id" >/dev/null 2>&1 || \
+      echo "df-mission: WARN no Engram anchor for $id (run \`df-engram anchor --mission $id\`)" >&2
+  fi
+
   [ -n "$channel" ] && printf '%s\n' "$channel" > "$d/notify-channel"
   [ -s "$d/state" ] || echo CONTINUE > "$d/state"
   [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && printf '%s\n' "$CLAUDE_CODE_SESSION_ID" > "$d/owner"

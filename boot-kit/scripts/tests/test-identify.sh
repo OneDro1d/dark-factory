@@ -102,7 +102,15 @@ echo "=== D3: a host record survives the .local suffix and a case change ==="
 #
 # The fixture is built from THIS machine's own id, uppercased and suffixed, so the case is
 # meaningful on any host rather than only on the author's.
-MYHOST="$(env -u CODER bash "$ID" | sed -n 's/^   host       : \([^ ]*\).*/\1/p')"
+# ⚠️ ALL THREE CODER VARIABLES, NOT JUST `CODER`, AND THIS LINE IS WHY THE SUITE FAILED ON EVERY
+# CODER WORKSPACE FOR WEEKS. `-u CODER` alone does not leave the Coder path: KIND is also inferred
+# from CODER_AGENT_URL and CODER_WORKSPACE_NAME, which a real workspace exports. So the script took
+# the Coder branch, printed `hostname   : NOT USED` instead of `host       : <id>`, MYHOST came back
+# empty, and the test reported "the print path changed shape" — blaming the script for the
+# fixture's own half-finished unset. The sibling assertion three lines below always unset all
+# three; only this one did not. A partial fixture is indistinguishable from a real failure.
+MYHOST="$(env -u CODER -u CODER_WORKSPACE_NAME -u CODER_AGENT_URL bash "$ID" \
+          | sed -n 's/^   host       : \([^ ]*\).*/\1/p')"
 if [ -n "$MYHOST" ]; then
   UP="$(printf '%s' "$MYHOST" | tr '[:lower:]' '[:upper:]')"
   SUF="$(mklock suffixed "{\"instance\":\"a-laptop\",\"install\":{\"identity\":{\"hostname\":\"${UP}.local\"}}}")"
@@ -180,6 +188,16 @@ echo "=== I: deploymentId beats the URL, because the URL is not deployment-uniqu
 # is that two DIFFERENT ids refuse and one MATCHING id passes; which ids an estate happens to
 # own proves nothing extra.
 INCLUSTER="http://coder.coder.svc.cluster.local/"
+# ⛔ AND THIS ADDRESS IS REAL, WHICH BROKE THE THREE ASSERTIONS BELOW ON EVERY CO-LOCATED
+# WORKSPACE. The fixtures were written assuming the probe cannot succeed ("no server"), which
+# holds on a laptop and is FALSE on the machine class this guard exists for: a workspace sitting
+# beside its own control plane resolves `coder.coder.svc.cluster.local` and gets its REAL
+# deployment id back. identify.sh then correctly refused a lockfile declaring a synthetic id —
+# the CODE was right and the TEST called it a failure, on the only machines that matter here.
+# ⇒ The "unprobeable" cases need a URL that cannot resolve ANYWHERE. `.invalid` is reserved for
+# exactly this (RFC 2606), so the case under test is unprobeable by construction rather than by
+# luck of where the suite runs.
+UNPROBEABLE="http://coder-control-plane.invalid/"
 # ⚠️ NOT UUID-SHAPED, DELIBERATELY. P4 flags the SHAPE, and it is right not to try telling
 # a synthetic id from a real one — a gate that judged intent would be guessing. The test
 # needs two DISTINCT strings, not realistic ones.
@@ -187,8 +205,8 @@ FAKE_ID_A="deployment-id-alpha-for-tests"
 
 # ⚠️ The probe cannot run in these fixtures (no server), so DEPLOY_ID is empty — which is itself
 # the case worth asserting: an unprobeable id must FALL BACK to the URL, never refuse.
-CLASH="$(mklock clash "{\"instance\":\"other-cloud\",\"install\":{\"identity\":{\"deployment\":\"$INCLUSTER\",\"workspace\":\"neptune\",\"deploymentId\":\"$FAKE_ID_A\"}}}")"
-O="$(CODER=true CODER_AGENT_URL="$INCLUSTER" CODER_WORKSPACE_NAME=neptune bash "$ID" --lock "$CLASH" 2>&1)"; rc=$?
+CLASH="$(mklock clash "{\"instance\":\"other-cloud\",\"install\":{\"identity\":{\"deployment\":\"$UNPROBEABLE\",\"workspace\":\"neptune\",\"deploymentId\":\"$FAKE_ID_A\"}}}")"
+O="$(CODER=true CODER_AGENT_URL="$UNPROBEABLE" CODER_WORKSPACE_NAME=neptune bash "$ID" --lock "$CLASH" 2>&1)"; rc=$?
 contains "I: an unprobeable id falls back to the URL, does not refuse" "matches this machine" "$O"
 if [ "$rc" -eq 0 ]; then ok "I: and exits 0"; else bad "I: and exits 0" "exit $rc — a network blip must not block"; fi
 
@@ -200,9 +218,21 @@ if [ "$rc" -eq 3 ]; then ok "I: and exits 3"; else bad "I: and exits 3" "exit $r
 
 # ⚠️ an unprobeable id must SAY so — a silent fall back to a weaker check is the same defect
 # one level down
-O="$(CODER=true CODER_AGENT_URL="$INCLUSTER" CODER_WORKSPACE_NAME=x bash "$ID" 2>&1)"
+O="$(CODER=true CODER_AGENT_URL="$UNPROBEABLE" CODER_WORKSPACE_NAME=x bash "$ID" 2>&1)"
 contains "I: an unprobeable id is reported as unknown" "could not probe" "$O"
 contains "I: and warns the URL may not be unique" "may not be deployment-unique" "$O"
+# CONTROL, because the two assertions above are about an ABSENCE and would pass against a script
+# that never probes at all: on a reachable control plane the id IS reported, so "could not probe"
+# must NOT appear. Skipped when this machine has no probeable deployment, since then there is
+# nothing to control against and a green here would be meaningless.
+if [ "${CODER:-}" = "true" ] || [ -n "${CODER_AGENT_URL:-}" ]; then
+  O="$(bash "$ID" 2>&1)"
+  case "$O" in
+    *"could not probe"*) ok   "I: CONTROL skipped — this machine's own deployment is not probeable either" ;;
+    *)                   absent "I: CONTROL — a REAL deployment does not report 'could not probe'" \
+                                "could not probe" "$O" ;;
+  esac
+fi
 
 echo "=== J: a COPIED measurement is refused, even when the values match ==="
 # ⛔ THE CASE THE WHOLE FEATURE EXISTS FOR, and the one a value-comparison cannot catch.
