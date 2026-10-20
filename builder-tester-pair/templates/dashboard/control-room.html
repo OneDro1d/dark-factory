@@ -1,0 +1,516 @@
+<!--
+  control-room.html — the pair's live dashboard ("Control Room"). A TEMPLATE: every person publishes their OWN
+  private copy (see docs/SETUP.md "Your own dashboard"); never reuse someone else's artifact URL.
+
+  RUNTIME CAPABILITIES this page needs (pass them to the Artifact tool when publishing):
+      capabilities: {"db": {"rules": [{"path": "", "write": "admin"}]}}
+    - db: the page reads the newest document of the `snapshots` collection, live (orderBy ts desc, limit 1).
+      The rule lets everyone who can open the page READ, and only the owner/editors WRITE.
+    No other capability is used (no user, mcp, sample, room, artifact).
+
+  DATA CONTRACT: one document per builder tick in collection `snapshots`, written with ArtifactData by the builder
+  (kit/bin/dashboard-live-snapshot builds it; kit/hooks/dashboard-artifactdata-allow.py auto-approves exactly
+  those writes). Nothing project- or person-specific is hard-coded here: the title, the owner, builder and tester
+  names and the stale threshold come from the snapshot fields project, owner, builder, tester, stall_minutes.
+-->
+<title>Control Room</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #0d1017; --bg2: #121723; --panel: #161c29; --ink: #eef1f7; --muted: #97a1b4; --line: #263044; --dot: rgba(255,255,255,.04);
+  --accent: #3fd0e8; --accent-soft: rgba(63,208,232,.14); --builder: #ff4d5e; --you: #ffb547; --tester: #59d98a;
+  --ok: #59d98a; --ok-soft: rgba(89,217,138,.14); --warn: #ffb547; --warn-soft: rgba(255,181,71,.14);
+  --bad: #ff6b6b; --bad-soft: rgba(255,107,107,.14); --code-bg: #0b0f16;
+  --f-display: "Bricolage Grotesque", "Arial Black", system-ui, sans-serif;
+  --f-body: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-data: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+  --bg: #f4f2ee; --bg2: #ebe8e1; --panel: #ffffff; --ink: #161a22; --muted: #5d6474; --line: #dcd7cd; --dot: rgba(0,0,0,.05);
+  --accent: #0e8fa8; --accent-soft: rgba(14,143,168,.12); --builder: #d7263d; --you: #b86e00; --tester: #23894c;
+  --ok: #23894c; --ok-soft: rgba(35,137,76,.12); --warn: #b86e00; --warn-soft: rgba(184,110,0,.12);
+  --bad: #d43c3c; --bad-soft: rgba(212,60,60,.12); --code-bg: #efece6; color-scheme: light; } }
+:root[data-theme="light"] {
+  --bg: #f4f2ee; --bg2: #ebe8e1; --panel: #ffffff; --ink: #161a22; --muted: #5d6474; --line: #dcd7cd; --dot: rgba(0,0,0,.05);
+  --accent: #0e8fa8; --accent-soft: rgba(14,143,168,.12); --builder: #d7263d; --you: #b86e00; --tester: #23894c;
+  --ok: #23894c; --ok-soft: rgba(35,137,76,.12); --warn: #b86e00; --warn-soft: rgba(184,110,0,.12);
+  --bad: #d43c3c; --bad-soft: rgba(212,60,60,.12); --code-bg: #efece6; color-scheme: light; }
+body { background: var(--bg); color: var(--ink); font: 14.5px/1.55 var(--f-body);
+  background-image: radial-gradient(var(--dot) 1.2px, transparent 1.3px); background-size: 14px 14px; }
+body::before { content: ""; position: fixed; inset: -20%; z-index: -1; pointer-events: none;
+  background: radial-gradient(40% 30% at 15% 10%, color-mix(in srgb, var(--builder) 12%, transparent), transparent 70%),
+              radial-gradient(40% 35% at 85% 85%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%);
+  animation: drift 26s ease-in-out infinite alternate; }
+@keyframes drift { to { transform: translate(3%, -2%) scale(1.05); } }
+.wrap { max-width: 1160px; margin: 0 auto; padding-inline: 16px; padding-block: 0 64px; display: grid; gap: 26px; }
+
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 3; padding-block: 12px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+  background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.bar h1 { font: 800 22px/1.1 var(--f-display); margin: 0; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.bar h1 .b { color: var(--builder); } .bar h1 .t { color: var(--tester); }
+.bar .sp { flex: 1 1 auto; }
+.fresh { font: 12px var(--f-data); color: var(--muted); display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.live { background: var(--ok); animation: ping 1.8s ease-out infinite; }
+.dot.stale { background: var(--warn); } .dot.dead { background: var(--bad); }
+@keyframes ping { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 70%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
+
+.hero { display: grid; gap: 14px; padding-top: 22px; }
+.hero .big-title { font: 800 clamp(30px, 5.6vw, 54px)/1 var(--f-display); margin: 0; letter-spacing: -.02em; text-wrap: balance; }
+.hero .big-title .v { color: var(--accent); }
+.pipe { position: relative; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; background: var(--bg2); border: 1px solid var(--line); border-radius: 16px; padding: 14px; overflow: hidden; }
+.pipe::before { content: ""; position: absolute; left: 6%; right: 6%; top: 34px; height: 3px; border-radius: 2px; background: var(--line); }
+.pipe::after { content: ""; position: absolute; top: 29px; left: 6%; width: 13px; height: 13px; border-radius: 50%; background: var(--ink);
+  box-shadow: 0 0 14px 4px color-mix(in srgb, var(--accent) 70%, transparent); animation: run 8s cubic-bezier(.65,0,.35,1) infinite; }
+@keyframes run { 0% { left: 6%; } 92% { left: calc(94% - 13px); } 100% { left: calc(94% - 13px); opacity: 0; } }
+.pipe .stg { position: relative; z-index: 1; display: grid; justify-items: center; gap: 6px; text-align: center; min-width: 0; }
+.pipe .stg i { width: 26px; height: 26px; border-radius: 50%; background: var(--panel); border: 3px solid var(--c); box-shadow: 0 0 0 4px var(--bg2); }
+.pipe .stg b { font: 700 13px/1.2 var(--f-display); }
+.pipe .stg span { font: 500 10.5px var(--f-data); color: var(--c); letter-spacing: .06em; text-transform: uppercase; overflow-wrap: anywhere; }
+@media (max-width: 620px) { .pipe { grid-template-columns: repeat(6, minmax(84px, 1fr)); overflow-x: auto; } .pipe::before, .pipe::after { display: none; } }
+
+h2 { font: 800 15px/1.2 var(--f-display); text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin: 0 0 10px; display: flex; gap: 8px; align-items: center; }
+h2 .count { font: 500 12px var(--f-data); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; letter-spacing: 0; }
+h2 .count.pop { animation: pop .6s ease; }
+@keyframes pop { 30% { transform: scale(1.35); background: var(--accent-soft); } }
+section { min-width: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; min-width: 0; transition: border-color .3s, box-shadow .3s; }
+.panel:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); box-shadow: 0 10px 34px -22px var(--accent); }
+.banner { border-left: 3px solid var(--warn); background: var(--warn-soft); padding: 10px 12px; border-radius: 8px; }
+.banner.bad { border-left-color: var(--bad); background: var(--bad-soft); }
+
+.needs { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
+.need { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px 14px 20px; display: grid; gap: 7px; min-width: 0; overflow: hidden; }
+.need::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--warn); }
+.need::after { content: ""; position: absolute; inset: 0; border-radius: 14px; pointer-events: none; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent); opacity: 0; animation: glow 3.2s ease-in-out infinite; }
+.need.due-soon::before { background: var(--bad); } .need.due-soon::after { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 60%, transparent); }
+.need.loop::before { background: var(--accent); }
+@keyframes glow { 50% { opacity: 1; } }
+.need .t { font: 700 16px/1.3 var(--f-display); display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
+.need .why { color: var(--muted); }
+.how { display: flex; gap: 8px; align-items: stretch; min-width: 0; }
+.how code { flex: 1 1 auto; min-width: 0; font: 12.5px/1.45 var(--f-data); background: var(--code-bg); padding: 8px 10px; border-radius: 8px; overflow-x: auto; white-space: pre; border: 1px solid var(--line); }
+.how button { font: 600 12px var(--f-body); color: var(--accent); background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; cursor: pointer; flex: none; }
+.how button:hover { background: var(--accent-soft); }
+.chip { display: inline-block; font: 500 11px/1 var(--f-data); padding: 5px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+.chip.ok { background: var(--ok-soft); color: var(--ok); } .chip.warn { background: var(--warn-soft); color: var(--warn); } .chip.bad { background: var(--bad-soft); color: var(--bad); }
+.chip.muted { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+.split { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px; }
+.strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }
+@media (max-width: 900px) { .two, .split, .strip { grid-template-columns: minmax(0, 1fr); } }
+
+ul.list { list-style: none; margin: 0; padding: 0; }
+ul.list li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; padding: 9px 0; border-top: 1px solid var(--line); align-items: baseline; }
+ul.list li:first-child { border-top: 0; padding-top: 0; }
+.what { overflow-wrap: anywhere; min-width: 0; }
+.tick { color: var(--ok); font-weight: 700; }
+.empty { color: var(--muted); }
+details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+
+.tablebox { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font: 600 11px var(--f-data); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.mono { font-family: var(--f-data); font-size: 12px; font-variant-numeric: tabular-nums; }
+.rail { display: flex; gap: 4px; min-width: 150px; }
+.rail span { height: 7px; flex: 1 1 0; border-radius: 4px; background: var(--line); }
+.rail span.on { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.rail span.done { background: var(--ok); } .rail span.stop { background: var(--bad); }
+.note { font-size: 12.5px; color: var(--muted); }
+
+.cards { display: grid; gap: 10px; }
+.card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 9px; background: color-mix(in srgb, var(--bg2) 50%, var(--panel)); }
+.card .h { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.card .app { font: 800 15px var(--f-display); text-transform: uppercase; letter-spacing: .04em; }
+.meters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.meter .v { font: 500 19px var(--f-data); font-variant-numeric: tabular-nums; }
+.meter .k { font-size: 11px; color: var(--muted); line-height: 1.3; }
+.meter .track { height: 5px; background: var(--line); border-radius: 3px; margin-top: 6px; overflow: hidden; }
+.meter .fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--ok)); width: 0; transition: width 1s ease; }
+
+.big { font: 800 34px/1 var(--f-display); font-variant-numeric: tabular-nums; background: linear-gradient(120deg, var(--ink), var(--accent)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.sub { font-size: 12.5px; color: var(--muted); margin-top: 5px; }
+.row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); align-items: baseline; }
+.row:first-of-type { border-top: 0; }
+.bars { display: grid; gap: 6px; margin-top: 10px; }
+.bars .b { display: grid; grid-template-columns: 170px minmax(0, 1fr) 44px; gap: 10px; align-items: center; font-size: 12.5px; }
+@media (max-width: 520px) { .bars .b { grid-template-columns: 110px minmax(0, 1fr) 36px; } }
+.bars .b .lab { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bars .b .track { height: 9px; background: var(--line); border-radius: 5px; overflow: hidden; }
+.bars .b .fill { height: 100%; background: linear-gradient(90deg, var(--builder), var(--accent)); transform-origin: left; animation: grow .9s ease both; }
+@keyframes grow { from { transform: scaleX(.02); } }
+.bars .b .n { font-family: var(--f-data); text-align: right; font-variant-numeric: tabular-nums; }
+code { font: 12.5px var(--f-data); }
+a { color: var(--accent); } a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  body::before, .pipe::after, .need::after, .dot.live, .bars .b .fill, h2 .count.pop { animation: none; }
+  .pipe::after { display: none; } .meter .fill { transition: none; }
+}
+</style>
+
+<div class="wrap">
+  <header class="bar">
+    <h1 id="title">Control Room</h1>
+    <span class="sp"></span>
+    <span class="fresh"><span class="dot" id="freshDot"></span><span id="freshText">connecting…</span></span>
+  </header>
+
+  <div class="hero">
+    <p class="big-title">What needs you, what's moving, <span class="v">what's proven</span>.</p>
+    <div class="pipe" id="pipe" aria-label="The fix loop">
+      <div class="stg" style="--c: var(--tester)"><i></i><b>Spec</b><span data-role="tester">Tester</span></div>
+      <div class="stg" style="--c: var(--builder)"><i></i><b>Build</b><span data-role="builder">Builder</span></div>
+      <div class="stg" style="--c: var(--accent)"><i></i><b>Local test</b><span data-role="tester">Tester</span></div>
+      <div class="stg" style="--c: var(--you)"><i></i><b>Deploy or review</b><span data-role="owner">You</span></div>
+      <div class="stg" style="--c: var(--tester)"><i></i><b>Live recheck</b><span data-role="tester">Tester</span></div>
+      <div class="stg" style="--c: var(--you)"><i></i><b>Merge</b><span data-role="owner">You</span></div>
+    </div>
+  </div>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <section>
+    <h2>Needs you <span class="count" id="c-need">—</span></h2>
+    <div class="needs" id="needs"><div class="panel empty">Loading what needs you…</div></div>
+    <details class="panel" style="margin-top:10px">
+      <summary style="margin:0">How to answer the agents</summary>
+      <ul class="list" style="margin-top:10px" id="howto"></ul>
+    </details>
+  </section>
+
+  <div class="two">
+    <section>
+      <h2>Waiting on others <span class="count" id="c-wait">—</span></h2>
+      <div class="panel"><ul class="list" id="waiting"><li class="empty">—</li></ul></div>
+    </section>
+    <section>
+      <h2>Done today <span class="count" id="c-done">—</span></h2>
+      <div class="panel"><ul class="list" id="done"><li class="empty">—</li></ul></div>
+    </section>
+  </div>
+
+  <section>
+    <h2>Requirements <span class="count" id="c-reqs">—</span></h2>
+    <div class="panel tablebox">
+      <table id="reqs"><thead><tr><th>Requirement</th><th>App</th><th>Checks tested</th><th>Readings</th><th id="th-verdict">Tester's verdict</th><th>Got past us</th></tr></thead>
+        <tbody><tr><td colspan="6" class="empty">No requirements registered yet.</td></tr></tbody></table>
+      <p class="note" id="reqs-note">Checks tested = acceptance checks with at least one test. Readings = the two agents' separate readings of the requirement agree. PASS needs both complete.</p>
+    </div>
+  </section>
+
+  <div class="split">
+    <section>
+      <h2>Hand-over loops <span class="count" id="c-loops">—</span></h2>
+      <div class="panel tablebox">
+        <table id="loops"><thead><tr><th>Hand-over</th><th>App</th><th>Stage</th><th>Round</th><th>Next</th><th>What was asked</th></tr></thead>
+          <tbody><tr><td colspan="6" class="empty">No open hand-overs.</td></tr></tbody></table>
+        <p class="note" id="loops-note">Stages: spec → build → local test (no deploy) → you: deploy or review first → live retest → done. Max 3 local + 3 live rounds.</p>
+      </div>
+    </section>
+    <section>
+      <h2>Test runs <span class="count" id="c-runs">—</span></h2>
+      <div class="panel"><ul class="list" id="testruns"><li class="empty">No test runs recorded yet.</li></ul>
+        <p class="note" id="runs-note">A builder's test result counts only after the tester's independent recheck.</p></div>
+      <h2 style="margin-top:18px" id="sc-title">Tester scorecard</h2>
+      <div class="panel cards" id="scorecard"><div class="empty">—</div></div>
+    </section>
+  </div>
+
+  <div class="strip">
+    <section><h2>Agents</h2><div class="panel" id="agents"><div class="empty">—</div></div></section>
+    <section><h2>App checks</h2><div class="panel"><div class="big" id="h-big">—</div><div class="sub">health endpoints answering as expected</div><details><summary>Show each check</summary><div id="health"></div></details></div></section>
+    <section><h2>Open PRs</h2><div class="panel"><div class="big" id="p-big">—</div><div class="sub">across the pair's repos</div><details><summary>Show PRs</summary><div id="prs"></div></details></div></section>
+    <section><h2>Dependabot</h2><div class="panel"><div class="big" id="a-big">—</div><div class="sub">open security alerts</div><div id="alerts"></div></div></section>
+  </div>
+
+  <div class="two">
+    <section>
+      <h2>Deploy approvals <span class="count" id="c-appr">—</span></h2>
+      <div class="panel"><ul class="list" id="approvals"><li class="empty">—</li></ul>
+        <p class="note">Approval windows you opened from chat: scope and expiry only.</p></div>
+    </section>
+    <section>
+      <h2>Reports <span class="count" id="c-rep">—</span></h2>
+      <div class="panel"><ul class="list" id="reports"><li class="empty">—</li></ul></div>
+    </section>
+  </div>
+
+  <section>
+    <h2>Activity today</h2>
+    <div class="panel">
+      <div class="note" id="act-note">What the agents did today, by kind. Every step is logged with secrets masked.</div>
+      <div class="bars" id="activity"></div>
+      <details><summary>Latest actions</summary><ul class="list" id="actions" style="margin-top:10px"></ul></details>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; };
+  const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); };
+  const safeUrl = (u) => (typeof u === "string" && /^https:\/\//i.test(u) ? u : null);
+  let snap = null;
+
+  function ago(iso) {
+    if (!iso) return "—";
+    const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+    if (isNaN(s)) return "—";
+    if (s < 90) return Math.round(s) + "s ago";
+    if (s < 5400) return Math.round(s / 60) + " min ago";
+    if (s < 172800) return Math.round(s / 3600) + " h ago";
+    return Math.round(s / 86400) + " days ago";
+  }
+  function until(iso) {
+    const m = (Date.parse(iso) - Date.now()) / 60000;
+    if (isNaN(m)) return null;
+    if (m < 0) return { text: "overdue", cls: "bad" };
+    if (m < 180) return { text: "due in " + Math.round(m) + " min", cls: "bad" };
+    if (m < 2880) return { text: "due in " + Math.round(m / 60) + " h", cls: m < 720 ? "bad" : "warn" };
+    return { text: "due in " + Math.round(m / 1440) + " days", cls: "warn" };
+  }
+  const hhmm = (iso) => { try { return new Date(iso).toISOString().slice(11, 16) + " UTC"; } catch (e) { return "—"; } };
+
+  // names come from the snapshot (pair.yaml), never from this file
+  const N = () => ({ owner: (snap && snap.owner) || "you", builder: (snap && snap.builder) || "Builder", tester: (snap && snap.tester) || "Tester" });
+  const lc = (s) => String(s || "").toLowerCase();
+
+  // bin/handoff states, in loop order
+  const STAGES = ["to-tester-spec", "to-builder", "to-tester-local", "awaiting-deploy", "to-tester", "done"];
+  const label = (st) => { const n = N(); return ({
+    "to-tester-spec": n.tester + " writing acceptance + design", "to-builder": n.builder + " building / fixing",
+    "to-tester-local": n.tester + " testing locally (no deploy)", "awaiting-deploy": "your call: deploy or review first",
+    "to-tester": n.tester + " retesting live", "done": "done: your review / merge",
+    "escalated": "stopped: needs you", "waiting-decision": "waiting on a person" })[st] || st; };
+  const CAT = { "file-edit": "files changed", "read": "files read", "other": "commands run", "deploy-blocked": "blocked by the deploy guard",
+    "git": "git", "git-push": "git pushes", "teams": "Teams posts", "slack": "Slack posts", "jira": "Jira", "kubectl-read": "cluster reads", "engram": "memory writes" };
+
+  function copyBtn(text) {
+    const b = el("button", null, "Copy"); b.type = "button";
+    b.addEventListener("click", () => {
+      const done = () => { b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1500); };
+      try { navigator.clipboard.writeText(text).then(done, () => { b.textContent = "Select it"; }); } catch (e) { b.textContent = "Select it"; }
+    });
+    return b;
+  }
+
+  function stallLimit() {   // schedule.stall_minutes (0 = watchdog stall check off → fall back to 45)
+    const s = Number(snap && snap.stall_minutes);
+    return s > 0 ? s : 45;
+  }
+  function staleAfter() {   // more than three missed ticks
+    const t = Number(snap && snap.tick_minutes);
+    return Math.max(10, 3 * (t > 0 ? t : 3));
+  }
+
+  function renderNames() {
+    const n = N();
+    const h = $("title"); clear(h);
+    if (snap && snap.project) h.appendChild(document.createTextNode(snap.project + " · "));
+    h.appendChild(el("span", "b", n.builder)); h.appendChild(document.createTextNode(" & ")); h.appendChild(el("span", "t", n.tester));
+    h.appendChild(document.createTextNode(" · Live"));
+    document.title = (snap && snap.project ? snap.project + " " : "") + "Control Room";
+    document.querySelectorAll("#pipe [data-role]").forEach((s) => { s.textContent = s.dataset.role === "owner" ? n.owner : n[s.dataset.role]; });
+    $("pipe").setAttribute("aria-label", "The fix loop: " + n.tester + " specs, " + n.builder + " builds, " + n.tester + " tests locally, " + n.owner + " decides, " + n.tester + " retests live, " + n.owner + " merges");
+    $("th-verdict").textContent = n.tester + "'s verdict";
+    $("sc-title").textContent = n.tester + " scorecard";
+    $("runs-note").textContent = n.builder + "'s test results count only after " + n.tester + "'s independent recheck.";
+    const ht = $("howto"); clear(ht);
+    [["reply", "In your chat self-chat or a DM, start the message with " + lc(n.builder) + " or " + lc(n.tester) + "."],
+     ["restart", "Send exactly \"" + lc(n.builder) + " restart\" or \"" + lc(n.tester) + " restart\" from your own account. The agent replies, then its watchdog gives it a fresh context (about 2 minutes)."],
+     ["approve", "Allow a cluster change: write \"approve <namespace> <minutes>\" (at most 120) in your self-chat. It must come from your account, be under 15 minutes old, and is used once."],
+     ["workspace", "Merges, secrets and protected namespaces still need you in the workspace."]].forEach(([k, t]) => {
+      const li = el("li"); li.appendChild(el("span", "chip" + (k === "approve" ? " warn" : k === "workspace" ? " muted" : ""), k)); li.appendChild(el("div", "what", t)); ht.appendChild(li);
+    });
+  }
+
+  function renderFresh() {
+    const dot = $("freshDot"), txt = $("freshText"), ban = $("banner");
+    if (!snap) return;
+    const age = (Date.now() - Date.parse(snap.ts)) / 60000, limit = stallLimit(), n = N();
+    dot.className = "dot " + (age <= staleAfter() ? "live" : age <= limit ? "stale" : "dead");
+    txt.textContent = "updated " + ago(snap.ts) + " (" + hhmm(snap.ts) + ")";
+    if (age > staleAfter()) {
+      ban.hidden = false; ban.className = "banner" + (age > limit ? " bad" : "");
+      ban.textContent = "No update for " + Math.round(age) + " minutes, so " + n.builder + "'s listener has probably stopped. " +
+        (age > limit ? "That is past the " + limit + "-minute stall limit; the watchdog should restart it. "
+                     : "The watchdog restarts it once it is " + limit + " minutes stale. ") +
+        "To restart it now, send \"" + lc(n.builder) + " restart\" in your self-chat. If nothing replies within 15 minutes, restart it from its workspace.";
+    } else ban.hidden = true;
+  }
+
+  function render() {
+    renderNames();
+    renderFresh();
+    if (!snap) return;
+    const B = snap.board || {}, loops = snap.loops || [], n = N();
+
+    // NEEDS YOU — hand-overs waiting on the owner + the curated board
+    const needs = $("needs"); clear(needs);
+    loops.filter((l) => ["awaiting-deploy", "done", "escalated"].includes(l.state)).forEach((l) => {
+      const c = el("div", "need loop");
+      const t = el("div", "t"); t.appendChild(el("span", null, String(l.app || "").toUpperCase() + ": " + label(l.state)));
+      t.appendChild(el("span", "chip", "round " + l.round)); c.appendChild(t);
+      c.appendChild(el("div", "why", l.request || ""));
+      const pr = safeUrl(l.pr); if (pr) { const a = el("a", null, "Open the PR"); a.href = pr; a.target = "_blank"; a.rel = "noopener"; c.appendChild(a); }
+      needs.appendChild(c);
+    });
+    (B.need || []).forEach((x) => {
+      const d = x.due ? until(x.due) : null;
+      const c = el("div", "need" + (d && d.cls === "bad" ? " due-soon" : ""));
+      const t = el("div", "t"); t.appendChild(el("span", null, x.title)); if (d) t.appendChild(el("span", "chip " + d.cls, d.text)); c.appendChild(t);
+      if (x.why) c.appendChild(el("div", "why", x.why));
+      if (x.how) { const h = el("div", "how"); h.appendChild(el("code", null, x.how)); h.appendChild(copyBtn(x.how)); c.appendChild(h); }
+      const lk = safeUrl(x.link); if (lk) { const a = el("a", null, "Open"); a.href = lk; a.target = "_blank"; a.rel = "noopener"; c.appendChild(a); }
+      needs.appendChild(c);
+    });
+    if (!needs.children.length) needs.appendChild(el("div", "panel empty", "Nothing needs you right now."));
+    $("c-need").textContent = needs.querySelectorAll(".need").length;
+
+    const list = (id, rows, fmt, emptyText) => { const u = $(id); clear(u); rows.forEach((r) => u.appendChild(fmt(r))); if (!rows.length) u.appendChild(el("li", "empty", emptyText)); return rows.length; };
+    $("c-wait").textContent = list("waiting", B.waiting || [], (w) => {
+      const li = el("li"); li.appendChild(el("span", "chip warn", w.who || "?"));
+      const d = el("div", "what"); d.appendChild(el("div", null, w.title)); d.appendChild(el("div", "note", "asked " + ago(w.since || w.at))); li.appendChild(d); return li;
+    }, "Not waiting on anyone.");
+    $("c-done").textContent = list("done", B.done || [], (x) => { const li = el("li"); li.appendChild(el("span", "tick", "✓")); li.appendChild(el("div", "what", x.title)); return li; }, "Nothing logged yet today.");
+
+    // HAND-OVER LOOPS
+    const tb = $("loops").tBodies[0]; clear(tb);
+    loops.forEach((l) => {
+      const tr = el("tr");
+      tr.appendChild(el("td", "mono", l.id)); tr.appendChild(el("td", null, String(l.app || "").toUpperCase()));
+      const st = el("td"); const rail = el("div", "rail"); const idx = STAGES.indexOf(l.state);
+      STAGES.forEach((s, i) => { const seg = el("span"); seg.className = l.state === "escalated" ? "stop" : l.state === "done" ? "done" : i <= idx ? "on" : ""; rail.appendChild(seg); });
+      st.appendChild(rail); st.appendChild(el("div", "note", label(l.state))); tr.appendChild(st);
+      tr.appendChild(el("td", "mono", l.local_round ? ("local " + l.local_round + " · live " + l.live_round) : l.round)); tr.appendChild(el("td", null, l.next || ""));
+      tr.appendChild(el("td", "what", (l.request || "") + (l.asked ? " (asked " + l.asked + ")" : ""))); tb.appendChild(tr);
+    });
+    if (!tb.rows.length) { const tr = el("tr"); const td = el("td", "empty", "No open hand-overs. When " + n.tester + " finds a code bug or specs a feature, it opens one here and " + n.builder + " picks it up."); td.colSpan = 6; tr.appendChild(td); tb.appendChild(tr); }
+    $("c-loops").textContent = loops.filter((l) => l.state !== "done").length;
+
+    // SCORECARD
+    const sc = $("scorecard"); clear(sc);
+    (snap.scorecard || []).forEach((c) => {
+      const card = el("div", "card"); const h = el("div", "h");
+      h.appendChild(el("span", "app", c.app));
+      h.appendChild(el("span", "chip " + (c.verdicts ? "" : "muted"), c.verdicts ? c.pass + " passed · " + c.fail + " failed" : "no test runs yet"));
+      card.appendChild(h);
+      const m = el("div", "meters");
+      [["right when checked", c.accuracy_pct, c.reviewed ? c.confirmed + " of " + c.reviewed : "none reviewed"],
+       ["planted bugs caught", c.mutation_pct, c.mutation_planted ? c.mutation_caught + " of " + c.mutation_planted : "none planted"],
+       ["rules with a test", c.coverage_pct, c.rules_total ? c.rules_covered + " of " + c.rules_total : "not mapped"]].forEach(([k, v, sub]) => {
+        const mm = el("div", "meter"); mm.appendChild(el("div", "v", v == null ? "—" : v + "%"));
+        mm.appendChild(el("div", "k", k)); mm.appendChild(el("div", "k", sub));
+        const trk = el("div", "track"); const f = el("div", "fill"); f.style.width = Math.max(0, Math.min(100, Number(v) || 0)) + "%"; trk.appendChild(f); mm.appendChild(trk); m.appendChild(mm);
+      });
+      card.appendChild(m);
+      if (!c.verdicts) card.appendChild(el("div", "note", "Empty until " + n.tester + " records its own verdicts for this app."));
+      if (c.uncovered_changed_rules) card.appendChild(el("div", "note", c.uncovered_changed_rules + " changed rule(s) still have no test"));
+      sc.appendChild(card);
+    });
+    if (!sc.children.length) sc.appendChild(el("div", "empty", "No apps configured."));
+
+    // REQUIREMENTS
+    const rb = $("reqs").tBodies[0]; clear(rb); const reqs = snap.requirements || [];
+    reqs.forEach((r) => {
+      const tr = el("tr"); const td0 = el("td", "what"); const u = safeUrl(r.url);
+      if (u) { const a = el("a", null, r.req); a.href = u; a.target = "_blank"; a.rel = "noopener"; td0.appendChild(a); } else td0.appendChild(el("span", "mono", r.req));
+      td0.appendChild(el("div", "note", r.title || "")); tr.appendChild(td0);
+      tr.appendChild(el("td", null, String(r.app || "").toUpperCase()));
+      const full = r.covered != null && r.covered === r.checks;
+      const c = el("td"); c.appendChild(el("span", "chip " + (full ? "ok" : "warn"), (r.covered ?? 0) + " / " + r.checks)); if (r.gaps) c.appendChild(el("div", "note", "gaps: " + r.gaps)); tr.appendChild(c);
+      tr.appendChild(el("td", null, r.readings === "yes" ? "agree" : r.readings === "no" ? "differ: asked requester" : "not compared yet"));
+      const v = el("td"); v.appendChild(el("span", "chip " + (r.verdict === "PASS" ? "ok" : r.verdict === "FAIL" ? "bad" : "muted"), r.verdict || "not tested"));
+      if (r.note) v.appendChild(el("div", "note", r.note)); tr.appendChild(v);
+      tr.appendChild(el("td", "mono", r.misses || 0)); rb.appendChild(tr);
+    });
+    if (!reqs.length) { const tr = el("tr"); const td = el("td", "empty", "No requirements registered yet. " + n.tester + " adds one when a ticket or request is taken."); td.colSpan = 6; tr.appendChild(td); rb.appendChild(tr); }
+    $("c-reqs").textContent = reqs.length;
+
+    // TEST RUNS — the builder's run and the tester's recheck that decides it
+    const tl = $("testruns"); clear(tl); const runs = snap.testruns || [];
+    runs.forEach((r) => {
+      const li = el("li"); const v = r.tester;
+      const decided = v && v.verdict;
+      li.appendChild(el("span", "chip " + (decided ? (v.verdict === "PASS" ? "ok" : v.verdict === "FAIL" ? "bad" : "warn") : "muted"),
+        decided ? n.tester + ": " + v.verdict : (r.by === "tester" ? n.tester + "'s own run" : "waiting for " + n.tester)));
+      const d = el("div", "what");
+      const who = r.by === "builder" ? n.builder : r.by === "tester" ? n.tester : (r.by || "?");
+      d.appendChild(el("div", null, String(r.app || "").toUpperCase() + " " + (r.kind || "") + " by " + who + ": " + r.passed + "/" + r.total + " passed" + (r.verdict ? " (" + r.verdict + ")" : "")));
+      if (decided) d.appendChild(el("div", "note", "recheck (" + (v.kind || "") + ") " + v.passed + "/" + v.total + (v.ref ? " · " + v.ref : "")));
+      if (r.note) d.appendChild(el("div", "note", r.note));
+      d.appendChild(el("div", "note", ago(r.ts) + (r.ref ? " · " + r.ref : ""))); li.appendChild(d); tl.appendChild(li);
+    });
+    if (!runs.length) tl.appendChild(el("li", "empty", "No test runs recorded yet."));
+    $("c-runs").textContent = runs.length;
+
+    // AGENTS
+    const ag = $("agents"); clear(ag);
+    Object.entries(snap.agents || {}).forEach(([role, a]) => {
+      const row = el("div", "row");
+      row.appendChild(el("strong", null, n[role] || role));
+      const age = a.last_action ? (Date.now() - Date.parse(a.last_action)) / 60000 : 1e9;
+      row.appendChild(el("span", "chip " + (age <= 15 ? "ok" : age <= 120 ? "warn" : "bad"),
+        a.last_action ? (age <= 15 ? "active " + ago(a.last_action) : "quiet, last " + ago(a.last_action)) : "no actions logged"));
+      ag.appendChild(row);
+      ag.appendChild(el("div", "note", (a.recent_actions || 0) + " step(s) today"));
+    });
+
+    // PLANT STRIP
+    const S = snap.summary || {};
+    $("h-big").textContent = (S.health_ok ?? "—") + " / " + (S.health_total ?? "—");
+    const hh = $("health"); clear(hh); (snap.health || []).forEach((h) => { const r = el("div", "row"); r.appendChild(el("span", "mono what", h.target || "")); r.appendChild(el("span", "chip " + (h.ok ? "ok" : "bad"), (h.code ?? "—") + (h.ok ? "" : " (want " + (h.expected ?? "?") + ")"))); hh.appendChild(r); });
+    if (!hh.children.length) hh.appendChild(el("div", "empty", "No health_url configured."));
+    $("p-big").textContent = S.prs_open ?? "—";
+    const pp = $("prs"); clear(pp); (snap.prs || []).forEach((p) => {
+      const r = el("div", "row"); const u = safeUrl(p.url); const txt = p.repo + " #" + p.number + " " + (p.title || "") + (p.draft ? " (draft)" : "");
+      const a = u ? el("a", "what", txt) : el("span", "what", txt); if (u) { a.href = u; a.target = "_blank"; a.rel = "noopener"; } r.appendChild(a);
+      r.appendChild(el("span", "chip " + (p.review === "APPROVED" ? "ok" : "muted"), (p.review === "APPROVED" ? "approved" : "not reviewed") + " · checks " + (p.checks_ok ?? 0) + "/" + (p.checks_total ?? 0)));
+      pp.appendChild(r); });
+    $("a-big").textContent = S.alerts_open ?? "—";
+    const al = $("alerts"); clear(al); (snap.alerts || []).forEach((a) => { const r = el("div", "row"); r.appendChild(el("span", null, a.repo || "")); r.appendChild(el("span", "mono", a.open == null ? "unknown" : a.open)); al.appendChild(r); });
+
+    // APPROVALS + REPORTS
+    const ap = snap.approvals || [];
+    $("c-appr").textContent = list("approvals", ap, (x) => { const li = el("li"); li.appendChild(el("span", "chip " + (x.status === "active" ? "warn" : "muted"), x.status || "?"));
+      const d = el("div", "what"); d.appendChild(el("div", "mono", x.scope || x.id || "")); d.appendChild(el("div", "note", "expires " + (x.expires || "—"))); li.appendChild(d); return li; }, "No approval windows.");
+    $("c-rep").textContent = list("reports", snap.reports || [], (x) => { const li = el("li"); li.appendChild(el("span", "chip muted", x.date || "—"));
+      li.appendChild(el("div", "what", x.title || x.summary || "(untitled report)")); return li; }, "No hand-over reports yet.");
+
+    // ACTIVITY (counts) + latest actions
+    const act = $("activity"); clear(act);
+    const rows = (snap.activity || []).slice(0, 10); const max = Math.max(1, ...rows.map((r) => r.n));
+    rows.forEach((r) => {
+      const b = el("div", "b"); b.appendChild(el("span", "lab", (n[r.agent] || r.agent || "") + " · " + (CAT[r.category] || r.category)));
+      const trk = el("div", "track"); const f = el("div", "fill"); f.style.width = (100 * r.n / max) + "%"; trk.appendChild(f); b.appendChild(trk);
+      b.appendChild(el("span", "n", r.n)); act.appendChild(b);
+    });
+    if (!rows.length) act.appendChild(el("div", "empty", "No steps logged today."));
+    $("act-note").textContent = "What the agents did today, by kind. Every step is logged with secrets masked." +
+      (S.guard_blocks_today ? " " + S.guard_blocks_today + " step(s) were stopped by the deploy guard (it blocks anything that could change a cluster)." : "");
+    list("actions", (snap.actions || []).slice(0, 30), (x) => { const li = el("li"); li.appendChild(el("span", "chip " + (x.needs === "owner" ? "warn" : "muted"), hhmm(x.ts)));
+      li.appendChild(el("div", "what", (n[x.agent] || x.agent || "?") + " · " + (CAT[x.category] || x.category || "") + " · " + (x.tool || "") + ": " + (x.summary || ""))); return li; }, "No actions logged.");
+  }
+
+  // count chips pop when their number changes
+  const prevCounts = {};
+  setInterval(() => document.querySelectorAll("h2 .count").forEach((c) => {
+    const v = c.textContent; if (prevCounts[c.id] !== undefined && prevCounts[c.id] !== v) { c.classList.remove("pop"); void c.offsetWidth; c.classList.add("pop"); }
+    prevCounts[c.id] = v; }), 1000);
+  setInterval(renderFresh, 30000);
+  renderNames();
+  (async () => {
+    const db = window.claude && window.claude.use ? await window.claude.use("db") : null;
+    if (!db) { $("freshText").textContent = "live data needs you signed in to claude.ai"; return; }
+    db.collection("snapshots").orderBy("ts", "desc").limit(1).onSnapshot(
+      (q) => { if (!q.empty) { snap = q.docs[0].data(); render(); } else { $("freshText").textContent = "waiting for the builder's first update"; } },
+      (e) => { $("freshText").textContent = "live feed stopped (" + ((e && e.code) || "error") + "), reload the page"; $("freshDot").className = "dot dead"; }
+    );
+  })();
+})();
+</script>

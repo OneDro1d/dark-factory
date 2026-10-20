@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""verdict — append ONE verdict / review / mutation / coverage record for the tester's scorecard.
+
+Holdout-safe by construction: records carry run ids, counts, scenario IDS and knowledge-base rule ids only —
+never scenario bodies, EXPECT values or kit file paths. The builder can read these files.
+
+  verdict verdict  --app <app> --run RUN_ID --verdict PASS|FAIL|UNVERIFIED \
+                   [--scope pr:<repo>#<n>|nightly|tag|manual] [--total N] [--failed N] \
+                   [--triage CODE_BUG|TEST_BUG|REQUIREMENT_GAP|FLAKE|INCONCLUSIVE] [--note "..."]
+  verdict review   --app <app> --run RUN_ID --outcome confirmed|overturned|flaky --by <reviewer> [--note "..."]
+  verdict mutation --app <app> --run RUN_ID --planted "what was broken (no secrets)" --caught N --total N
+  verdict coverage --app <app> --rules-total N --covered N [--uncovered RULE_ID ...] [--changed RULE_ID ...]
+  verdict --selftest
+
+<app> is one of pair.yaml repos[].app. The reviewer name defaults to "adversary" (pair.yaml rules.reviewer):
+a review is the independent adversarial reviewer's, recorded on the builder's side — the tester cannot review
+its own verdicts. Writes to <paths.ledger>/verdicts/<UTC date>.jsonl (coverage: verdicts/coverage-<app>.json,
+overwritten). Every text field goes through textguard, counts are range-checked, and a review must point at a
+recorded verdict.
+"""
+import argparse, datetime, json, os, pathlib, re, shutil, socket, subprocess, sys, tempfile, unicodedata
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "lib"))
+import textguard  # noqa: E402
+import pairconf  # noqa: E402
+
+
+def _initial_ns():
+    """Refuse inside an unshare'd namespace, where any process can set its own hostname (role spoof)."""
+    try:
+        return pairconf.initial_namespaces()          # strict by default; guard.workspace_mode: single relaxes it (pairconf.py)
+    except OSError:
+        return False
+
+
+def nonneg(*pairs):
+    for name, v in pairs:
+        if v is not None and v < 0:
+            sys.exit(f"refused: --{name} cannot be negative")
+
+
+def capped(v):
+    n = int(v)
+    if not 0 <= n <= 100000:
+        raise argparse.ArgumentTypeError("must be between 0 and 100000")
+    return n
+
+
+def run_id(v):
+    v = unicodedata.normalize("NFKC", v).strip()
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", v, re.ASCII):
+        raise argparse.ArgumentTypeError("run id: 1-80 of A-Z a-z 0-9 . _ : -")
+    return v
+
+
+def known_runs(D, app):
+    runs = set()
+    for f in D.glob("*.jsonl"):
+        for line in f.read_text().splitlines():
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            if r.get("kind") == "verdict" and r.get("app") == app:
+                runs.add(r.get("run_id"))
+    return runs
+
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv[:1] == ["--selftest"]:
+        return selftest()
+    cfg = pairconf.load()
+    apps = sorted(pairconf.apps(cfg))
+    reviewer = str(pairconf.get(cfg, "rules.reviewer", "adversary"))
+    D = pairconf.ledger_dir(cfg) / "verdicts"
+    p = argparse.ArgumentParser(allow_abbrev=False, description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="kind", required=True)
+    v = sub.add_parser("verdict"); r = sub.add_parser("review"); m = sub.add_parser("mutation"); c = sub.add_parser("coverage")
+    for s in (v, r, m, c):
+        s.add_argument("--app", required=True, choices=apps)
+    for s in (v, r, m):
+        s.add_argument("--run", required=True, type=run_id)
+    v.add_argument("--verdict", required=True, choices=["PASS", "FAIL", "UNVERIFIED"])
+    v.add_argument("--scope", default="manual")
+    v.add_argument("--total", type=capped); v.add_argument("--failed", type=capped)
+    v.add_argument("--triage", choices=["CODE_BUG", "TEST_BUG", "REQUIREMENT_GAP", "FLAKE", "INCONCLUSIVE"])
+    v.add_argument("--note", default="")
+    r.add_argument("--outcome", required=True, choices=["confirmed", "overturned", "flaky"])
+    r.add_argument("--by", required=True); r.add_argument("--note", default="")
+    m.add_argument("--planted", required=True); m.add_argument("--caught", type=capped, required=True)
+    m.add_argument("--total", type=capped, required=True)
+    c.add_argument("--rules-total", type=capped, required=True); c.add_argument("--covered", type=capped, required=True)
+    c.add_argument("--uncovered", nargs="*", default=[]); c.add_argument("--changed", nargs="*", default=[])
+    a = p.parse_args(argv)
+    agent = pairconf.role(cfg) if _initial_ns() else "untrusted"
+    if agent not in ("builder", "tester"):
+        sys.exit("refused: only the pair's own workspaces (builder.host / tester.host in pair.yaml) record verdicts")
+    D.mkdir(parents=True, exist_ok=True)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    row = {"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": a.kind, "app": a.app, "agent": agent}
+    if a.kind == "coverage":
+        textguard.check(a.uncovered, a.changed)
+        nonneg(("rules-total", a.rules_total), ("covered", a.covered))
+        if a.rules_total < 1:
+            sys.exit("refused: --rules-total must be at least 1")
+        if a.covered > a.rules_total:
+            sys.exit("refused: --covered > --rules-total")
+        if len(a.uncovered) > a.rules_total - a.covered:
+            sys.exit("refused: more uncovered ids than uncovered rules")
+        row.update(rules_total=a.rules_total, covered=a.covered, uncovered=a.uncovered, changed_uncovered=a.changed)
+        (D / f"coverage-{a.app}.json").write_text(json.dumps(row))
+        print(f"coverage {a.app}: {a.covered}/{a.rules_total}"); return 0
+    textguard.check(a.run)
+    row["run_id"] = a.run
+    if a.kind == "verdict":
+        textguard.check(a.note, a.scope)
+        nonneg(("total", a.total), ("failed", a.failed))
+        if a.total is not None and a.failed is not None and a.failed > a.total:
+            sys.exit("refused: --failed > --total")
+        if a.run in known_runs(D, a.app):
+            sys.exit(f"refused: run {a.run} ({a.app}) already has a verdict — one verdict per run")
+        if a.verdict in ("PASS", "FAIL") and (a.total is None or a.total < 1):
+            sys.exit("refused: PASS/FAIL needs --total >= 1 (how many scenarios ran)")
+        if a.verdict == "PASS" and (a.failed or 0) != 0:
+            sys.exit("refused: PASS with failed > 0")
+        if a.verdict == "FAIL" and (a.failed is None or a.failed < 1):
+            sys.exit("refused: FAIL needs --failed >= 1")
+        row.update(verdict=a.verdict, scope=a.scope, total=a.total, failed=a.failed, triage=a.triage, note=a.note)
+    elif a.kind == "review":
+        textguard.check(a.note, a.by)
+        if agent == "tester":
+            sys.exit("refused: the tester cannot record reviews of its own verdicts — the review is recorded on the builder's side")
+        if a.by != reviewer:
+            sys.exit(f"refused: reviews come from the independent reviewer only (--by {reviewer})")
+        if a.run not in known_runs(D, a.app):
+            sys.exit(f"refused: no verdict recorded for run {a.run} ({a.app}) — a review must review a real verdict")
+        row.update(outcome=a.outcome, by=a.by, note=a.note)
+    else:
+        textguard.check(a.planted)
+        if a.run not in known_runs(D, a.app):
+            sys.exit(f"refused: no verdict recorded for run {a.run} ({a.app}) — record the mutation run's verdict first")
+        nonneg(("caught", a.caught), ("total", a.total))
+        if any(r.get("kind") == "mutation" and r.get("run_id") == a.run for f in D.glob("*.jsonl")
+               for r in (json.loads(l) for l in f.read_text().splitlines() if l.strip().startswith("{"))):
+            sys.exit(f"refused: run {a.run} already has a mutation record — one per run")
+        if a.total < 1:
+            sys.exit("refused: --total must be at least 1 planted bug")
+        if a.caught > a.total:
+            sys.exit("refused: caught > total")
+        row.update(planted=a.planted, caught=a.caught, total=a.total)
+    with open(D / f"{now:%Y-%m-%d}.jsonl", "a") as f:
+        f.write(json.dumps(row) + "\n")
+    print(f"recorded {a.kind} {a.app} {a.run}")
+    return 0
+
+
+def selftest():
+    base = pathlib.Path(f"/tmp/claude-{os.getuid()}") if pathlib.Path(f"/tmp/claude-{os.getuid()}").is_dir() else pathlib.Path(tempfile.gettempdir())
+    t = pathlib.Path(tempfile.mkdtemp(prefix="verdict-selftest-", dir=base))
+    host = socket.gethostname()
+    bad = 0
+
+    def cfg(role):
+        p = t / f"pair-{role}.yaml"
+        bh, th = (host, "other-host") if role == "builder" else ("other-host", host)
+        p.write_text(f"project: {{name: S, slug: s}}\nowner: {{name: O}}\nbuilder: {{name: B, host: {bh}}}\n"
+                     f"tester: {{name: T, host: {th}}}\npaths: {{shared_root: {t}, ledger: {t}/ledger}}\n"
+                     "repos:\n  - {app: api, github: example/api, base: main}\nrules: {reviewer: adversary}\n")
+        return str(p)
+
+    def run(role, *a):
+        env = dict(os.environ, PAIR_CONFIG=cfg(role))
+        return subprocess.run([sys.executable, os.path.realpath(__file__), *a], env=env, capture_output=True, text=True)
+
+    def expect(name, r, ok):
+        nonlocal bad
+        good = (r.returncode == 0) == ok
+        bad += not good
+        print("PASS" if good else "FAIL", name, "" if good else (r.stdout + r.stderr)[-200:])
+
+    try:
+        expect("tester verdict PASS", run("tester", "verdict", "--app", "api", "--run", "r-1", "--verdict", "PASS", "--total", "5", "--failed", "0"), True)
+        expect("one verdict per run", run("tester", "verdict", "--app", "api", "--run", "r-1", "--verdict", "PASS", "--total", "5", "--failed", "0"), False)
+        expect("PASS with failures refused", run("tester", "verdict", "--app", "api", "--run", "r-2", "--verdict", "PASS", "--total", "5", "--failed", "1"), False)
+        expect("FAIL without failures refused", run("tester", "verdict", "--app", "api", "--run", "r-3", "--verdict", "FAIL", "--total", "5", "--failed", "0"), False)
+        expect("unknown app refused", run("tester", "verdict", "--app", "nope", "--run", "r-4", "--verdict", "UNVERIFIED"), False)
+        expect("expected value in note refused", run("tester", "verdict", "--app", "api", "--run", "r-5", "--verdict", "UNVERIFIED", "--note", "should return 409"), False)
+        expect("tester may not review itself", run("tester", "review", "--app", "api", "--run", "r-1", "--outcome", "confirmed", "--by", "adversary"), False)
+        expect("builder records the reviewer's review", run("builder", "review", "--app", "api", "--run", "r-1", "--outcome", "confirmed", "--by", "adversary"), True)
+        expect("other reviewer name refused", run("builder", "review", "--app", "api", "--run", "r-1", "--outcome", "confirmed", "--by", "someone"), False)
+        expect("review of an unknown run refused", run("builder", "review", "--app", "api", "--run", "r-9", "--outcome", "confirmed", "--by", "adversary"), False)
+        expect("mutation record", run("tester", "mutation", "--app", "api", "--run", "r-1", "--planted", "removed the limit check", "--caught", "1", "--total", "1"), True)
+        expect("second mutation for run refused", run("tester", "mutation", "--app", "api", "--run", "r-1", "--planted", "x", "--caught", "1", "--total", "1"), False)
+        expect("coverage", run("tester", "coverage", "--app", "api", "--rules-total", "4", "--covered", "3", "--uncovered", "RULE-7"), True)
+        expect("coverage over total refused", run("tester", "coverage", "--app", "api", "--rules-total", "4", "--covered", "5"), False)
+    finally:
+        shutil.rmtree(t, ignore_errors=True)
+    print("ALL PASS" if not bad else f"{bad} FAILED")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

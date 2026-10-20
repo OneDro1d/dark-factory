@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
+"""reqstatus — one row per requirement: its acceptance checks, the tester's coverage, the last verdict, the gaps,
+and the bugs that got past the pair.
+
+  reqstatus add  --req PAY-1234 --app <app> --title "<summary>" --checks N [--url <ticket url>]
+                 [--engram <requirement node id>]                                   (tester, when it writes the spec)
+  reqstatus readings --req PAY-1234 --agree yes|no [--note "<which checks differ>"] (tester, after comparing the
+                                                                                     builder's reading with its spec)
+  reqstatus cover --req PAY-1234 --covered M [--gaps "check 3; check 5"]            (tester: checks with >=1 scenario)
+  reqstatus result --req PAY-1234 --verdict PASS|FAIL|UNVERIFIED --run <run id>      (tester)
+  reqstatus miss --req PAY-1234 --what "<plain words>" --found-by "<who/where>"      (anyone: a bug got past testing)
+  reqstatus list
+  reqstatus --selftest
+
+--req is a ticket key (ABC-123) or a request id (req-YYYYMMDD-xxxx). --app must be one of pair.yaml repos[].app.
+Data: <paths.ledger>/requirements.jsonl (append-only events; the current row is folded from them).
+Counts and ids only — never scenario bodies or expected values (holdout). Tester-only verbs are refused on the
+builder's host, on unlisted hosts, and inside a separate namespace. A PASS only stands while every acceptance check
+is covered and the builder's reading agrees with the spec.
+"""
+import argparse, datetime, json, os, pathlib, re, shutil, socket, subprocess, sys, tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+import pairconf  # noqa: E402
+
+REQ_RE = re.compile(r"([A-Z][A-Z0-9]{1,9}-[0-9]{1,7}|req-[0-9]{8}-[a-z0-9]{4,12})", re.ASCII)
+
+
+def _initial_ns():
+    try:
+        return pairconf.initial_namespaces()          # strict by default; guard.workspace_mode: single relaxes it (pairconf.py)
+    except OSError:
+        return False
+
+
+def plain(s, n=300):
+    s = (s or "").strip()[:n]
+    if re.search(r"(?i)(password|secret|token)\s*[:=]|[A-Za-z0-9+/_-]{40,}", s):
+        sys.exit("refused: keep it plain words (no secret-looking text, no scenario bodies)")
+    return s
+
+
+def rows(L):
+    return [json.loads(l) for l in L.read_text().splitlines() if l.strip()] if L.exists() else []
+
+
+def fold(L):
+    cur = {}
+    for e in rows(L):
+        r = cur.setdefault(e["req"], {"req": e["req"], "misses": []})
+        if e["ev"] == "add":
+            if "checks" in r and (r.get("checks"), r.get("title"), r.get("app")) != (e.get("checks"), e.get("title"), e.get("app")):
+                for k in ("readings_agree", "readings_note", "covered", "gaps", "verdict", "run", "verdict_at"):
+                    r.pop(k, None)
+            r.update({k: e[k] for k in ("app", "title", "checks", "url", "engram") if k in e}); r["added"] = e["ts"]
+        elif e["ev"] == "readings":
+            r["readings_agree"] = e["agree"]; r["readings_note"] = e.get("note", "")
+        elif e["ev"] == "cover":
+            r["covered"] = e["covered"]; r["gaps"] = e.get("gaps", "")
+        elif e["ev"] == "result":
+            r["verdict"] = e["verdict"]; r["run"] = e["run"]; r["verdict_at"] = e["ts"]
+        elif e["ev"] == "miss":
+            r["misses"].append({"what": e["what"], "found_by": e["found_by"], "ts": e["ts"]})
+        r["updated"] = e["ts"]
+    for r in cur.values():   # a PASS only stands while its preconditions still hold
+        if r.get("verdict") == "PASS" and not (r.get("covered") == r.get("checks") and r.get("readings_agree") == "yes"):
+            r["verdict"] = "UNVERIFIED (PASS no longer holds)"
+    return cur
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(allow_abbrev=False, description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--selftest", action="store_true")
+    sub = ap.add_subparsers(dest="cmd")
+    a = sub.add_parser("add", allow_abbrev=False); a.add_argument("--req", required=True); a.add_argument("--app", required=True)
+    a.add_argument("--title", required=True); a.add_argument("--checks", type=int, required=True); a.add_argument("--url", default=""); a.add_argument("--engram", default="")
+    r = sub.add_parser("readings", allow_abbrev=False); r.add_argument("--req", required=True); r.add_argument("--agree", required=True, choices=["yes", "no"]); r.add_argument("--note", default="")
+    c = sub.add_parser("cover", allow_abbrev=False); c.add_argument("--req", required=True); c.add_argument("--covered", type=int, required=True); c.add_argument("--gaps", default="")
+    s = sub.add_parser("result", allow_abbrev=False); s.add_argument("--req", required=True); s.add_argument("--verdict", required=True, choices=["PASS", "FAIL", "UNVERIFIED"]); s.add_argument("--run", required=True)
+    m = sub.add_parser("miss", allow_abbrev=False); m.add_argument("--req", required=True); m.add_argument("--what", required=True); m.add_argument("--found-by", required=True)
+    sub.add_parser("list", allow_abbrev=False)
+    x = ap.parse_args(argv)
+    if x.selftest:
+        return selftest()
+    if not x.cmd:
+        ap.error("a command is required")
+    if not _initial_ns():
+        sys.exit("refused: running inside a separate namespace — the agent identity cannot be trusted here")
+    cfg = pairconf.load()
+    BY = pairconf.role(cfg)
+    L = pairconf.ledger_dir(cfg) / "requirements.jsonl"
+
+    def write(ev, **kw):
+        L.parent.mkdir(parents=True, exist_ok=True)
+        row = {"ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "by": BY, "ev": ev, **kw}
+        with open(L, "a") as f:
+            f.write(json.dumps(row) + "\n")
+        print("recorded", ev, kw.get("req"))
+
+    if x.cmd == "list":
+        for q in fold(L).values():
+            print(f"{q['req']:12} {q.get('app','?'):8} checks {q.get('covered','-')}/{q.get('checks','?')} "
+                  f"readings={q.get('readings_agree','-')} verdict={q.get('verdict','-')} misses={len(q['misses'])}  {q.get('title','')[:60]}")
+        return 0
+    if BY not in ("builder", "tester"):
+        sys.exit("refused: only the pair's own workspaces (builder.host / tester.host in pair.yaml) record requirements")
+    if not REQ_RE.fullmatch(x.req):
+        sys.exit("refused: --req must be a ticket key (ABC-123) or a request id (req-YYYYMMDD-xxxx)")
+    known = fold(L)
+    if x.cmd == "add":
+        if BY != "tester":
+            sys.exit("refused: the tester (product owner) registers requirements when it writes the spec")
+        apps = pairconf.apps(cfg)
+        if x.app not in apps:
+            sys.exit(f"refused: unknown app {x.app!r}; pair.yaml repos: {', '.join(apps) or '(none)'}")
+        if not 0 < x.checks <= 200:
+            sys.exit("refused: --checks is the number of acceptance checks (1..200)")
+        write("add", req=x.req, app=x.app, title=plain(x.title, 160), checks=x.checks, url=plain(x.url, 200), engram=plain(x.engram, 64))
+        return 0
+    if x.req not in known or "checks" not in known[x.req]:
+        sys.exit("refused: unknown requirement — the tester registers it first (`reqstatus add`)")
+    if x.cmd == "miss":
+        write("miss", req=x.req, what=plain(x.what), found_by=plain(x.found_by, 160)); return 0
+    if BY != "tester":
+        sys.exit("refused: only the tester records readings, coverage and verdicts")
+    if x.cmd == "readings":
+        write("readings", req=x.req, agree=x.agree, note=plain(x.note))
+    elif x.cmd == "cover":
+        if not 0 <= x.covered <= known[x.req]["checks"]:
+            sys.exit("refused: --covered must be between 0 and the number of acceptance checks")
+        write("cover", req=x.req, covered=x.covered, gaps=plain(x.gaps))
+    elif x.cmd == "result":
+        q = known[x.req]
+        if x.verdict == "PASS" and (q.get("covered") != q["checks"] or q.get("readings_agree") != "yes"):
+            sys.exit("refused: PASS needs every acceptance check covered and the readings agreed — record UNVERIFIED")
+        write("result", req=x.req, verdict=x.verdict, run=plain(x.run, 120))
+    return 0
+
+
+def selftest():
+    base = pathlib.Path(f"/tmp/claude-{os.getuid()}") if pathlib.Path(f"/tmp/claude-{os.getuid()}").is_dir() else pathlib.Path(tempfile.gettempdir())
+    t = pathlib.Path(tempfile.mkdtemp(prefix="reqstatus-selftest-", dir=base))
+    host = socket.gethostname()
+    bad = 0
+
+    def cfg(role):
+        p = t / f"pair-{role}.yaml"
+        bh, th = (host, "other-host") if role == "builder" else ("other-host", host)
+        p.write_text(f"project: {{name: S, slug: s}}\nowner: {{name: O}}\nbuilder: {{name: B, host: {bh}}}\n"
+                     f"tester: {{name: T, host: {th}}}\npaths: {{shared_root: {t}, ledger: {t}/ledger}}\n"
+                     "repos:\n  - {app: api, github: example/api, base: main}\n")
+        return str(p)
+
+    def run(role, *a):
+        env = dict(os.environ, PAIR_CONFIG=cfg(role))
+        return subprocess.run([sys.executable, os.path.realpath(__file__), *a], env=env, capture_output=True, text=True)
+
+    def expect(name, r, ok):
+        nonlocal bad
+        good = (r.returncode == 0) == ok
+        bad += not good
+        print("PASS" if good else "FAIL", name, "" if good else (r.stdout + r.stderr)[-200:])
+
+    try:
+        expect("builder may not add", run("builder", "add", "--req", "PAY-1", "--app", "api", "--title", "limits", "--checks", "3"), False)
+        expect("tester adds", run("tester", "add", "--req", "PAY-1", "--app", "api", "--title", "limits", "--checks", "3"), True)
+        expect("unknown app refused", run("tester", "add", "--req", "PAY-2", "--app", "nope", "--title", "x", "--checks", "1"), False)
+        expect("bad req key refused", run("tester", "add", "--req", "pay 1", "--app", "api", "--title", "x", "--checks", "1"), False)
+        expect("PASS before coverage refused", run("tester", "result", "--req", "PAY-1", "--verdict", "PASS", "--run", "r1"), False)
+        expect("cover 3/3", run("tester", "cover", "--req", "PAY-1", "--covered", "3"), True)
+        expect("cover beyond checks refused", run("tester", "cover", "--req", "PAY-1", "--covered", "4"), False)
+        expect("readings agree", run("tester", "readings", "--req", "PAY-1", "--agree", "yes"), True)
+        expect("builder may not record a verdict", run("builder", "result", "--req", "PAY-1", "--verdict", "PASS", "--run", "r1"), False)
+        expect("tester PASS", run("tester", "result", "--req", "PAY-1", "--verdict", "PASS", "--run", "r1"), True)
+        expect("builder records a miss", run("builder", "miss", "--req", "PAY-1", "--what", "limit off by one", "--found-by", "owner"), True)
+        expect("secret-looking text refused", run("builder", "miss", "--req", "PAY-1", "--what", "token: abc", "--found-by", "x"), False)
+        r = run("tester", "list"); ok = "PAY-1" in r.stdout and "verdict=PASS" in r.stdout and "misses=1" in r.stdout
+        bad += not ok; print("PASS" if ok else "FAIL", "list folds the row", "" if ok else r.stdout)
+        run("tester", "cover", "--req", "PAY-1", "--covered", "2")
+        r = run("tester", "list"); ok = "PASS no longer holds" in r.stdout
+        bad += not ok; print("PASS" if ok else "FAIL", "PASS drops when coverage falls", "" if ok else r.stdout)
+    finally:
+        shutil.rmtree(t, ignore_errors=True)
+    print("ALL PASS" if not bad else f"{bad} FAILED")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

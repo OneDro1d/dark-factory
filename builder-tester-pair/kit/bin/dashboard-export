@@ -1,0 +1,543 @@
+#!/usr/bin/env python3
+"""dashboard-export — build the Control Room datasets (JSON) from what the builder and tester actually did.
+
+  dashboard-export [out_dir=<paths.ledger>/dashboard]
+  dashboard-export --selftest
+
+Writes one JSON file per dataset into out_dir (bin/dashboard-live-snapshot folds them into one document):
+  actions.json       ledger rows (<paths.ledger>/<day>.jsonl), last 2 days, newest first, masked
+  needs.json         ledger rows waiting on the owner (needs == "owner"), minus <ledger>/resolved.json
+  approvals.json     READ-ONLY listing of <paths.approvals>/appr-*.json: id, scope, expiry, status — nothing else
+  prs.json           open PRs per repos[].github (needs `gh`; fails soft to an empty list)
+  alerts.json        open Dependabot alerts per repos[].github (needs `gh`; a failed query is `open: null`, never 0)
+  health.json        status code of each repos[].health_url (optional; repos without one are skipped)
+  reports.json       hand-over reports in <paths.ledger>/reports/*.json
+  scorecard.json     the tester's track record from bin/verdict (<paths.ledger>/verdicts/)
+  testruns.json      bin/testrun rows, each builder run paired with the tester's recheck
+  requirements.json  bin/reqstatus rows, folded and re-checked
+  loops.json         bin/handoff hand-overs that pass handoff's own integrity check
+
+Health settings (per repos[] entry, all optional):
+  health_url: https://…    health_expect: "200"    health_insecure: false (true = skip TLS verification)
+The URL is never written out — the row is labelled with the app name; only the status code is recorded.
+
+Secrets: every string goes through the ledger's own mask (kit/hooks/ledger_common.py), then the whole dataset is
+scanned for secret shapes and the export REFUSES (exit 1, nothing written for that dataset) if any remain.
+`gh` output is metadata only; probes record status codes only; no file is ever printed.
+Env: PAIR_CONFIG, PAIR_LEDGER_DIR, PAIR_APPROVALS_DIR (as the other tools), DASHBOARD_GH (gh binary override).
+"""
+import datetime, glob, json, os, pathlib, re, shutil, ssl, subprocess, sys, tempfile, time, urllib.error, urllib.request
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "lib"))
+sys.path.insert(0, str(HERE.parent / "hooks"))
+import pairconf  # noqa: E402
+
+# Fail closed: anything that still looks like a secret after masking blocks the dataset.
+SCAN = re.compile(r"odts_[A-Za-z0-9]{6}|gh[pousr]_[A-Za-z0-9]{6}|github_pat_|xox[abposr]-[A-Za-z0-9]|"
+                  r"eyJ[A-Za-z0-9_-]{10}|sk-ant-[A-Za-z0-9]|(?:AKIA|ASIA)[A-Z0-9]{8}|://[^/\s:@<\"]+:[^@\s/<\"]+@|"
+                  r"(?i:password|passwd|secret|token)[\"']?\s*[=:]\s*[\"']?(?!<MASKED>)[A-Za-z0-9+/_-]{6}")
+
+
+def approval_row(a, now=None):
+    """Scope + expiry only. Any other field of an approval file (who, where, notes) is never exported."""
+    now = time.time() if now is None else now
+    exp = a.get("expires", 0)
+    return {"id": str(a.get("id", ""))[:60], "scope": str(a.get("scope", ""))[:120],
+            "expires": str(a.get("expires_iso", ""))[:40],
+            "status": "active" if isinstance(exp, (int, float)) and exp > now else "expired"}
+
+
+def _int(v):  # a real, bounded int — Python's bool is an int subclass and must not count
+    return type(v) is int and -1 < v <= 100000
+
+
+def ok_verdict(v):
+    t, f = v.get("total"), v.get("failed")
+    if v.get("verdict") not in ("PASS", "FAIL", "UNVERIFIED") or not v.get("run_id"):
+        return False
+    if v["verdict"] == "UNVERIFIED":
+        return (t is None or (_int(t) and t >= 0)) and (f is None or (_int(f) and f >= 0))
+    return _int(t) and t >= 1 and _int(f if f is not None else 0) and \
+        ((v["verdict"] == "PASS" and (f or 0) == 0) or (v["verdict"] == "FAIL" and _int(f) and 1 <= f <= t))
+
+
+def jsonl(path):
+    out = []
+    try:
+        lines = pathlib.Path(path).read_text().splitlines()
+    except Exception:
+        return out
+    for line in lines:
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            pass
+    return out
+
+
+def export(out_dir=None):
+    import ledger_common as LC   # the same masking the ledger uses
+    cfg = pairconf.load()
+    ledger = pathlib.Path(os.environ.get("PAIR_LEDGER_DIR") or pairconf.ledger_dir(cfg))
+    out = pathlib.Path(out_dir) if out_dir else ledger / "dashboard"
+    out.mkdir(parents=True, exist_ok=True)
+    now_dt = datetime.datetime.now(datetime.timezone.utc)
+    stamp = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    apps = pairconf.apps(cfg)
+    names = {"builder": pairconf.name(cfg, "builder"), "tester": pairconf.name(cfg, "tester"),
+             "owner": pairconf.get(cfg, "owner.name", "the owner")}
+    gh = os.environ.get("DASHBOARD_GH") or shutil.which("gh")
+
+    def clean(v):
+        if isinstance(v, str):
+            return LC.mask(v)
+        if isinstance(v, list):
+            return [clean(x) for x in v]
+        if isinstance(v, dict):
+            return {k: clean(x) for k, x in v.items()}
+        return v
+
+    def dump(name, rows):
+        rows = clean(rows)
+        text = json.dumps(rows, indent=0)
+        hits = SCAN.findall(text)
+        if hits:
+            sys.exit(f"REFUSED: {name}.json still matches {len(hits)} secret shape(s) after masking — "
+                     f"nothing written. Fix the source row; never upload it.")
+        with open(out / f"{name}.json", "w") as f:
+            f.write(text)
+        print(f"{name}.json  {len(rows)} rows")
+
+    def sh(args, timeout=60):
+        try:
+            r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+            return r.returncode, r.stdout
+        except Exception:
+            return 1, ""
+
+    # actions — last 2 days, newest first, capped
+    rows = []
+    for day in sorted(glob.glob(str(ledger / "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].jsonl")))[-2:]:
+        for r in jsonl(day):
+            if not isinstance(r, dict):
+                continue
+            rows.append({"ts": str(r.get("ts", "")), "agent": str(r.get("agent", "")), "phase": r.get("phase", "done"),
+                         "category": r.get("category", ""), "tool": str(r.get("tool", "")).split("__")[-1],
+                         "summary": str(r.get("summary", "")), "needs": r.get("needs", ""),
+                         "approval": r.get("approval", "")})
+    rows.sort(key=lambda r: r["ts"], reverse=True)
+    # Resolved items stay in the append-only ledger; resolved.json says why they no longer need the owner.
+    try:
+        resolved = {x["ts"]: x["reason"] for x in json.loads((ledger / "resolved.json").read_text())}
+    except Exception:
+        resolved = {}
+    for r in rows:
+        if r["ts"] in resolved and r["needs"] == "owner":
+            r["needs"], r["resolved"] = "", resolved[r["ts"]]
+    dump("actions", rows[:600])
+    dump("needs", [r for r in rows if r["needs"] == "owner"][:100])
+
+    # approvals — read-only listing, scope + expiry only
+    adir = pathlib.Path(os.environ.get("PAIR_APPROVALS_DIR") or str(pairconf.get(cfg, "paths.approvals") or "")
+                        or str(ledger / "approvals")).expanduser()
+    ap = []
+    for f in sorted(glob.glob(str(adir / "appr-*.json"))):
+        try:
+            if os.path.islink(f):
+                continue
+            ap.append(approval_row(json.loads(pathlib.Path(f).read_text())))
+        except Exception:
+            pass
+    dump("approvals", ap)
+
+    # PRs — open, with check tallies; Dependabot — open alert count per repo
+    prs, al = [], []
+    for app, rp in apps.items():
+        repo = rp.get("github")
+        if not repo:
+            continue
+        if not gh:
+            al.append({"repo": app, "open": None, "error": "gh not installed", "at": stamp})
+            continue
+        rc, txt = sh([gh, "pr", "list", "-R", repo, "--state", "open", "--json",
+                      "number,title,author,url,reviewDecision,isDraft,statusCheckRollup,headRefName,baseRefName"])
+        try:
+            plist = json.loads(txt) if rc == 0 and txt.strip() else []
+        except Exception:
+            plist = []
+        for p in plist:
+            checks = p.get("statusCheckRollup") or []
+            done = [c for c in checks if (c.get("conclusion") or c.get("state"))]
+            ok = [c for c in done if (c.get("conclusion") or c.get("state", "")).upper() in ("SUCCESS", "NEUTRAL", "SKIPPED")]
+            prs.append({"pr": f'{app} #{p.get("number")}', "repo": app, "number": p.get("number"),
+                        "title": p.get("title", ""), "author": (p.get("author") or {}).get("login", ""),
+                        "base": p.get("baseRefName", ""), "checks_ok": len(ok), "checks_total": len(checks),
+                        "review": p.get("reviewDecision") or "none", "draft": p.get("isDraft", False), "url": p.get("url", "")})
+        rc, txt = sh([gh, "api", f"repos/{repo}/dependabot/alerts?state=open", "--paginate", "-q", ".[].number"])
+        # count lines, never a paginated length; a FAILED query is unknown (null), not zero
+        al.append({"repo": app, "open": len([l for l in txt.splitlines() if l.strip()]) if rc == 0 else None,
+                   **({} if rc == 0 else {"error": "query failed"}), "at": stamp})
+    dump("prs", prs)
+    dump("alerts", al)
+
+    # health — status codes of repos[].health_url (optional); the URL itself is never written out
+    hl = []
+    for app, rp in apps.items():
+        url = rp.get("health_url")
+        if not url:
+            continue
+        want = str(rp.get("health_expect", "200"))
+        ctx = ssl._create_unverified_context() if rp.get("health_insecure") else None
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=10, context=ctx) as resp:
+                code = str(resp.status)
+        except urllib.error.HTTPError as e:
+            code = str(e.code)
+        except Exception:
+            code = "000"
+        hl.append({"target": f"{app} health", "expected": want, "code": code, "ok": code == want, "at": stamp})
+    dump("health", hl)
+
+    # reports — hand-over reports agents write to <ledger>/reports/*.json
+    rep = []
+    for f in sorted(glob.glob(str(ledger / "reports" / "*.json"))):
+        try:
+            x = json.loads(pathlib.Path(f).read_text())
+            if isinstance(x, dict):
+                rep.append(x)
+        except Exception:
+            pass
+    rep.sort(key=lambda r: str(r.get("date", "")), reverse=True)
+    dump("reports", rep)
+
+    # scorecard — the tester's track record (bin/verdict). Accuracy = reviewed verdicts the independent reviewer
+    # CONFIRMED; overturned/flaky count against it. Mutation = planted bugs caught. Coverage = rules with >= 1
+    # scenario. No scenario content is ever in these files.
+    vd = ledger / "verdicts"
+    ev = []
+    for f in sorted(glob.glob(str(vd / "*.jsonl"))):
+        ev.extend(jsonl(f))
+    reviewer = str(pairconf.get(cfg, "rules.reviewer", "adversary"))
+    severity = {"overturned": 3, "flaky": 2, "confirmed": 1}   # the WORST review of a run sticks
+    sc = []
+    for app in sorted(apps):
+        e = [x for x in ev if isinstance(x, dict) and x.get("app") == app]
+        dropped = 0
+        by_run = {}
+        for v in (x for x in e if x.get("kind") == "verdict"):
+            by_run.setdefault(v.get("run_id"), []).append(v)
+        verd = []
+        for run, vs in by_run.items():           # contradictory duplicates for one run → none of them count
+            if len(vs) == 1 and ok_verdict(vs[0]):
+                verd.append(vs[0])
+            else:
+                dropped += len(vs)
+        runs = {v["run_id"] for v in verd}
+        rev = {}
+        for x in (x for x in e if x.get("kind") == "review"):
+            if x.get("run_id") in runs and x.get("outcome") in severity and x.get("by") == reviewer and x.get("agent") == "builder":
+                cur = rev.get(x["run_id"])
+                if cur is None or severity[x["outcome"]] > severity[cur["outcome"]]:
+                    rev[x["run_id"]] = x
+            else:
+                dropped += 1
+        mut = []
+        for x in (x for x in e if x.get("kind") == "mutation"):
+            if x.get("run_id") in runs and _int(x.get("caught")) and _int(x.get("total")) and 0 <= x["caught"] <= x["total"] and x["total"] >= 1:
+                mut.append(x)
+            else:
+                dropped += 1
+        dropped += sum(1 for x in e if x.get("kind") not in ("verdict", "review", "mutation", "coverage"))
+        outcomes = [r["outcome"] for r in rev.values()]
+        reviewed = len(outcomes)
+        cov = {}
+        try:
+            cov = json.loads((vd / f"coverage-{app}.json").read_text())
+            if not (isinstance(cov, dict) and _int(cov.get("rules_total")) and _int(cov.get("covered"))
+                    and cov["rules_total"] >= 1 and 0 <= cov["covered"] <= cov["rules_total"]):
+                cov, dropped = {}, dropped + 1
+        except FileNotFoundError:
+            pass
+        except Exception:
+            cov, dropped = {}, dropped + 1
+        caught, planted = sum(m["caught"] for m in mut), sum(m["total"] for m in mut)
+        sc.append({
+            "app": app, "verdicts": len(verd),
+            "pass": sum(v["verdict"] == "PASS" for v in verd), "fail": sum(v["verdict"] == "FAIL" for v in verd),
+            "unverified": sum(v["verdict"] == "UNVERIFIED" for v in verd),
+            "reviewed": reviewed, "confirmed": outcomes.count("confirmed"),
+            "overturned": outcomes.count("overturned"), "flaky": outcomes.count("flaky"),
+            "accuracy_pct": round(100 * outcomes.count("confirmed") / reviewed) if reviewed else None,
+            "mutation_caught": caught, "mutation_planted": planted,
+            "mutation_pct": round(100 * caught / planted) if planted else None,
+            "rules_total": cov.get("rules_total"), "rules_covered": cov.get("covered"),
+            "coverage_pct": round(100 * cov["covered"] / cov["rules_total"]) if cov.get("rules_total") else None,
+            "uncovered_changed_rules": len(cov.get("changed_uncovered", []) or []),
+            "last_run": max((str(v.get("ts", "")) for v in verd), default=None),
+            "rows_dropped_invalid": dropped,
+            "status": "no runs yet" if not verd else "active",
+        })
+    dump("scorecard", sc)
+
+    # testruns — every recorded run (bin/testrun); a builder run is paired with the tester's recheck
+    tr_rows = [r for r in jsonl(ledger / "testruns.jsonl") if isinstance(r, dict)]
+    rech = {r["recheck_of"]: r for r in tr_rows if r.get("by") == "tester" and r.get("recheck_of")}
+    trs = []
+    for r in tr_rows:
+        if r.get("by") != "builder" and r.get("recheck_of"):
+            continue
+        v = rech.get(r.get("ts")) if r.get("by") == "builder" else None
+        try:   # never trust a stored verdict: re-derive it from the counts (rows are hand-editable)
+            tot, pas, fai = int(r.get("total")), int(r.get("passed")), int(r.get("failed"))
+        except (TypeError, ValueError):
+            continue
+        if r.get("verdict") == "PASS" and not (tot > 0 and pas == tot and fai == 0):
+            r["verdict"] = "UNVERIFIED"
+        if r.get("verdict") == "FAIL" and fai == 0:
+            r["verdict"] = "UNVERIFIED"
+        trs.append({"ts": r.get("ts"), "by": r.get("by"), "app": r.get("app"), "kind": r.get("kind"),
+                    "passed": r.get("passed"), "total": r.get("total"), "failed": r.get("failed"), "verdict": r.get("verdict"),
+                    "ref": str(r.get("ref", ""))[:120], "note": str(r.get("note", ""))[:160],
+                    "tester": ({"verdict": v.get("verdict"), "kind": v.get("kind"), "passed": v.get("passed"),
+                                "total": v.get("total"), "ref": str(v.get("ref", ""))[:120], "ts": v.get("ts")} if v else None)})
+    trs.sort(key=lambda r: r.get("ts") or "", reverse=True)
+    dump("testruns", trs[:30])
+
+    # requirements — one row per requirement (bin/reqstatus events); the tester owns add/readings/cover/result
+    rq = {}
+    for e in jsonl(ledger / "requirements.jsonl"):
+        if not isinstance(e, dict):
+            continue
+        r = rq.setdefault(e.get("req"), {"req": e.get("req"), "misses": 0})
+        kind, by = e.get("ev"), e.get("by")
+        if kind == "add" and by == "tester":
+            if "checks" in r and (r.get("checks"), r.get("title"), r.get("app")) != (e.get("checks"), str(e.get("title", ""))[:160], e.get("app")):
+                for k in ("readings", "covered", "gaps", "verdict", "run", "verdict_at"):   # re-scoped
+                    r.pop(k, None)
+            r.update(app=e.get("app"), title=str(e.get("title", ""))[:160], checks=e.get("checks"), url=str(e.get("url", ""))[:200])
+        elif kind == "readings" and by == "tester":
+            r["readings"] = e.get("agree")
+        elif kind == "cover" and by == "tester":
+            r["covered"] = e.get("covered"); r["gaps"] = str(e.get("gaps", ""))[:200]
+        elif kind == "result" and by == "tester":
+            r["verdict"] = e.get("verdict"); r["run"] = str(e.get("run", ""))[:120]; r["verdict_at"] = e.get("ts")
+        elif kind == "miss":
+            r["misses"] += 1
+        r["updated"] = e.get("ts")
+    req_re = re.compile(r"([A-Z][A-Z0-9]{1,9}-[0-9]{1,7}|req-[0-9]{8}-[a-z0-9]{4,12})", re.ASCII)
+    rq_ok, rq_bad = [], 0
+    for r in rq.values():   # never trust a stored row: re-check id, app, numbers and the PASS preconditions
+        ch, cv = r.get("checks"), r.get("covered")
+        if not (isinstance(r.get("req"), str) and req_re.fullmatch(r["req"]) and r.get("app") in apps
+                and type(ch) is int and 0 < ch <= 200 and (cv is None or (type(cv) is int and 0 <= cv <= ch))
+                and r.get("verdict") in (None, "PASS", "FAIL", "UNVERIFIED")):
+            rq_bad += 1
+            continue
+        if r.get("verdict") == "PASS" and not (cv == ch and r.get("readings") == "yes"):
+            r["verdict"] = "UNVERIFIED"; r["note"] = "stored PASS failed the re-check (coverage or readings)"
+        rq_ok.append(r)
+    if rq_bad:
+        print(f"requirements: {rq_bad} row(s) failed validation and were left out", file=sys.stderr)
+    dump("requirements", sorted(rq_ok, key=lambda r: r.get("updated") or "", reverse=True)[:60])
+
+    # loops — the tester ⇄ builder fix loop (bin/handoff), only hand-overs that pass handoff's integrity check
+    nxt = {"to-tester-spec": f"{names['tester']} (write acceptance + design)", "to-builder": f"{names['builder']} (build / fix)",
+           "to-tester-local": f"{names['tester']} (local test, no deploy)",
+           "awaiting-deploy": f"{names['owner']} (deploy or review first)", "to-tester": f"{names['tester']} (live retest)",
+           "waiting-decision": "person asked", "done": f"{names['owner']} (review / merge)",
+           "escalated": f"{names['owner']} (stopped)"}
+    lp, lp_dropped = [], 0
+    files = sorted(glob.glob(str(ledger / "handoffs" / "ho-*.json")))
+    if files:
+        try:
+            import importlib.machinery, importlib.util
+            spec = importlib.util.spec_from_loader("handoff_mod", importlib.machinery.SourceFileLoader("handoff_mod", str(HERE / "handoff")))
+            ho = importlib.util.module_from_spec(spec); spec.loader.exec_module(ho)
+        except BaseException as exc:   # handoff refuses to load (e.g. sandboxed): show nothing rather than unchecked rows
+            print(f"loops: handoff could not be loaded ({type(exc).__name__}); {len(files)} hand-over(s) left out", file=sys.stderr)
+            files, ho = [], None
+        for f in files:
+            try:
+                h = json.loads(pathlib.Path(f).read_text())
+            except Exception:
+                lp_dropped += 1
+                continue
+            if ho.valid(h, pathlib.Path(f).stem) or not ho.audit_ok(h):
+                lp_dropped += 1
+                continue
+            lp.append({"id": h["id"], "app": h["app"], "state": h["state"], "round": f"{h['round']}/3", "kind": h.get("kind", "bug"),
+                       "local_round": f"{h.get('local_round', 0)}/3", "live_round": f"{h.get('live_round', 0)}/3",
+                       "commit": str(h.get("commit", ""))[:12], "next": nxt.get(h["state"], "?"),
+                       "request": h.get("request", ""), "requester": h.get("requester", ""), "pr": h.get("pr", ""),
+                       "runs": h.get("runs", []), "asked": (h.get("question") or {}).get("who", ""),
+                       "created": h.get("created"), "updated": h.get("updated")})
+    lp.sort(key=lambda r: r.get("updated") or "", reverse=True)
+    if lp_dropped:
+        print(f"loops: {lp_dropped} hand-over file(s) failed the integrity check and were left out", file=sys.stderr)
+    dump("loops", lp)
+    return out
+
+
+# ------------------------------------------------------------------------------------------------ selftest
+def selftest():
+    import http.server, threading
+    base = pathlib.Path(f"/tmp/claude-{os.getuid()}") if pathlib.Path(f"/tmp/claude-{os.getuid()}").is_dir() else pathlib.Path(tempfile.gettempdir())
+    t = pathlib.Path(tempfile.mkdtemp(prefix="dashboard-export-selftest-", dir=base))
+    bad = 0
+
+    def check(name, ok, detail=""):
+        nonlocal bad
+        bad += not ok
+        print("PASS" if ok else "FAIL", name, "" if ok else str(detail)[-300:])
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200 if self.path == "/ok" else 404); self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    try:
+        led = t / "ledger"
+        (led / "verdicts").mkdir(parents=True)
+        (led / "reports").mkdir()
+        fake_gh = t / "gh"
+        fake_gh.write_text("#!/bin/sh\ncase \"$*\" in\n"
+                           "  *'pr list'*) echo '[{\"number\":7,\"title\":\"fix limits\",\"author\":{\"login\":\"bot\"},"
+                           "\"url\":\"https://example.invalid/pr/7\",\"reviewDecision\":null,\"isDraft\":false,\"baseRefName\":\"main\","
+                           "\"statusCheckRollup\":[{\"conclusion\":\"SUCCESS\"},{\"conclusion\":\"FAILURE\"}]}]';;\n"
+                           "  *example/web/dependabot*) exit 1;;\n"
+                           "  *dependabot*) printf '11\\n12\\n13\\n';;\nesac\n")
+        fake_gh.chmod(0o755)
+        cfgp = t / "pair.yaml"
+        cfgp.write_text(f"project: {{name: S, slug: s}}\nowner: {{name: Olive}}\n"
+                        f"builder: {{name: Bob, host: bt-builder-host}}\ntester: {{name: Tess, host: bt-tester-host}}\n"
+                        f"paths: {{shared_root: {t}, ledger: {led}}}\nrules: {{reviewer: adversary}}\n"
+                        "repos:\n"
+                        f"  - {{app: api, github: example/api, base: main, health_url: 'http://127.0.0.1:{port}/ok'}}\n"
+                        f"  - {{app: web, github: example/web, base: main, health_url: 'http://127.0.0.1:{port}/nope'}}\n"
+                        "  - {app: docs, base: main}\n")
+        day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        ts = day + "T10:00:00Z"
+        tok = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2"       # assembled at run time; a fake shape, never a real token
+        led.joinpath(f"{day}.jsonl").write_text("\n".join(json.dumps(x) for x in [
+            {"ts": ts, "agent": "builder", "category": "git-push", "tool": "Bash", "summary": "git push origin fix"},
+            {"ts": day + "T10:01:00Z", "agent": "builder", "category": "deploy-blocked", "tool": "Bash",
+             "summary": "kubectl apply -n api-dev", "needs": "owner"},
+            {"ts": day + "T10:02:00Z", "agent": "tester", "category": "other", "tool": "Bash",
+             "summary": f"curl -H 'Authorization: Bearer {tok}' x"},
+            {"ts": day + "T10:03:00Z", "agent": "builder", "category": "deploy-blocked", "tool": "Bash",
+             "summary": "helm upgrade", "needs": "owner"},
+        ]) + "\nnot json\n")
+        led.joinpath("resolved.json").write_text(json.dumps([{"ts": day + "T10:03:00Z", "reason": "owner deployed it"}]))
+        led.joinpath("board.json").write_text(json.dumps({"need": [{"id": "b1", "title": "approve api deploy"}], "waiting": [], "done": []}))
+        (led / "verdicts" / f"{day}.jsonl").write_text("\n".join(json.dumps(x) for x in [
+            {"kind": "verdict", "app": "api", "run_id": "r1", "verdict": "PASS", "total": 5, "failed": 0, "ts": ts, "agent": "tester"},
+            {"kind": "verdict", "app": "api", "run_id": "r2", "verdict": "PASS", "total": 5, "failed": 2, "ts": ts, "agent": "tester"},
+            {"kind": "review", "app": "api", "run_id": "r1", "outcome": "confirmed", "by": "adversary", "agent": "builder"},
+            {"kind": "review", "app": "api", "run_id": "r1", "outcome": "confirmed", "by": "someone", "agent": "builder"},
+            {"kind": "mutation", "app": "api", "run_id": "r1", "caught": 3, "total": 4},
+        ]) + "\n")
+        (led / "verdicts" / "coverage-api.json").write_text(json.dumps({"rules_total": 10, "covered": 7}))
+        led.joinpath("testruns.jsonl").write_text("\n".join(json.dumps(x) for x in [
+            {"ts": ts, "by": "builder", "app": "api", "kind": "unit", "total": 4, "passed": 3, "failed": 1, "verdict": "PASS", "ref": "abc"},
+            {"ts": day + "T11:00:00Z", "by": "tester", "app": "api", "kind": "argus", "total": 4, "passed": 4, "failed": 0,
+             "verdict": "PASS", "ref": "run-9", "recheck_of": ts},
+        ]) + "\n")
+        led.joinpath("requirements.jsonl").write_text("\n".join(json.dumps(x) for x in [
+            {"ts": ts, "by": "tester", "ev": "add", "req": "PAY-1", "app": "api", "title": "limits", "checks": 3},
+            {"ts": ts, "by": "tester", "ev": "cover", "req": "PAY-1", "covered": 2},
+            {"ts": ts, "by": "tester", "ev": "result", "req": "PAY-1", "verdict": "PASS", "run": "r1"},
+            {"ts": ts, "by": "builder", "ev": "add", "req": "PAY-2", "app": "api", "title": "builder may not add", "checks": 1},
+            {"ts": ts, "by": "tester", "ev": "add", "req": "PAY-3", "app": "nope", "title": "unknown app", "checks": 1},
+        ]) + "\n")
+        (led / "handoffs").mkdir()
+        (led / "handoffs" / "ho-20260101-abcdef.json").write_text(json.dumps(
+            {"id": "ho-20260101-abcdef", "app": "api", "state": "done", "round": 1, "local_round": 1, "live_round": 1, "history": []}))
+        (led / "reports" / "r1.json").write_text(json.dumps({"date": day, "title": "weekly", "body": "password=hunter22secret"}))
+
+        env = dict(os.environ, PAIR_CONFIG=str(cfgp), DASHBOARD_GH=str(fake_gh))
+        env.pop("PAIR_LEDGER_DIR", None); env.pop("PAIR_APPROVALS_DIR", None)
+        outd = t / "out"
+        r = subprocess.run([sys.executable, str(pathlib.Path(__file__).resolve()), str(outd)], env=env, capture_output=True, text=True, timeout=120)
+        check("export runs", r.returncode == 0, r.stdout + r.stderr)
+        ds = lambda n: json.loads((outd / f"{n}.json").read_text())
+        allout = "".join((outd / f).read_text() for f in os.listdir(outd)) if outd.is_dir() else ""
+        check("no token value in any dataset", tok not in allout and "hunter22secret" not in allout)
+        check("token value never printed", tok not in r.stdout + r.stderr)
+        acts = ds("actions")
+        check("actions: 4 rows, newest first, bad line skipped", len(acts) == 4 and acts[0]["ts"] > acts[-1]["ts"], acts)
+        check("actions: bearer masked", any("<MASKED>" in a["summary"] for a in acts), acts)
+        nd = ds("needs")
+        check("needs: owner rows minus resolved", len(nd) == 1 and nd[0]["summary"].startswith("kubectl"), nd)
+        check("approvals: missing folder -> empty list", ds("approvals") == [])
+        row = approval_row({"id": "appr-x", "scope": "api-dev", "expires": 10, "expires_iso": "1970", "by": "Olive",
+                            "where": "chat 123", "created": 1}, now=5)
+        check("approval_row: scope + expiry only", set(row) == {"id", "scope", "expires", "status"} and row["status"] == "active", row)
+        check("approval_row: expired", approval_row({"expires": 1}, now=5)["status"] == "expired")
+        pr = ds("prs")
+        check("prs: one per github repo, checks tallied", len(pr) == 2 and pr[0]["checks_ok"] == 1 and pr[0]["checks_total"] == 2, pr)
+        al = {a["repo"]: a for a in ds("alerts")}
+        check("alerts: counted lines", al.get("api", {}).get("open") == 3, al)
+        check("alerts: failed query is null, not 0", al.get("web", {}).get("open") is None and "docs" not in al, al)
+        hl = {h["target"]: h for h in ds("health")}
+        check("health: GREEN case", hl.get("api health", {}).get("ok") is True, hl)
+        check("health: RED case", hl.get("web health", {}).get("ok") is False and hl["web health"]["code"] == "404", hl)
+        check("health: repo without health_url skipped, URL never written", len(hl) == 2 and "127.0.0.1" not in json.dumps(hl), hl)
+        sc = {s["app"]: s for s in ds("scorecard")}
+        a = sc.get("api", {})
+        check("scorecard: valid verdict counted, bad PASS dropped", a.get("verdicts") == 1 and a.get("rows_dropped_invalid") == 2, a)
+        check("scorecard: accuracy/mutation/coverage", a.get("accuracy_pct") == 100 and a.get("mutation_pct") == 75 and a.get("coverage_pct") == 70, a)
+        trs = ds("testruns")
+        check("testruns: stored PASS re-derived, recheck paired",
+              len(trs) == 1 and trs[0]["verdict"] == "UNVERIFIED" and trs[0]["tester"]["verdict"] == "PASS", trs)
+        rq = ds("requirements")
+        check("requirements: PASS without coverage downgraded, invalid rows dropped",
+              len(rq) == 1 and rq[0]["req"] == "PAY-1" and rq[0]["verdict"] == "UNVERIFIED", rq)
+        check("reports: masked", ds("reports") and "<MASKED>" in json.dumps(ds("reports")))
+        check("loops: hand-written hand-over fails handoff's integrity check and is left out",
+              ds("loops") == [] and "failed the integrity check" in r.stderr, r.stderr)
+
+        # fail closed: a secret shape the mask does not know must REFUSE the dataset
+        (led / "reports" / "r2.json").write_text(json.dumps({"date": day, "note": "https://" + "u:" + "p4ssw0rdX@host"}))
+        r2 = subprocess.run([sys.executable, str(pathlib.Path(__file__).resolve()), str(t / "out2")], env=env, capture_output=True, text=True, timeout=120)
+        masked = r2.returncode == 0 and "p4ssw0rdX" not in (t / "out2" / "reports.json").read_text()
+        refused = r2.returncode != 0 and "REFUSED" in r2.stdout + r2.stderr
+        check("unknown secret shape: masked or refused, never exported", masked or refused, r2.stdout + r2.stderr)
+        check("unknown secret shape: value never printed", "p4ssw0rdX" not in r2.stdout + r2.stderr)
+        (led / "reports" / "r2.json").unlink()
+
+        # end to end: the live snapshot builds from this export
+        snap_out = t / "snap" / "live-snapshot.json"
+        r3 = subprocess.run([sys.executable, str(HERE / "dashboard-live-snapshot"), str(snap_out)], env=env,
+                            capture_output=True, text=True, timeout=240)
+        print("  dashboard-live-snapshot:", (r3.stdout + r3.stderr).strip()[-400:])
+        try:
+            snap = json.loads(snap_out.read_text())
+        except Exception as exc:
+            snap = {"error": str(exc)}
+        check("snapshot builds", r3.returncode == 0 and "summary" in snap, r3.stdout + r3.stderr)
+        s = snap.get("summary", {})
+        check("snapshot summary from fixture", s.get("needs_you") == 1 and s.get("prs_open") == 2 and s.get("alerts_open") == 3
+              and s.get("health_ok") == 1 and s.get("health_total") == 2, s)
+        check("snapshot names come from pair.yaml (the page hard-codes none)",
+              (snap.get("project"), snap.get("owner"), snap.get("builder"), snap.get("tester"), snap.get("stall_minutes"))
+              == ("S", "Olive", "Bob", "Tess", 45), {k: snap.get(k) for k in ("project", "owner", "builder", "tester", "stall_minutes")})
+        if os.environ.get("DASHBOARD_SELFTEST_KEEP_SNAPSHOT"):   # leave a copy of the fixture snapshot for page checks
+            shutil.copy(snap_out, os.environ["DASHBOARD_SELFTEST_KEEP_SNAPSHOT"])
+        check("snapshot carries no token value", tok not in snap_out.read_text() if snap_out.exists() else False)
+    finally:
+        srv.shutdown()
+        shutil.rmtree(t, ignore_errors=True)
+    print("ALL PASS" if not bad else f"{bad} FAILED")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["--selftest"]:
+        sys.exit(selftest())
+    export(sys.argv[1] if len(sys.argv) > 1 else None)

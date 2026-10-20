@@ -1,0 +1,22 @@
+# Long-lived token for the read-only agent ServiceAccount (k8s/agent-readonly.yaml). The OWNER applies this; agents never do.
+#
+# Why: `kubectl create token` is often capped by the cluster (e.g. 24h even when 720h is requested), so the agents lose
+# their read access every day. A kubernetes.io/service-account-token Secret does not expire.
+# Trade-off (the owner's choice): the token is valid until this Secret is deleted. It carries ONLY what the
+# agent-readonly ServiceAccount is bound to (read-only: no secrets, no writes, no exec).
+# Revoke instantly:  kubectl --context <ctx> -n <sa-namespace> delete secret agent-readonly-token
+# Note: Kubernetes >= 1.29 marks a manually created token Secret invalid after about a year UNUSED; daily use keeps it live.
+#
+# Placeholders (make-agent-kubeconfig.sh --no-expiry fills them in when it prints the apply command):
+#   __SA_NAMESPACE__   the namespace the agent-readonly ServiceAccount lives in
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agent-readonly-token
+  namespace: __SA_NAMESPACE__
+  annotations:
+    kubernetes.io/service-account.name: agent-readonly
+  labels:
+    app.kubernetes.io/part-of: builder-tester-agents
+    purpose: agent-readonly-kubeconfig
+type: kubernetes.io/service-account-token

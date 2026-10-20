@@ -1,0 +1,861 @@
+#!/usr/bin/env python3
+# Engram is the memory store named here. What it is and how to reach it is documented in exactly one place: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
+"""knowledge-refresh — keep the project's knowledge base in step with every commit.
+
+  knowledge-refresh check            which apps moved since the pinned (verified) commit, and which pages
+                                     cite a changed file → those pages are STALE. Exit 0 current, 3 stale.
+  knowledge-refresh advance <app>    after the stale pages were re-verified at the new head and written to
+                                     Engram: move the read-only source pin to that head (builder only).
+  knowledge-refresh flag --page <path or title> --reason "<plain words>" [--run <run id>]
+                                     a test result contradicts a page (tester, or builder) → page is STALE.
+  knowledge-refresh flags            open flags.
+  knowledge-refresh close-flag <id> --note ".."   after the page was re-verified (builder only).
+  knowledge-refresh impact <app> <from-sha> <to-sha>
+                                     which REQUIREMENTS a change touches: changed files → pages citing them →
+                                     requirement nodes linked to those pages (graph/edges.jsonl, relation REQUIRES,
+                                     one hop further through ENFORCES / USES / CALLS). The tester re-runs THOSE
+                                     requirements' checks first.
+  knowledge-refresh link --from "<title>" --to "<title>" --relation <REL> [--evidence "<file:line or PR>"]
+                                     add one edge to the knowledge graph (graph/edges.jsonl); the relation must be
+                                     one of knowledge.relations. Same edge twice = no-op. Each end may be a page
+                                     title, a drafts path (<area>/<kind>--<slug>), an Engram title, or a requirement
+                                     key/title. The edge stores both Engram ids and starts as `engram: pending`; the
+                                     tool prints the exact engram_link call to make.
+  knowledge-refresh link --confirm --from .. --to .. --relation <REL> --neighbors <file>
+                                     after engram_link: save the raw engram_neighbors result to a file; the edge is
+                                     marked linked only if that result lists it (ids + relation).
+  knowledge-refresh confirm --neighbors <file> [<file> ...]
+                                     mark linked every edge those saved engram_neighbors results list (bulk / adopting
+                                     an existing library: one engram_neighbors call per node).
+  knowledge-refresh pending          graph edges not yet confirmed in Engram, with the call to make for each.
+  knowledge-refresh requirement --key <ticket or hand-over id> --title "<requirement — …>" --id <engram uuid>
+                                     register a requirement node written to Engram (tester or builder), so REQUIRES
+                                     edges can point at it.
+  knowledge-refresh record --page <drafts path> --event new|updated|reverified|bug [--sha <commit>]
+                                     the builder logs a page it published (ledger knowledge-log.jsonl) and, with
+                                     knowledge.git_history, commits the library so every change has history.
+                                     Add --engram-id <uuid> once the page is written to Engram (engram_write with
+                                     the title the tool prints); a page without one keeps its graph edges pending.
+  knowledge-refresh graph            nodes / edges per relation / pages no edge touches (orphans).
+  knowledge-refresh unbuilt          areas with no pages yet (fresh setup, or a repo added later); exit 3 if any.
+                                     `check` reports them too, so the builder builds them on its next tick.
+  knowledge-refresh status           pages per area and kind, graph size, pins, last log events (no network).
+  knowledge-refresh --selftest       run the built-in test with a throw-away pair.yaml and git repos.
+
+Settings (pair.yaml):
+  repos[]: app, github (or remote: any git URL / path), base, optional deployed, optional knowledge_branch
+  knowledge.*: areas, kinds, relations, branch (which branch the library grows from: deployed | base | <name>,
+           or per app), lines (extra branches of one app), ignore, common_files, grow_on, git_history — see
+           kit/lib/kb.py and docs/KNOWLEDGE.md. All optional; defaults give a working library.
+  paths.knowledge_drafts   drafts/<area>/<kind>--<slug>.md  — the pages, mirrored to Engram `engram.knowledge`
+  paths.knowledge_src      src/<app> = read-only worktrees pinned at the verified commits
+  The library folder is the parent of knowledge_drafts: it also holds flags.jsonl, graph/edges.jsonl and
+  graph/ids.json (page → Engram id + Engram title; requirement nodes).
+
+Pages are only rewritten after re-verification against the code (cite file:line, an adversary samples the
+claims) — this tool finds WHAT to refresh; it never writes a page itself. Never: secrets, test scenarios.
+"""
+import argparse, datetime, json, os, pathlib, re, shutil, socket, subprocess, sys, tempfile, uuid
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+import pairconf  # noqa: E402
+import kb  # noqa: E402
+
+
+def _initial_ns():
+    try:
+        return pairconf.initial_namespaces()          # strict by default; guard.workspace_mode: single relaxes it (pairconf.py)
+    except OSError:
+        return False
+
+
+def git(*a, cwd=None):
+    return subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True, timeout=180)
+
+
+def remote_url(r):
+    if r.get("remote"):
+        return str(r["remote"])
+    return f"https://github.com/{r['github']}.git"
+
+
+def setup():
+    cfg = pairconf.load()
+    try:
+        s = kb.settings(cfg)
+    except ValueError as e:
+        sys.exit("pair.yaml knowledge settings:\n" + str(e))
+    return cfg, s
+
+
+def head(f):
+    out = git("ls-remote", remote_url(f["repo"]), f"refs/heads/{f['branch']}")
+    m = re.match(r"([0-9a-f]{40})", out.stdout)
+    return m.group(1) if m else None
+
+
+def pages_citing(drafts, lib, paths, s):
+    """A page is stale when it cites a changed file by its repo path, or by its last two/three path parts when the
+    file name is distinctive. knowledge.ignore (default vendor/, node_modules/, lock files) never counts."""
+    keys = {}
+    for p in paths:
+        if kb.ignored(p, s["ignore"]):
+            continue
+        parts = p.split("/")
+        ks = {p}
+        if len(parts) >= 3:
+            ks.add("/".join(parts[-3:]))
+        if parts[-1] not in s["common_files"] and len(parts) >= 2:
+            ks.add("/".join(parts[-2:]))
+        keys[p] = ks
+    hits = {}
+    for pg in sorted(drafts.rglob("*.md")):
+        text = pg.read_text(errors="replace")
+        for p, ks in keys.items():
+            if any(re.search(r"(?<![\w.-])" + re.escape(k) + r"(?![\w-])", text) for k in ks):
+                hits.setdefault(str(pg.relative_to(lib)), []).append(p)
+    return hits
+
+
+def open_flags(flags):
+    if not flags.exists():
+        return []
+    rows = [json.loads(l) for l in flags.read_text().splitlines() if l.strip()]
+    closed = {r["closes"] for r in rows if r.get("closes")}
+    return [r for r in rows if not r.get("closes") and r.get("id", r["ts"]) not in closed]
+
+
+def unbuilt(s):
+    """What the knowledge base still lacks: [(area, apps, what)] — what = "pages" for an area with no pages yet (a fresh
+    setup, or a repo / area added to pair.yaml later), "deploy" for an area that holds an app's deployment knowledge
+    (kb.deploy_home) but has no deploy--<app>…md page for it yet."""
+    out = []
+    kinds = [k["name"] for k in s["kinds"]]
+    for a in s["areas"]:
+        d = s["drafts"] / a["name"]
+        if not (d.is_dir() and any(d.glob("*.md"))):
+            out.append((a["name"], a["apps"], "pages"))
+            continue
+        if "deploy" in kinds:
+            pages = [x.stem.lower() for x in d.glob("deploy--*.md")]
+            need = [app for app in a["apps"] if kb.deploy_home(s, app) == a["name"]
+                    and not any(app.lower() in x for x in pages) and not (len(a["apps"]) == 1 and pages)]
+            if need:
+                out.append((a["name"], need, "deploy"))
+    return out
+
+
+def check(s, flags):
+    drafts, lib, stale = s["drafts"], s["lib"], False
+    todo = unbuilt(s)
+    if todo:
+        stale = True
+        print(f"UNBUILT {len(todo)} area(s) to build now: /knowledge-build " + " ".join(dict.fromkeys(a for a, _, _ in todo))
+              + "   (" + "; ".join(f"{a}: {'deploy page for ' if w == 'deploy' else ''}{', '.join(x)}" for a, x, w in todo) + ")")
+    if not s["grow_on"]["merge"]:
+        print("knowledge.grow_on.merge is off: branch moves are not followed (flags still are)")
+    for app, f in s["follow"].items() if s["grow_on"]["merge"] else []:
+        src = pathlib.Path(f["dir"])
+        pin = git("rev-parse", "HEAD", cwd=src).stdout.strip() if src.exists() else ""
+        if not pin:
+            print(f"{app}: UNVERIFIED — no source worktree at {src} (run ./setup-pair knowledge init)"); stale = True; continue
+        h = head(f)
+        if not h:
+            print(f"{app}: UNVERIFIED — could not read {f['branch']} head"); stale = True; continue
+        if h == pin:
+            print(f"{app}: current at {pin[:8]} ({f['branch']})"); continue
+        stale = True
+        git("fetch", "-q", "origin", f["branch"], cwd=src)
+        changed = [l for l in git("diff", "--name-only", pin, h, cwd=src).stdout.splitlines() if l]
+        hits = pages_citing(drafts, lib, changed, s)
+        print(f"{app}: MOVED {pin[:8]} -> {h[:8]} ({f['branch']}), {len(changed)} files changed, {len(hits)} page(s) stale")
+        for pg, why in hits.items():
+            print(f"   STALE {pg}   (cites {', '.join(why[:3])}{' …' if len(why) > 3 else ''})")
+        uncited = [c for c in changed if not any(c in w for w in hits.values()) and not c.endswith(".md")
+                   and not kb.ignored(c, s["ignore"])]
+        if uncited:
+            print(f"   no page cites {len(uncited)} changed file(s) — check whether a NEW page is needed: {', '.join(uncited[:6])}")
+    for f in open_flags(flags):
+        stale = True
+        print(f"FLAG  {f['page']}  — {f['reason']}  (by {f['by']} {f['ts']}{', run ' + f['run'] if f.get('run') else ''})")
+    if s["engram"]:
+        edges = load_edges(lib)
+        if refresh_edge_ids(s, edges, load_ids(s)):
+            save_edges(lib, edges)
+        todo = [e for e in edges if engram_state(e) != "linked"]
+        if todo:
+            stale = True
+            print(f"ENGRAM {len(todo)} graph edge(s) not yet linked in Engram — `knowledge-refresh pending`")
+    return 3 if stale else 0
+
+
+def load_edges(lib):
+    E = lib / "graph" / "edges.jsonl"
+    return [json.loads(l) for l in E.read_text().splitlines() if l.strip()] if E.exists() else []
+
+
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def load_ids(s):
+    f = s["ids"]
+    d = json.loads(f.read_text()) if f.exists() else {}
+    d.setdefault("objects", {}); d.setdefault("requirement_nodes", {})
+    return d
+
+
+def save_ids(s, d):
+    s["ids"].parent.mkdir(parents=True, exist_ok=True)
+    d["namespace"] = s["engram"]
+    d["count"] = len(d["objects"])
+    s["ids"].write_text(json.dumps(d, indent=1, sort_keys=True) + "\n")
+
+
+def draft_key(s, pg):
+    return str(pg.resolve().relative_to(s["drafts"].resolve()))[:-3]
+
+
+def expected_title(s, pg):
+    key = draft_key(s, pg)
+    area = key.split("/", 1)[0] if "/" in key else ""
+    kind = pg.name.split("--", 1)[0] if "--" in pg.name else ""
+    return kb.engram_title(s, area, kind, page_title(pg))
+
+
+def resolve_node(s, ids, name):
+    """A graph end → {title, draft, id}. Accepts a page H1, a drafts key, an Engram title, a requirement key/title."""
+    n = name.strip()
+    for key, o in ids["requirement_nodes"].items():
+        if n in (key, o.get("title")):
+            return {"title": o.get("title") or key, "draft": "", "id": o.get("id", ""), "requirement": key}
+    for pg in pages(s):
+        key = draft_key(s, pg)
+        o = ids["objects"].get(key, {})
+        if n in (key, key + ".md", page_title(pg), o.get("engram_title"), expected_title(s, pg)):
+            return {"title": page_title(pg), "draft": key, "id": o.get("id", "")}
+    return {"title": n, "draft": "", "id": ""}
+
+
+def link_call(e):
+    if e.get("from_id") and e.get("to_id"):
+        return f'engram_link(from_id="{e["from_id"]}", to_id="{e["to_id"]}", relation="{e["relation"]}")'
+    miss = [w for w, k in (("from", "from_id"), ("to", "to_id")) if not e.get(k)]
+    return "waiting for the Engram id of " + " and ".join(
+        f'"{e[w + "_title"]}"' + (" (record --engram-id)" if e.get(w + "_draft") else " (requirement --id, or not a page yet)")
+        for w in miss)
+
+
+def refresh_edge_ids(s, edges, ids):
+    """Bring every edge's ids in line with ids.json: fill ids learned later, and when a page or requirement got a NEW
+    Engram id, move the edge to it and set it back to pending (the old Engram link points at a superseded object)."""
+    changed = False
+    for e in edges:
+        for w in ("from", "to"):
+            n = resolve_node(s, ids, e.get(w + "_draft") or e.get(w + "_title", ""))
+            if not n["id"] and e.get(w + "_id") and e.get("engram") == "linked" and (n["draft"] or n.get("requirement") or e.get(w + "_draft")):
+                # the page / requirement lost its Engram id (or the page is gone): the link is no longer proven
+                e["engram"], e["engram_note"] = "pending", f"{w} id no longer recorded: link again"
+                changed = True
+                continue
+            if n["id"] and n["id"] != e.get(w + "_id"):
+                if e.get("engram") == "linked":  # linked to another object, or "linked" with no id at all: not proven
+                    e["engram"], e["engram_note"] = "pending", f"{w} id changed {(e.get(w + '_id') or 'none')[:8]} -> {n['id'][:8]}: link again"
+                e[w + "_id"], changed = n["id"], True
+    return changed
+
+
+def evidence_digest(path):
+    """sha256 of the saved engram_neighbors result that proved a link (kept on the edge, so a link is traceable)."""
+    import hashlib
+    return "sha256:" + hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()[:16] + " " + pathlib.Path(path).name
+
+
+def neighbors_relations(path):
+    """The relationships listed in a saved engram_neighbors (or engram_traverse) result: {(from_id, to_id, RELATION)}."""
+    try:
+        d = json.loads(pathlib.Path(path).read_text())
+    except (OSError, ValueError) as e:
+        sys.exit(f"refused: cannot read the saved engram_neighbors result {path}: {e}")
+    rels = d.get("relationships") or d.get("edges") or [] if isinstance(d, dict) else []
+    out = {(r.get("from_id"), r.get("to_id"), str(r.get("relation", "")).upper()) for r in rels if isinstance(r, dict)}
+    if not out:
+        sys.exit("refused: that file holds no relationships — save the raw engram_neighbors result (JSON) and pass it")
+    return out
+
+
+def save_edges(lib, edges):
+    (lib / "graph").mkdir(parents=True, exist_ok=True)
+    (lib / "graph" / "edges.jsonl").write_text("".join(json.dumps(e) + "\n" for e in edges))
+
+
+def engram_state(e):
+    """linked = confirmed in Engram; pending = written here, not yet confirmed; unknown = from before tracking / Engram off."""
+    st = e.get("engram") or "unknown"
+    if st == "linked" and not (e.get("from_id") and e.get("to_id")):
+        return "broken"  # marked linked without both Engram ids: cannot be true
+    if st == "linked" and not e.get("engram_evidence"):
+        return "unproven"  # linked by hand, without the saved engram_neighbors result that lists it
+    return "unknown" if st == "off" else st
+
+
+def page_title(path):
+    return next((l[2:].strip() for l in path.read_text(errors="replace").splitlines() if l.startswith("# ")), path.stem)
+
+
+def pages(s):
+    return sorted(s["drafts"].rglob("*.md")) if s["drafts"].exists() else []
+
+
+def log_event(s, rec):
+    s["log"].parent.mkdir(parents=True, exist_ok=True)
+    with open(s["log"], "a") as fh:
+        fh.write(json.dumps(rec) + "\n")
+
+
+def commit_library(s, msg, paths):
+    """knowledge.git_history: every recorded change is its own commit in the library folder, holding only `paths`
+    (the page, the graph file, the flags file or pins.json) — never a page that was not recorded."""
+    if not s["git_history"]:
+        return "history off"
+    lib = s["lib"]
+    if not (lib / ".git").exists():
+        return "no history: library is not a git repo (run ./setup-pair knowledge init)"
+    rel = [str(pathlib.Path(p).resolve().relative_to(lib.resolve())) for p in paths]
+    git("add", "--", *rel, cwd=lib)
+    if not git("diff", "--cached", "--quiet", "--", *rel, cwd=lib).returncode:
+        return "nothing to commit"
+    r = git("commit", "-q", "-m", msg, "--", *rel, cwd=lib)
+    return ("committed " + git("rev-parse", "--short", "HEAD", cwd=lib).stdout.strip()) if not r.returncode else \
+        ("commit failed: " + (r.stderr or r.stdout)[-200:])
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(allow_abbrev=False, description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--selftest", action="store_true")
+    sub = ap.add_subparsers(dest="cmd")
+    sub.add_parser("check")
+    a = sub.add_parser("advance"); a.add_argument("app")
+    f = sub.add_parser("flag"); f.add_argument("--page", required=True); f.add_argument("--reason", required=True); f.add_argument("--run", default="")
+    sub.add_parser("flags")
+    im = sub.add_parser("impact"); im.add_argument("app"); im.add_argument("frm"); im.add_argument("to")
+    c = sub.add_parser("close-flag"); c.add_argument("ts"); c.add_argument("--note", required=True)
+    lk = sub.add_parser("link"); lk.add_argument("--from", dest="frm", required=True); lk.add_argument("--to", required=True)
+    lk.add_argument("--relation", required=True); lk.add_argument("--evidence", default="")
+    lk.add_argument("--confirm", action="store_true", help="engram_link succeeded and engram_neighbors shows the edge")
+    lk.add_argument("--neighbors", default="", help="file holding the raw engram_neighbors result that lists the edge")
+    cf = sub.add_parser("confirm", help="confirm every graph edge a saved engram_neighbors result lists")
+    cf.add_argument("--neighbors", required=True, nargs="+")
+    rc = sub.add_parser("record"); rc.add_argument("--page", required=True)
+    rc.add_argument("--event", required=True, choices=["new", "updated", "reverified", "bug"]); rc.add_argument("--sha", default="")
+    rc.add_argument("--engram-id", default="", help="the Engram object id engram_write returned for this page")
+    rq = sub.add_parser("requirement"); rq.add_argument("--key", required=True); rq.add_argument("--title", required=True)
+    rq.add_argument("--id", required=True, help="the Engram object id of the requirement node")
+    sub.add_parser("graph"); sub.add_parser("status"); sub.add_parser("pending"); sub.add_parser("unbuilt")
+    x = ap.parse_args(argv)
+    if x.selftest:
+        return selftest()
+    if not x.cmd:
+        ap.error("a command is required")
+    if not _initial_ns():
+        sys.exit("refused: running inside a separate namespace — the agent identity cannot be trusted here")
+    cfg, s = setup()
+    drafts, lib, follow = s["drafts"], s["lib"], s["follow"]
+    by = pairconf.role(cfg)
+    flags = lib / "flags.jsonl"
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if getattr(x, "app", None) and x.app not in follow:
+        sys.exit(f"unknown app {x.app!r}; followed: {', '.join(follow) or '(none)'}")
+    if x.cmd == "check":
+        return check(s, flags)
+    if x.cmd == "impact":
+        src = pathlib.Path(follow[x.app]["dir"])
+        git("fetch", "-q", "origin", follow[x.app]["branch"], cwd=src)
+        r = git("diff", "--name-only", x.frm, x.to, cwd=src)
+        if r.returncode:
+            sys.exit("cannot diff those commits: " + r.stderr[-200:])
+        changed = [l for l in r.stdout.splitlines() if l]
+        hits = pages_citing(drafts, lib, changed, s)
+        titles = {pg: page_title(lib / pg) for pg in hits}
+        edges = load_edges(lib)
+        hop = {r["name"] for r in s["relations"]} - {"REQUIRES", "FIXES"}
+        hit = set(titles.values())
+        for e in edges:
+            if e.get("relation") in hop and (e.get("from_title") in hit or e.get("to_title") in hit):
+                hit |= {e.get("from_title"), e.get("to_title")}
+        reqs = sorted({e["from_title"] for e in edges if e.get("relation") == "REQUIRES" and e.get("to_title") in hit})
+        print(f"{x.app} {x.frm}..{x.to}: {len(changed)} files, {len(hits)} pages, {len(reqs)} requirement(s) to re-test")
+        for q in reqs:
+            print("   RETEST", q)
+        if not edges:
+            print("   (no graph/edges.jsonl yet — requirement mapping unavailable; re-test the pages' rules)")
+        return 0
+    if x.cmd == "advance":
+        if by != "builder":
+            sys.exit("refused: the builder maintains the library; the tester flags pages (`knowledge-refresh flag`)")
+        fo = follow[x.app]; src = pathlib.Path(fo["dir"]); h = head(fo)
+        if not h:
+            sys.exit("refused: could not read the branch head")
+        git("fetch", "-q", "origin", fo["branch"], cwd=src)
+        out = git("checkout", "-q", "--detach", h, cwd=src)
+        if out.returncode:
+            sys.exit("checkout failed: " + out.stderr[-300:])
+        log_event(s, {"ts": now, "by": by, "event": "advance", "app": x.app, "branch": fo["branch"], "sha": h})
+        print(f"{x.app}: source pin advanced to {h[:8]} — every page you re-verified must now say verified-at {h[:8]}")
+        pins_file = lib / "pins.json"
+        pins = json.loads(pins_file.read_text()) if pins_file.exists() else {}
+        pins[x.app] = {"branch": fo["branch"], "sha": h, "at": now}
+        pins_file.write_text(json.dumps(pins, indent=1, sort_keys=True) + "\n")
+        print("history:", commit_library(s, f"knowledge: {x.app} pinned at {h[:12]} ({fo['branch']})", [pins_file]))
+        return 0
+    if x.cmd == "flag":
+        if by not in ("builder", "tester"):
+            sys.exit("refused: only the pair's own workspaces may flag pages")
+        if not s["grow_on"]["test_flag"]:
+            sys.exit("refused: knowledge.grow_on.test_flag is off in pair.yaml")
+        if re.search(r"(?i)(password|secret|token)\s*[:=]|[A-Za-z0-9+/_-]{40,}", x.reason):
+            sys.exit("refused: keep the reason plain words (no secret-looking text, no scenario bodies)")
+        flags.parent.mkdir(parents=True, exist_ok=True)
+        fid = "flag-" + uuid.uuid4().hex[:10]
+        with open(flags, "a") as fh:
+            fh.write(json.dumps({"ts": now, "id": fid, "by": by, "page": x.page[:200], "reason": x.reason[:300], "run": x.run[:120]}) + "\n")
+        log_event(s, {"ts": now, "by": by, "event": "flag", "id": fid, "page": x.page[:200]})
+        print("id", fid)
+        print("flagged", x.page)
+        return 0
+    if x.cmd == "close-flag":
+        if by != "builder":
+            sys.exit("refused: the builder closes a flag after the page is re-verified")
+        if x.ts not in {r.get("id", r["ts"]) for r in open_flags(flags)}:
+            sys.exit("refused: no open flag with that id (see `knowledge-refresh flags`)")
+        with open(flags, "a") as fh:
+            fh.write(json.dumps({"ts": now, "by": by, "closes": x.ts, "note": x.note[:300]}) + "\n")
+        log_event(s, {"ts": now, "by": by, "event": "close-flag", "id": x.ts})
+        print("closed", x.ts)
+        print("history:", commit_library(s, f"knowledge: flag {x.ts} closed", [flags]))
+        return 0
+    if x.cmd == "link":
+        if by not in ("builder", "tester"):
+            sys.exit("refused: only the pair's own workspaces may add graph edges")
+        rel = x.relation.upper()
+        names = [r["name"] for r in s["relations"]]
+        if rel not in names:
+            sys.exit(f"refused: relation {rel!r} is not in knowledge.relations ({', '.join(names)})")
+        if rel == "REQUIRES" and not s["grow_on"]["requirement"]:
+            sys.exit("refused: knowledge.grow_on.requirement is off in pair.yaml")
+        if rel == "FIXES" and not s["grow_on"]["bug_fix"]:
+            sys.exit("refused: knowledge.grow_on.bug_fix is off in pair.yaml")
+        if re.search(r"(?i)(password|secret|token)\s*[:=]|[A-Za-z0-9+/_-]{40,}", f"{x.frm} {x.to}"):
+            sys.exit("refused: titles must be plain words")
+        edges, ids = load_edges(lib), load_ids(s)
+        refresh_edge_ids(s, edges, ids)
+        a, b = resolve_node(s, ids, x.frm), resolve_node(s, ids, x.to)
+        same = [e for e in edges if e.get("relation") == rel and {e.get("from_title"), e.get("from_draft")} & {a["title"], a["draft"] or None}
+                and {e.get("to_title"), e.get("to_draft")} & {b["title"], b["draft"] or None}]
+        if x.confirm:
+            if not same:
+                sys.exit("refused: no such edge in the graph — add it first (without --confirm)")
+            e = same[0]
+            if not (e.get("from_id") and e.get("to_id")):
+                sys.exit("refused: " + link_call(e) + " — an edge without both Engram ids cannot be in Engram")
+            if not x.neighbors:
+                sys.exit("refused: --confirm needs --neighbors <file>: save the raw engram_neighbors result for either end "
+                         f"(object_id {e['from_id']}) and pass it — the edge must be listed there")
+            if (e["from_id"], e["to_id"], rel) not in neighbors_relations(x.neighbors):
+                sys.exit(f"refused: Engram does not list {e['from_id'][:8]} {rel} {e['to_id'][:8]} in that result — make the call: "
+                         + link_call(e))
+            e.update({"engram": "linked", "engram_at": now, "engram_by": by, "engram_note": "",
+                      "engram_evidence": evidence_digest(x.neighbors)})
+            save_edges(lib, edges)
+            log_event(s, {"ts": now, "by": by, "event": "engram-link", "relation": rel, "from": e["from_title"], "to": e["to_title"]})
+            print("confirmed in Engram:", e["from_title"], rel, e["to_title"])
+            print("history:", commit_library(s, f"knowledge graph: {e['from_title'][:50]} {rel} {e['to_title'][:50]} linked in Engram",
+                                             [lib / "graph" / "edges.jsonl"]))
+            return 0
+        if same:
+            save_edges(lib, edges)
+            print("exists", a["title"], rel, b["title"], f"(engram: {engram_state(same[0])})")
+            if engram_state(same[0]) != "linked":
+                print("   next:", link_call(same[0]))
+            return 0
+        e = {"from_title": a["title"][:200], "to_title": b["title"][:200], "relation": rel, "evidence": x.evidence[:200],
+             "from_id": a["id"], "to_id": b["id"], "from_draft": a["draft"], "to_draft": b["draft"],
+             "engram": "pending" if s["engram"] else "off", "by": by, "ts": now}
+        edges.append(e)
+        save_edges(lib, edges)
+        log_event(s, {"ts": now, "by": by, "event": "link", "relation": rel, "from": a["title"][:200], "to": b["title"][:200]})
+        print("linked", a["title"], rel, b["title"])
+        for n in (a, b):
+            if not n["draft"] and not n.get("requirement"):
+                print(f"   note: {n['title']!r} is not a page or a registered requirement — check the name")
+        if s["engram"]:
+            print("   next:", link_call(e))
+            print(f"   then: knowledge-refresh link --confirm --from \"{a['title']}\" --to \"{b['title']}\" --relation {rel}")
+        print("history:", commit_library(s, f"knowledge graph: {a['title'][:60]} {rel} {b['title'][:60]}", [lib / "graph" / "edges.jsonl"]))
+        return 0
+    if x.cmd == "unbuilt":
+        todo = unbuilt(s)
+        for a, apps, what in todo:
+            print(f"{a}\t{what}\t{','.join(apps)}")
+        if not todo:
+            print(f"every area has pages ({len(s['areas'])} area(s))")
+        # services with no service page yet (a repo holds many; a service added later) — work for the next build
+        for app in s["follow"]:
+            if s["follow"][app]["line"]:
+                continue
+            dirs = [s["drafts"] / a["name"] for a in s["areas"] if app in a["apps"]]
+            if not any(d.is_dir() and any(d.glob("*.md")) for d in dirs):
+                continue  # the whole area is unbuilt: listed above
+            have = " ".join(x.stem.lower() for d in dirs if d.is_dir() for x in d.glob("service--*.md"))
+            for sv in kb.services(s, app):
+                name = pathlib.PurePath(sv).name.lower() if sv != "." else app.lower()
+                if name not in have:
+                    print(f"   no service page yet: {app}/{sv}")
+        return 3 if todo else 0
+    if x.cmd == "confirm":
+        if by not in ("builder", "tester"):
+            sys.exit("refused: only the pair's own workspaces may confirm graph edges")
+        edges, ids = load_edges(lib), load_ids(s)
+        refresh_edge_ids(s, edges, ids)
+        seen = set().union(*(neighbors_relations(f) for f in x.neighbors))
+        n = 0
+        for e in edges:
+            if engram_state(e) != "linked" and e.get("from_id") and e.get("to_id") and (e["from_id"], e["to_id"], e["relation"]) in seen:
+                e.update({"engram": "linked", "engram_at": now, "engram_by": by, "engram_note": "",
+                          "engram_evidence": evidence_digest(*[f for f in x.neighbors if (e["from_id"], e["to_id"], e["relation"]) in neighbors_relations(f)][:1])}); n += 1
+        save_edges(lib, edges)
+        left = sum(1 for e in edges if engram_state(e) != "linked")
+        log_event(s, {"ts": now, "by": by, "event": "engram-confirm", "confirmed": n, "left": left})
+        print(f"confirmed {n} edge(s) Engram lists; {left} still not confirmed (`knowledge-refresh pending`)")
+        if n:
+            print("history:", commit_library(s, f"knowledge graph: {n} edge(s) confirmed in Engram", [lib / "graph" / "edges.jsonl"]))
+        return 0
+    if x.cmd == "requirement":
+        if by not in ("builder", "tester"):
+            sys.exit("refused: only the pair's own workspaces may register requirement nodes")
+        if not UUID.match(x.id):
+            sys.exit("refused: --id must be the Engram object id (uuid) engram_write returned")
+        if re.search(r"(?i)(password|secret|token)\s*[:=]|[A-Za-z0-9+/_-]{40,}", f"{x.key} {x.title}"):
+            sys.exit("refused: key and title must be plain words")
+        ids = load_ids(s)
+        ids["requirement_nodes"][x.key[:80]] = {"id": x.id, "title": x.title[:200], "by": by, "ts": now}
+        save_ids(s, ids)
+        edges = load_edges(lib)
+        if refresh_edge_ids(s, edges, ids):
+            save_edges(lib, edges)
+        log_event(s, {"ts": now, "by": by, "event": "requirement", "key": x.key[:80], "id": x.id})
+        print("requirement node", x.key, "->", x.id)
+        print("history:", commit_library(s, f"knowledge: requirement {x.key[:60]}", [s["ids"], lib / "graph" / "edges.jsonl"]))
+        return 0
+    if x.cmd == "pending":
+        edges, ids = load_edges(lib), load_ids(s)
+        if refresh_edge_ids(s, edges, ids):
+            save_edges(lib, edges)
+        todo = [e for e in edges if engram_state(e) != "linked"]
+        print(f"{len(todo)} of {len(edges)} graph edge(s) not confirmed in Engram")
+        for e in todo:
+            print(f"   [{engram_state(e)}] {e['from_title']} {e['relation']} {e['to_title']}\n      {link_call(e)}")
+        return 3 if todo else 0
+    if x.cmd == "record":
+        if by != "builder":
+            sys.exit("refused: the builder publishes pages; the tester flags them")
+        pg = pathlib.Path(x.page)
+        pg = pg if pg.is_absolute() else (lib / pg if (lib / pg).exists() else drafts / pg)
+        if not pg.exists() or drafts.resolve() not in pg.resolve().parents:
+            sys.exit(f"refused: {x.page} is not a page under {drafts}")
+        if x.event == "bug" and not s["grow_on"]["bug_fix"]:
+            sys.exit("refused: knowledge.grow_on.bug_fix is off in pair.yaml")
+        text = pg.read_text(errors="replace")
+        if not re.search(r"verified-at:\s*\S", text):
+            sys.exit("refused: the page has no `verified-at:` line — only verified pages are recorded")
+        kind = pg.name.split("--", 1)[0] if "--" in pg.name else ""
+        if kind not in [k["name"] for k in s["kinds"]]:
+            sys.exit(f"refused: page kind {kind!r} (from the file name <kind>--<slug>.md) is not in knowledge.kinds")
+        rel = str(pg.resolve().relative_to(drafts.resolve()))
+        if x.engram_id and not UUID.match(x.engram_id):
+            sys.exit("refused: --engram-id must be the Engram object id (uuid) engram_write returned")
+        ids, et, key = load_ids(s), expected_title(s, pg), draft_key(s, pg)
+        files = [pg]
+        if x.engram_id:
+            ids["objects"][key] = {"id": x.engram_id, "engram_title": et, "draft": f"{key}.md", "at": now}
+            save_ids(s, ids)
+            edges = load_edges(lib)
+            if refresh_edge_ids(s, edges, ids):
+                save_edges(lib, edges)
+                files.append(lib / "graph" / "edges.jsonl")
+            files.append(s["ids"])
+        log_event(s, {"ts": now, "by": by, "event": x.event, "page": rel, "title": page_title(pg), "sha": x.sha[:40],
+                      "engram": s["engram"], "engram_id": x.engram_id or ids["objects"].get(key, {}).get("id", "")})
+        print("recorded", x.event, rel)
+        if s["engram"] and not ids["objects"].get(key):
+            print(f"   not in Engram yet: engram_write(collection=\"{s['engram']}\", title=\"{et}\", kind=\"knowledge\", "
+                  f"content=<the page>) then rerun with --engram-id <the id it returns>")
+        print("history:", commit_library(s, f"knowledge: {x.event} {rel}" + (f" @ {x.sha[:12]}" if x.sha else ""), files))
+        return 0
+    if x.cmd in ("graph", "status"):
+        all_pages = pages(s)
+        titles = {page_title(p): p for p in all_pages}
+        edges = load_edges(lib)
+        touched = {e.get("from_title") for e in edges} | {e.get("to_title") for e in edges}
+        per_rel = {}
+        for e in edges:
+            per_rel[e.get("relation")] = per_rel.get(e.get("relation"), 0) + 1
+        orphans = sorted(t for t in titles if t not in touched)
+        if x.cmd == "status":
+            by_area = {}
+            for p in all_pages:
+                area = p.parent.name if p.parent != drafts else "(top)"
+                kind = p.name.split("--", 1)[0] if "--" in p.name else "?"
+                by_area.setdefault(area, {}).setdefault(kind, 0)
+                by_area[area][kind] += 1
+            print(f"library {lib}  ·  Engram {s['engram'] or '(not set)'}  ·  {len(all_pages)} page(s)")
+            for a in s["areas"]:
+                counts = by_area.pop(a["name"], {})
+                print(f"   area {a['name']:16s} " + (", ".join(f"{k} {n}" for k, n in sorted(counts.items())) or "no pages yet"))
+            for a, counts in by_area.items():
+                print(f"   (not in knowledge.areas) {a}: " + ", ".join(f"{k} {n}" for k, n in sorted(counts.items())))
+            for k, fo in follow.items():
+                d = pathlib.Path(fo["dir"])
+                pin = git("rev-parse", "--short=8", "HEAD", cwd=d).stdout.strip() if d.exists() else "not pinned"
+                print(f"   pin {k:16s} {fo['branch']} @ {pin}")
+            print(f"   open flags {len(open_flags(flags))}  ·  growth: " +
+                  ", ".join(f"{k} {'on' if v else 'off'}" for k, v in s["grow_on"].items()))
+        print(f"graph: {len(titles)} page nodes, {len(edges)} edges " +
+              (("(" + ", ".join(f"{r} {n}" for r, n in sorted(per_rel.items())) + ")") if per_rel else ""))
+        if s["engram"]:
+            ids = load_ids(s)
+            st = {}
+            for e in edges:
+                st[engram_state(e)] = st.get(engram_state(e), 0) + 1
+            no_id = [t for t, p in titles.items() if draft_key(s, p) not in ids["objects"]]
+            print(f"   Engram {s['engram']}: {len(titles) - len(no_id)}/{len(titles)} pages have an Engram id, "
+                  f"{len(ids['requirement_nodes'])} requirement node(s); edges " +
+                  (", ".join(f"{k} {n}" for k, n in sorted(st.items())) or "none") +
+                  ("  → run `knowledge-refresh pending`" if st.get("pending") or st.get("unknown") else ""))
+            if no_id:
+                print(f"   {len(no_id)} page(s) without an Engram id: " + "; ".join(no_id[:6]) + (" …" if len(no_id) > 6 else ""))
+        if orphans:
+            print(f"   {len(orphans)} page(s) no edge touches: " + "; ".join(orphans[:8]) + (" …" if len(orphans) > 8 else ""))
+        if x.cmd == "status" and s["log"].exists():
+            rows = [json.loads(l) for l in s["log"].read_text().splitlines() if l.strip()]
+            print(f"log {s['log']}: {len(rows)} event(s); last:")
+            for r in rows[-5:]:
+                ev = r.get("event")
+                what = (r.get("page") or (f"{r.get('app')} -> {str(r.get('sha', ''))[:8]}" if ev == "advance" else "")
+                        or (", ".join(f"{k}@{str(v)[:8]}" for k, v in (r.get("pins") or {}).items()) if ev == "init" else "")
+                        or (f"{r.get('from')} {r.get('relation')} {r.get('to')}" if ev == "link" else r.get("id", "")))
+                print("   ", r.get("ts"), ev, what)
+        return 0
+    for r in open_flags(flags):
+        print(r.get("id", r["ts"]), r["ts"], r["by"], r["page"], "—", r["reason"])
+    return 0
+
+
+def selftest():
+    """Throw-away pair: a local bare 'origin', a pinned worktree, one page citing a file; then move the origin."""
+    base = pathlib.Path(f"/tmp/claude-{os.getuid()}") if pathlib.Path(f"/tmp/claude-{os.getuid()}").is_dir() else pathlib.Path(tempfile.gettempdir())
+    t = pathlib.Path(tempfile.mkdtemp(prefix="kr-selftest-", dir=base))
+    env = dict(os.environ, PAIR_CONFIG=str(t / "pair.yaml"), GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+    me = os.path.realpath(__file__)
+    bad = 0
+
+    def sh(*a, cwd=None):
+        return subprocess.run(list(a), cwd=cwd, env=env, capture_output=True, text=True)
+
+    def run(*a):
+        return subprocess.run([sys.executable, me, *a], env=env, capture_output=True, text=True)
+
+    def expect(name, ok, detail=""):
+        nonlocal bad
+        bad += not ok
+        print("PASS" if ok else "FAIL", name, ("" if ok else detail[-300:]))
+
+    try:
+        work = t / "work"; origin = t / "origin.git"
+        sh("git", "init", "-q", "--bare", "-b", "main", str(origin))
+        sh("git", "clone", "-q", str(origin), str(work))
+        (work / "svc").mkdir()
+        (work / "svc" / "limits.go").write_text("package svc\n// limit 100\n")
+        (work / "svc" / "other.go").write_text("package svc\n")
+        sh("git", "add", "-A", cwd=work); sh("git", "commit", "-q", "-m", "a", cwd=work); sh("git", "push", "-q", "origin", "HEAD:main", cwd=work)
+        sh("git", "clone", "-q", str(origin), str(t / "lib" / "src" / "api"))
+        d = t / "lib" / "drafts" / "api"; d.mkdir(parents=True)
+        (d / "rules--limits.md").write_text("# rules — payment limits\n\nOver-limit refused at `svc/limits.go:2`.\n")
+        (d / "deploy--api.md").write_text("# deploy — api\nkind: deploy · verified-at: api init\n\nBuilt by the Dockerfile; deployed by kustomize.\n")
+        host = socket.gethostname()
+        (t / "pair.yaml").write_text(
+            "project: {name: Selftest, slug: selftest}\nowner: {name: T}\n"
+            f"builder: {{name: B, host: {host}}}\ntester: {{name: T2, host: not-this-host}}\n"
+            f"paths: {{shared_root: {t}, ledger: {t}/ledger, knowledge_drafts: {t}/lib/drafts, knowledge_src: {t}/lib/src}}\n"
+            f"repos:\n  - {{app: api, remote: {origin}, base: main}}\n")
+        r = run("unbuilt")
+        expect("unbuilt: an area with pages is built", r.returncode == 0 and "every area has pages" in r.stdout, r.stdout + r.stderr)
+        dep = (d / "deploy--api.md").read_text(); (d / "deploy--api.md").unlink()
+        r = run("unbuilt")
+        expect("unbuilt: an app with no deploy page is listed", r.returncode == 3 and "api\tdeploy\tapi" in r.stdout, r.stdout)
+        (d / "deploy--api.md").write_text(dep)
+        r = run("check"); expect("check: current -> exit 0", r.returncode == 0 and "current" in r.stdout, r.stdout + r.stderr)
+        y1 = (t / "pair.yaml").read_text()
+        (t / "pair.yaml").write_text(y1 + "knowledge: {areas: [{name: api, apps: [api]}, {name: billing, apps: [api]}]}\n")
+        r = run("unbuilt")
+        expect("unbuilt: a new area with no pages is listed (exit 3)", r.returncode == 3 and r.stdout.startswith("billing"), r.stdout)
+        r = run("check")
+        expect("check: unbuilt area keeps the tick busy", r.returncode == 3 and "UNBUILT 1 area" in r.stdout and "/knowledge-build billing" in r.stdout, r.stdout)
+        (t / "pair.yaml").write_text(y1)
+        (work / "svc" / "limits.go").write_text("package svc\n// limit 200\n")
+        (work / "svc" / "new.go").write_text("package svc\n")
+        sh("git", "add", "-A", cwd=work); sh("git", "commit", "-q", "-m", "b", cwd=work); sh("git", "push", "-q", "origin", "HEAD:main", cwd=work)
+        r = run("check")
+        expect("check: moved -> exit 3, page STALE", r.returncode == 3 and "STALE drafts/api/rules--limits.md" in r.stdout, r.stdout + r.stderr)
+        expect("check: uncited new file reported", "svc/new.go" in r.stdout, r.stdout)
+        r = run("flag", "--page", "rules — payment limits", "--reason", "local test saw limit 200")
+        fid = (r.stdout.split() + ["", ""])[1]
+        expect("flag: recorded", r.returncode == 0 and fid.startswith("flag-"), r.stdout + r.stderr)
+        r = run("flag", "--page", "x", "--reason", "token: abc")
+        expect("flag: secret-looking reason refused", r.returncode != 0, r.stdout)
+        r = run("advance", "api"); expect("advance (builder host)", r.returncode == 0 and "advanced" in r.stdout, r.stdout + r.stderr)
+        r = run("close-flag", fid, "--note", "re-verified")
+        expect("close-flag", r.returncode == 0, r.stdout + r.stderr)
+        r = run("check"); expect("check after advance -> exit 0", r.returncode == 0, r.stdout + r.stderr)
+        g = t / "lib" / "graph"; g.mkdir()
+        (g / "edges.jsonl").write_text(json.dumps({"from_title": "requirement — PAY-1 limits", "to_title": "rules — payment limits",
+                                                   "relation": "REQUIRES"}) + "\n")
+        a = sh("git", "rev-parse", "HEAD~1", cwd=work).stdout.strip(); b = sh("git", "rev-parse", "HEAD", cwd=work).stdout.strip()
+        r = run("impact", "api", a, b)
+        expect("impact: requirement to re-test", "RETEST requirement — PAY-1 limits" in r.stdout, r.stdout + r.stderr)
+        r = run("advance", "nope"); expect("unknown app refused", r.returncode != 0 and "unknown app" in (r.stdout + r.stderr), r.stderr)
+        # graph + history + log
+        lib = t / "lib"
+        (lib / ".gitignore").write_text("src/\n")
+        sh("git", "init", "-q", "-b", "main", str(lib)); sh("git", "add", "-A", cwd=lib); sh("git", "commit", "-q", "-m", "init", cwd=lib)
+        r = run("link", "--from", "service — api", "--to", "rules — payment limits", "--relation", "enforces", "--evidence", "svc/limits.go:2")
+        expect("link: edge added + committed", r.returncode == 0 and "linked" in r.stdout and "committed" in r.stdout, r.stdout + r.stderr)
+        r = run("link", "--from", "service — api", "--to", "rules — payment limits", "--relation", "ENFORCES")
+        expect("link: same edge twice is a no-op", r.returncode == 0 and r.stdout.startswith("exists"), r.stdout)
+        r = run("link", "--from", "a", "--to", "b", "--relation", "LIKES")
+        expect("link: unknown relation refused", r.returncode != 0 and "knowledge.relations" in (r.stdout + r.stderr), r.stdout + r.stderr)
+        (d / "service--api.md").write_text("# service — api\nkind: service · app: api\n\nno verified line\n")
+        r = run("record", "--page", "api/service--api.md", "--event", "new")
+        expect("record: unverified page refused", r.returncode != 0 and "verified-at" in (r.stdout + r.stderr), r.stdout + r.stderr)
+        (d / "service--api.md").write_text("# service — api\nkind: service · app: api · verified-at: api abc123\n")
+        r = run("record", "--page", "api/service--api.md", "--event", "new", "--sha", "abc123")
+        expect("record: verified page logged + committed", r.returncode == 0 and "committed" in r.stdout, r.stdout + r.stderr)
+        (d / "runbook--x.md").write_text("# runbook — x\nverified-at: api abc\n")
+        r = run("record", "--page", "api/runbook--x.md", "--event", "new")
+        expect("record: kind not in knowledge.kinds refused", r.returncode != 0 and "knowledge.kinds" in (r.stdout + r.stderr), r.stdout + r.stderr)
+        (d / "runbook--x.md").unlink()
+        log = sh("git", "log", "--format=%s", cwd=lib).stdout
+        expect("library history has one commit per change", "knowledge graph: service — api ENFORCES" in log
+               and "knowledge: new api/service--api.md @ abc123" in log, log)
+        shown = sh("git", "show", "--name-only", "--format=", "HEAD", cwd=lib).stdout.split()
+        expect("a record commits only its own page", shown == ["drafts/api/service--api.md"], shown)
+        r = run("graph")
+        expect("graph: counts nodes, edges, orphans", "3 page nodes, 2 edges (ENFORCES 1, REQUIRES 1)" in r.stdout, r.stdout)
+        r = run("status")
+        expect("status: areas, pins, log", "area api" in r.stdout and "pin api" in r.stdout and "event(s)" in r.stdout, r.stdout + r.stderr)
+        # Engram: every page gets its Engram id, every edge is linked in Engram and confirmed
+        y0 = (t / "pair.yaml").read_text()
+        (t / "pair.yaml").write_text(y0 + "engram: {knowledge: sel-knowledge}\n")
+        U1, U2, U3 = (f"{n}{n}{n}{n}{n}{n}{n}{n}-0000-4000-8000-00000000000{n}" for n in (1, 2, 3))
+        r = run("record", "--page", "api/service--api.md", "--event", "updated", "--engram-id", "not-a-uuid")
+        expect("record: bad Engram id refused", r.returncode != 0 and "uuid" in (r.stdout + r.stderr), r.stdout + r.stderr)
+        r = run("record", "--page", "api/service--api.md", "--event", "updated")
+        expect("record without id: says which engram_write to make", 'title="API · service · service — api"' in r.stdout
+               and "--engram-id" in r.stdout, r.stdout + r.stderr)
+        r = run("record", "--page", "api/service--api.md", "--event", "updated", "--engram-id", U1)
+        ids = json.loads((g / "ids.json").read_text())
+        expect("record --engram-id: page → id + Engram title kept", ids["objects"]["api/service--api"]["id"] == U1
+               and ids["objects"]["api/service--api"]["engram_title"] == "API · service · service — api", ids)
+        r = run("pending")
+        expect("pending: edge waits for the other page's id", r.returncode == 3 and 'waiting for the Engram id of "rules — payment limits"' in r.stdout, r.stdout)
+        r = run("link", "--confirm", "--from", "service — api", "--to", "rules — payment limits", "--relation", "ENFORCES")
+        expect("confirm refused while an id is missing", r.returncode != 0 and "cannot be in Engram" in (r.stdout + r.stderr), r.stdout + r.stderr)
+        (d / "rules--limits.md").write_text("# rules — payment limits\nkind: rules · verified-at: api abc123\n\nOver-limit refused at `svc/limits.go:2`.\n")
+        run("record", "--page", "api/rules--limits.md", "--event", "updated", "--engram-id", U2)
+        r = run("pending")
+        expect("pending: ready edge prints the exact engram_link call",
+               f'engram_link(from_id="{U1}", to_id="{U2}", relation="ENFORCES")' in r.stdout, r.stdout)
+        r = run("check")
+        expect("check: unlinked edges keep the tick busy (exit 3)", r.returncode == 3 and "ENGRAM" in r.stdout, r.stdout + r.stderr)
+        nb = t / "nb-wrong.json"
+        nb.write_text(json.dumps({"relationships": [{"from_id": U1, "to_id": U2, "relation": "USES"}]}))
+        r = run("link", "--confirm", "--from", "API · service · service — api", "--to", "api/rules--limits", "--relation", "ENFORCES")
+        expect("confirm without saved Engram evidence refused", r.returncode != 0 and "--neighbors" in (r.stdout + r.stderr), r.stdout + r.stderr)
+        r = run("link", "--confirm", "--from", "API · service · service — api", "--to", "api/rules--limits", "--relation", "ENFORCES",
+                "--neighbors", str(nb))
+        expect("confirm refused when Engram does not list the edge", r.returncode != 0 and "does not list" in (r.stdout + r.stderr), r.stdout + r.stderr)
+        nb1 = t / "nb-u1.json"
+        nb1.write_text(json.dumps({"nodes": [], "relationships": [{"from_id": U1, "to_id": U2, "relation": "ENFORCES", "weight": 1}]}))
+        r = run("link", "--confirm", "--from", "API · service · service — api", "--to", "api/rules--limits", "--relation", "ENFORCES",
+                "--neighbors", str(nb1))
+        expect("confirm by Engram title / drafts key", r.returncode == 0 and "confirmed in Engram" in r.stdout, r.stdout + r.stderr)
+        r = run("requirement", "--key", "PAY-1", "--title", "requirement — PAY-1 limits", "--id", U3)
+        e = [json.loads(l) for l in (g / "edges.jsonl").read_text().splitlines()]
+        req = [x for x in e if x["relation"] == "REQUIRES"][0]
+        expect("requirement node: REQUIRES edge gets both ids", req.get("from_id") == U3 and req.get("to_id") == U2, req)
+        nb3 = t / "nb-u3.json"
+        nb3.write_text(json.dumps({"relationships": [{"from_id": U3, "to_id": U2, "relation": "REQUIRES"}]}))
+        r = run("confirm", "--neighbors", str(nb3))
+        expect("bulk confirm from a saved engram_neighbors result", r.returncode == 0 and r.stdout.startswith("confirmed 1 edge"), r.stdout + r.stderr)
+        r = run("pending")
+        expect("all edges confirmed -> pending exit 0", r.returncode == 0 and r.stdout.startswith("0 of 2"), r.stdout)
+        r = run("link", "--from", "rules — payment limits", "--to", "service — api", "--relation", "SEE_ALSO")
+        expect("new edge with both ids: pending + next call printed", "next: engram_link(" in r.stdout and "--confirm" in r.stdout, r.stdout)
+        r = run("status")
+        expect("status: Engram ids and edge states", "2/3 pages have an Engram id, 1 requirement node(s); edges linked 2, pending 1" in r.stdout, r.stdout)
+        # a page that gets a NEW Engram id: its linked edges go back to pending (they point at the superseded object)
+        U4 = "44444444-0000-4000-8000-" + "000000000004"
+        run("record", "--page", "api/rules--limits.md", "--event", "updated", "--engram-id", U4)
+        e = {x["relation"]: x for x in (json.loads(l) for l in (g / "edges.jsonl").read_text().splitlines())}
+        expect("new Engram id: edge moved to it and back to pending", e["ENFORCES"]["to_id"] == U4 and e["ENFORCES"]["engram"] == "pending"
+               and "id changed" in e["ENFORCES"].get("engram_note", ""), e["ENFORCES"])
+        # a hand edit to linked without ids is caught
+        rows = [json.loads(l) for l in (g / "edges.jsonl").read_text().splitlines()]
+        rows[0].update({"engram": "linked", "from_id": "", "to_id": ""})
+        (g / "edges.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rows))
+        r = run("pending")
+        idj = json.loads((g / "ids.json").read_text())
+        keep = idj["objects"].pop("api/service--api")
+        (g / "ids.json").write_text(json.dumps(idj))
+        rr = [json.loads(l) for l in (g / "edges.jsonl").read_text().splitlines()]
+        for x in rr:
+            if x.get("from_draft") == "api/service--api" or x.get("to_draft") == "api/service--api":
+                x.update({"engram": "linked", "engram_evidence": "sha256:test"})
+        (g / "edges.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rr))
+        r3 = run("check")
+        expect("a page whose Engram id is gone: its linked edges go back to pending (check exit 3)",
+               r3.returncode == 3 and "id no longer recorded" in (g / "edges.jsonl").read_text(), r3.stdout)
+        idj["objects"]["api/service--api"] = keep
+        (g / "ids.json").write_text(json.dumps(idj))
+        rows = [json.loads(l) for l in (g / "edges.jsonl").read_text().splitlines()]
+        rows[-1].update({"engram": "linked", "engram_evidence": ""})
+        (g / "edges.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rows))
+        r2 = run("pending")
+        expect("linked by hand without saved evidence is unproven", r2.returncode == 3 and "[unproven]" in r2.stdout, r2.stdout)
+        expect("hand edit to linked without ids is not accepted", r.returncode == 3 and "[pending]" in r.stdout
+               and "id changed none" in (g / "edges.jsonl").read_text(), r.stdout)
+        (t / "pair.yaml").write_text(y0)
+        # which branch the library grows from: knowledge.branch, and an extra line
+        sh("git", "push", "-q", "origin", "HEAD:release", cwd=work)
+        (work / "svc" / "limits.go").write_text("package svc\n// limit 300\n")
+        sh("git", "commit", "-qam", "c", cwd=work); sh("git", "push", "-q", "origin", "HEAD:main", cwd=work)
+        y = (t / "pair.yaml").read_text()
+        (t / "pair.yaml").write_text(y + "knowledge: {branch: release}\n")
+        r = run("check"); expect("knowledge.branch: release ignores main's new commit", r.returncode == 0 and "(release)" in r.stdout, r.stdout + r.stderr)
+        (t / "pair.yaml").write_text(y + "knowledge: {branch: release, lines: [{app: api, name: next, branch: main}]}\n")
+        r = run("check"); expect("knowledge.lines: an unpinned extra branch shows UNVERIFIED", r.returncode == 3 and "api-next: UNVERIFIED" in r.stdout, r.stdout)
+        (t / "pair.yaml").write_text(y + "knowledge: {grow_on: {test_flag: false}}\n")
+        r = run("flag", "--page", "p", "--reason", "x"); expect("grow_on.test_flag off refuses flags", r.returncode != 0, r.stdout)
+        (t / "pair.yaml").write_text(y + "knowledge: {areas: [{name: Bad, apps: [nope]}]}\n")
+        r = run("check"); expect("bad knowledge settings refused with the reason", r.returncode != 0 and "'nope'" in r.stderr, r.stderr)
+        (t / "pair.yaml").write_text(y)
+        (t / "pair.yaml").write_text((t / "pair.yaml").read_text().replace(f"host: {host}", "host: elsewhere"))
+        r = run("advance", "api"); expect("advance refused off the builder host", r.returncode != 0, r.stdout)
+    finally:
+        shutil.rmtree(t, ignore_errors=True)
+    print("ALL PASS" if not bad else f"{bad} FAILED")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,13 @@
+[
+  {"file": "session-start.sh",                  "event": "SessionStart", "matcher": "",                  "timeout": 10, "statusMessage": "Loading the pair's role and rules..."},
+  {"file": "action-ledger.py",                  "event": "PreToolUse",   "matcher": "*",                 "timeout": 5},
+  {"file": "action-ledger.py",                  "event": "PostToolUse",  "matcher": "*",                 "timeout": 5},
+  {"file": "pair-guard.py",                     "event": "PreToolUse",   "matcher": "*",                 "timeout": 10},
+  {"file": "deploy-gate.py",                    "event": "PreToolUse",   "matcher": "Bash",              "timeout": 5},
+  {"file": "secret-readback-guard.py",          "event": "PreToolUse",   "matcher": "Bash",              "timeout": 5},
+  {"file": "outbound-verify-guard.py",          "event": "PreToolUse",   "matcher": "*",                 "timeout": 5, "statusMessage": "Re-verifying before outbound send..."},
+  {"file": "dashboard-artifactdata-allow.py",   "event": "PreToolUse",   "matcher": "ArtifactData",      "timeout": 5},
+  {"file": "post-deploy-retest.py",             "event": "PostToolUse",  "matcher": "Bash",              "timeout": 5},
+  {"file": "df-stage-gate.py",                  "event": "PreToolUse",   "matcher": "Write|Edit|MultiEdit", "timeout": 5, "when": "dark_factory.stage_gate"},
+  {"file": "df-dispatch-subagents-reminder.py", "event": "PreToolUse",   "matcher": "Agent|Task",        "timeout": 5, "when": "dark_factory.stage_gate"}
+]
