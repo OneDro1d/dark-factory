@@ -268,6 +268,28 @@ git -C "$R" commit -qm journal
 printf 'clean\n' >> "$R/NOTES.md"; git -C "$R" add NOTES.md
 pc >/dev/null; [ $? -eq 0 ] && ok "P3 clean change passes" || bad "P3 clean change refused" "$(pc)"
 git -C "$R" commit -qm clean
+# P8 the guard must not refuse its OWN redaction marker (2026-09-22). A journal it has
+# already redacted keeps `[REDACTED]` for ever, so without the exemption in findings() every
+# later commit touching that file is refused — and the cost is behavioural: a guard that cries
+# wolf on its own output teaches everyone to reach for --no-verify. Both directions, because an
+# exemption that is too wide would stop the rule catching a real one.
+printf 'url amqp://user:[REDACTED]@host:5672/v\n' > "$R/redacted.md"; git -C "$R" add redacted.md
+pc >/dev/null 2>&1
+[ $? -eq 0 ] && ok "P8a an already-redacted URL password is not a finding" \
+  || bad "P8a the guard refuses its own [REDACTED] marker" "$(pc | head -c 160)"
+git -C "$R" commit -qm redacted >/dev/null 2>&1
+printf 'url amqp://user:%s@host:5672/v\n' "$FAKE_PW" > "$R/real.md"; git -C "$R" add real.md
+OUT="$(pc)"; RC=$?
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q 'real.md' && ! printf '%s' "$OUT" | grep -qF "$FAKE_PW"; then
+  ok "P8b a REAL URL password is still refused, value withheld"
+else bad "P8b the exemption is too wide" "rc=$RC"; fi
+printf 'a amqp://u:[REDACTED]@h:5672/v\nb amqp://u:%s@h:5672/v\n' "$FAKE_PW" > "$R/real.md"
+git -C "$R" add real.md
+pc >/dev/null 2>&1
+[ $? -ne 0 ] && ok "P8c a marker earlier in the file does not mask a real one later" \
+  || bad "P8c a marker masked a real credential" "the check must be per-match, not per-text"
+git -C "$R" rm -q --cached real.md; rm -f "$R/real.md"
+
 # install into the repo, chaining a foreign hook
 HD="$(git -C "$R" rev-parse --git-path hooks)"; case "$HD" in /*) ;; *) HD="$R/$HD" ;; esac
 mkdir -p "$HD"; printf '#!/bin/sh\necho foreign-ran >> "%s/foreign.log"\n' "$W" > "$HD/pre-commit"; chmod +x "$HD/pre-commit"

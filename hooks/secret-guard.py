@@ -209,7 +209,14 @@ def findings(text, env=None, values_re=None):
     for rid, rx in _COMPILED:
         if rx.search(text):
             hits.append(rid)
-    if _URL_PW.search(text):
+    # ⚠️ a URL whose password is ALREADY the marker is not a credential. The pre-commit
+    # redacts a staged journal, re-stages it and then scans what it wrote, so without this
+    # the guard reports its OWN output — and the markers are permanent, so every later
+    # commit touching that file is refused the same way. The real cost is behavioural: a
+    # guard that cries wolf on its own marker teaches everyone to reach for --no-verify,
+    # and then a genuine finding gets waved through. `_skip_kv` and the gitleaks allowlist
+    # already carry this exemption; this rule was the only one that did not.
+    if any(m.group(2) != REDACTED for m in _URL_PW.finditer(text)):
         hits.append("url-password")
     if PEM_BEGIN.search(text):
         hits.append("private-key")
