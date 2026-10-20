@@ -93,5 +93,5 @@ The builder/tester model, point by point, and where the kit does each: [docs/MOD
 | `skills/` | `/pair-setup`, the chat listener, the tester's brief |
 | `packs/` | optional add-ons for a specific organisation |
 
-Credits: the builder/tester model follows Michal Bacia's design (two workspaces, the tester as product owner, the
+Credits: the builder/tester model follows this repository's maintainer's design (two workspaces, the tester as product owner, the
 builder kept blind to the tests).
