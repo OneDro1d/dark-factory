@@ -3,8 +3,10 @@
 #
 # TWO CLAIMS, AND THEY FAIL IN OPPOSITE DIRECTIONS.
 #
-#   A. bootstrap.sh puts the runner, the suites and the CI workflow INTO the instance it
-#      creates. ⛔ THIS WAS FALSE UNTIL 2026-09-08 AND A GREEN SUITE HID IT. This template has
+#   A. bootstrap.sh puts the runner and the suites INTO the instance it creates — and, since the
+#      2026-10-07 ruling, NO CI workflow (A4 now asserts that absence; the workflow it used to
+#      ship could never pass, because the mint's own `.gitignore` excludes the path it ran).
+#      ⛔ THE COPYING WAS FALSE UNTIL 2026-09-08 AND A GREEN SUITE HID IT. This template had
 #      shipped `boot-kit/scripts/run-tests.sh`, `boot-kit/tests/` and
 #      `.github/workflows/gate.yml` since 2026-08-31, and bootstrap.sh copied none of them —
 #      so every instance ever minted came out with no runner, no suites and no CI. Measured on
@@ -60,7 +62,16 @@ if [ -e "$MINT/boot-kit/tests/test-boot-kit.sh" ]; then
 else
   ok "A3b the template-only suite does NOT ship"
 fi
-exists "A4 CI is wired in the instance"     "$MINT/.github/workflows/gate.yml"
+# ⛔ INVERTED 2026-10-07 (operator ruling, "C please"). This used to be
+# `exists "A4 CI is wired in the instance" "$MINT/.github/workflows/gate.yml"`. The mint no longer
+# ships a workflow: the one it used to ship ran `boot-kit/scripts/run-tests.sh`, which the mint's
+# own `.gitignore` excludes, so it exited 127 in CI for ever while passing on the minting machine.
+# Asserted as an ABSENCE rather than dropped, so re-adding it turns this suite red.
+if [ -e "$MINT/.github/workflows/gate.yml" ]; then
+  bad "A4 the mint ships NO GitHub CI" "a workflow landed in the mint — it cannot pass there"
+else
+  ok "A4 the mint ships NO GitHub CI"
+fi
 contains "A5 it says so, with a count" "test harness: run-tests.sh" "$BOOT_OUT"
 
 # The runner is executable, or CI runs `bash <file>` and this passes by luck on one platform.

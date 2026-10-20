@@ -236,10 +236,28 @@ done
 # existing machine: a check aimed at the template rather than at the thing the template
 # makes. `test-bootstrap-ships-tests.sh` now runs bootstrap.sh for real and reads the OUTPUT.
 #
-# ⚠️ The workflow is copied to `.github/workflows/gate.yml` in the INSTANCE, where it is that
-# repo's own CI. It runs the instance's suites and deliberately never runs install.sh: a CI
-# runner is not the machine the instance records, so a green tick there means the record is
-# well-formed, never that the install works. Only lock-verify on the target machine says that.
+# ⛔ NO GITHUB CI IS SHIPPED INTO AN INSTANCE, BY RULING, AND IT USED TO BE — operator decision
+# 2026-10-07 ("C please"), after this was measured. The template shipped
+# `.github/workflows/gate.yml`, which ran `bash boot-kit/scripts/run-tests.sh` — a path the
+# template's OWN `dot-gitignore.template:8` excludes, because `install.sh` regenerates that
+# directory from the pinned engine and `rm -rf`s it first (`install.sh:275`, `:320`). So the mint
+# wrote the runner to disk and the gitignore kept it out of the repo: the check worked for whoever
+# minted the kit and exited 127 for everybody else, permanently. Measured on two live kits,
+# 15 of 15 runs red since 2026-09-10; a third was green only because somebody force-added the
+# ignored file, i.e. it carried a committed second copy of pinned engine content.
+#
+# ⚠️ A GENERATOR THAT WRITES A FILE INTO A PATH ITS OWN IGNORE RULES EXCLUDE produces a repo that
+# is correct on the generating machine and broken everywhere else. Check the mint's OUTPUT against
+# its own `.gitignore`, not merely that the file was written.
+#
+# ⚠️ AND A CHECK THAT CAN NEVER PASS IS AS EMPTY AS ONE THAT CAN NEVER FAIL, and worse in one way:
+# it is always red, so it teaches the reader to ignore red on that repo.
+#
+# The runner itself STILL SHIPS and is still worth having — run it by hand after an install
+# (`bash boot-kit/scripts/run-tests.sh`). What went is only the GitHub workflow, which on this
+# estate was never a gate anyway: builds and tests run on the clusters, Tier 1 being the one
+# repo with a required check. ⛔ Do not re-add a workflow here; `test-instance-ci.sh` now asserts
+# its ABSENCE, so restoring it turns that suite red rather than failing silently.
 #
 # ⛔ TWO TEST DIRECTORIES, AND COPYING THE WRONG ONE MAKES EVERY NEW KIT RED ON DAY ONE.
 #   boot-kit/tests/           tests OF THIS TEMPLATE. They stay here. `test-boot-kit.sh`
@@ -255,7 +273,7 @@ done
 # The split is a directory rather than a naming convention on purpose: a convention is a rule
 # somebody has to remember at the moment of writing a new suite, and this one would fail
 # silently in the direction that looks green here and red on someone else's machine.
-mkdir -p "$TARGET/boot-kit/scripts" "$TARGET/boot-kit/tests" "$TARGET/.github/workflows"
+mkdir -p "$TARGET/boot-kit/scripts" "$TARGET/boot-kit/tests"
 cp "$SELF/boot-kit/scripts/run-tests.sh" "$TARGET/boot-kit/scripts/run-tests.sh" 2>/dev/null \
   || say "WARN  could not copy boot-kit/scripts/run-tests.sh — this instance has no test runner"
 chmod +x "$TARGET/boot-kit/scripts/run-tests.sh" 2>/dev/null
@@ -266,11 +284,12 @@ for t in "$SELF"/boot-kit/instance-tests/test-*.sh; do
   chmod +x "$TARGET/boot-kit/tests/${t##*/}" 2>/dev/null
   TEST_N=$((TEST_N + 1))
 done
-cp "$SELF/.github/workflows/gate.yml" "$TARGET/.github/workflows/gate.yml" 2>/dev/null \
-  || say "WARN  could not copy .github/workflows/gate.yml — this instance has no CI"
+# ⛔ No `.github/workflows/` is created and no workflow is copied — see the ruling in the header.
 # Said out loud, with the count. "Shipped a test harness" and "shipped zero suites" both
-# leave a tests/ directory behind, and only one of them is worth anything.
-say "  test harness: run-tests.sh + $TEST_N suite(s) + .github/workflows/gate.yml"
+# leave a tests/ directory behind, and only one of them is worth anything. The absence of CI is
+# stated too, because a reader who knows the template USED to ship it needs to see that the
+# omission is deliberate rather than the copy having failed.
+say "  test harness: run-tests.sh + $TEST_N suite(s); no GitHub CI (run it by hand, see KIT.md)"
 [ "$TEST_N" -eq 0 ] && say "WARN  zero suites copied — the runner treats that as a HARD FAILURE, by design"
 
 mkdir -p "$TARGET/.df/missions" "$TARGET/handoffs" "$TARGET/sessions"
