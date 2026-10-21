@@ -100,6 +100,17 @@ thread's own attribution) over any value that merely looks like it.
 If the answer is still ambiguous after that pass, *then* ask — and ask narrowly: what you
 searched, what you found, the specific gap, and the decision to be made.
 
+⛔ **AND OPEN WITH THE CONTEXT, IN PLAIN ENGLISH — ALWAYS. Operator ruling 2026-10-21:** *"I want
+to make sure that any question I'm asked and decisions I have to make are presented to me with
+context in plain English, always."* Before the options, before the recommendation, before any
+identifier: one or two sentences saying what the thing IS and what breaks or stays broken until it
+is decided, written for someone who has not seen the work. An id, a PR number and a gate code are
+not context — they are what the operator would have to decode first, and decoding is the work you
+were asked to take off him. This binds a chat message exactly as it binds `operator-todo.md`,
+where `df-operator-todo` refuses an item without `--context` and `lint` flags one that lacks it.
+⚠️ The tell that you have written jargon: the sentence only makes sense to someone who already
+read the thread it came from.
+
 ### The escalation gate runs on the most capable model
 
 There is exactly one trigger, and it is precise: **the moment your instinct is to ask the

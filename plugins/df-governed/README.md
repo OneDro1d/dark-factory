@@ -76,6 +76,16 @@ items, any narration or history not relevant to the open issues."* Measured that
 live pages were 28 KB, 50 KB and 35 KB, items averaging 2.5 KB of "RE-CHECKED …" and "✅ … MERGED"
 trails — none written by this tool; sessions hand-edited them in. So:
 
+- **EVERY item is refused without plain-English context — operator ruling 2026-10-21.** *"I want
+  to make sure that any question I'm asked and decisions I have to make are presented to me with
+  context in plain English, always."* `--context` is required whatever the category, is rendered as
+  the FIRST line under the item so it is read before the choices, and is checked: a string that is
+  mostly paths, flags and identifiers is refused with the count of plain words it managed. The bar
+  is deliberately low — it catches `FAIL P6 at kit/README.md:96`, not prose it merely dislikes.
+  `lint` flags an item that has no Context line, so pages written before the ruling surface
+  themselves at the next Stop rather than quietly keeping the old shape.
+  ⚠️ **The same rule binds a MESSAGE.** The page is where it can be enforced mechanically; a
+  question asked in chat is not, and it carries the context anyway.
 - **A decision item is refused without its analysis:** `--category decision` needs two or more
   `--option "<choice>: <what it means and what follows>"` and one `--recommend "<which, and why>"`.
 - **An action item is refused without its steps** (same day, second ruling: *"if I need to create

@@ -30,6 +30,7 @@ evidence, never the self-report, and never your own optimism.
 
 USAGE
   df-operator-todo add  --id <slug> --category <cat> --task "<what>" --why "<why it is theirs>" \
+                        --context "<what this is about, in plain English>" \
                         --do "<the exact command/URL/PR>" [--blocking] [--ref <path|url>]
   df-operator-todo done --id <slug> (--verified "<evidence>" | --by-operator)
   df-operator-todo list [--blocking-only]
@@ -94,6 +95,11 @@ HEADER = """# Operator TODO
      an item is marked BLOCKING. Delete a line yourself the moment it is done, or tell the agent
      and it will — but it will not remove one on a guess.
 
+     EVERY ITEM OPENS WITH CONTEXT, IN PLAIN ENGLISH — what the thing is, and what breaks or
+     stays broken until you decide it. You should never have to decode an id, a PR number or a
+     gate code to find out what you are being asked. If an item does not read that way, it is a
+     defect on this page — say so and it gets rewritten. (Operator ruling 2026-10-21.)
+
      EVERY LINE HERE IS AN ACTION WAITING ON YOU — a decision, an approval, a credential, access
      to a machine that is not ours, an irreversible act, or your judgement on a real dead end.
      Nothing else is admitted: no status, no FYI, no "nothing to do unless you want it sooner".
@@ -110,6 +116,15 @@ ENTRY_RE = re.compile(r"^- \[ \] `(?P<id>[^`]+)` — (?P<rest>.*)$")
 CLOSED_RE = re.compile(r"^\s*- \[[xX]\]")
 # A decision's choices, one indented line each, under its entry line. The only continuation
 # lines the page admits: anything else indented under an item is narration and fails lint.
+# Operator ruling 2026-10-21: "I want to make sure that any question I'm asked and decisions I
+# have to make are presented to me with context in plain English, always."
+#
+# The page already carried WHAT is being asked (`--task`), WHY it is his (`--why`), the choices
+# and a recommendation. None of those say what the thing IS. An operator reading
+# `t1-230-credit-line` had to reconstruct the subject from an id, a PR number and a gate code
+# before he could even reach the decision. `--context` is that missing sentence, it is REQUIRED on
+# every item whatever its category, and it is rendered FIRST so it is read before the options.
+CONTEXT_P = "  - **Context:** "
 OPTION_P = "  - **Option:** "
 RECOMMEND_P = "  - **Recommendation:** "
 # An operator ACTION's how-to, one numbered line per step (operator ruling 2026-09-22, second
@@ -125,7 +140,7 @@ RAISED_RE = re.compile(r" · _raised (\d{4}-\d{2}-\d{2})_$")
 # item, each item a trail of "RE-CHECKED …", "✅ … ARE MERGED", "corrected …". The tool never
 # wrote those; sessions hand-edited them in. So the caps bind at `add` AND `lint` reads the page.
 CAPS = {"task": 200, "why": 400, "do": 600, "option": 400, "recommend": 400, "ref": 300,
-        "step": 300}
+        "step": 300, "context": 600}
 ITEM_CAP = 1500
 HISTORY_RE = re.compile(
     # The dated forms only: "rewritten 2026-09-15" is a trail, "until it is rewritten" is a step
@@ -185,7 +200,8 @@ def parse(path):
             if m and cur is not None:
                 cur.append((m.group("id"), m.group("rest"), []))
                 continue
-            if cur and (line.startswith((OPTION_P, RECOMMEND_P)) or STEP_RE.match(line)):
+            if cur and (line.startswith((CONTEXT_P, OPTION_P, RECOMMEND_P))
+                        or STEP_RE.match(line)):
                 cur[-1][2].append(line)
     return blocking, async_
 
@@ -212,6 +228,36 @@ def write(path, blocking, async_):
         f.write(render(blocking, async_))
 
 
+def _plain_enough(text):
+    """Is this a sentence a person can read, or an identifier dump?
+
+    The bar is deliberately LOW. This is not a style police: it exists to catch a "context" like
+    `FAIL P6 at builder-tester-pair/README.md:96` — true, and unreadable to anyone who was not
+    already in the work. It counts PROSE words (no slash, backslash, backtick, underscore, angle
+    bracket, equals or digit, and not an ALL-CAPS slug) and asks for a handful of them.
+
+    ⚠️ A low bar that fires on the real failure beats a clever one that argues with good writing.
+    Both directions are covered by test-df-operator-todo.sh: a jargon dump must be refused and an
+    ordinary sentence must pass, because a check that cannot fail is not a check.
+    """
+    words = text.split()
+    if len(words) < 8:
+        return False, f"it is {len(words)} words long"
+    prose = 0
+    for w in words:
+        t = w.strip("`*_.,;:()[]\"'")
+        if not t:
+            continue
+        if any(c in t for c in "/\\`_<>=") or any(c.isdigit() for c in t):
+            continue
+        if t.isupper() and len(t) > 2:
+            continue
+        prose += 1
+    if prose < 5:
+        return False, f"only {prose} of its {len(words)} words are plain English"
+    return True, ""
+
+
 def _refuse(msg):
     sys.stderr.write("df-operator-todo: " + msg + "\n")
     return 2
@@ -220,6 +266,14 @@ def _refuse(msg):
 def cmd_add(a):
     options = a.option or []
     steps = a.step or []
+    ok, why = _plain_enough(a.context)
+    if not ok:
+        return _refuse(
+            "--context is not plain English yet: " + why + ".\n"
+            "Two sentences, no jargon, as if to someone who has not seen this work: what the "
+            "thing IS, and what breaks or stays broken until it is decided.\n"
+            "An id, a PR number and a gate code are not context — the operator should not have "
+            "to reconstruct the subject before he can reach the question (ruling 2026-10-21).")
     if a.category == "decision" and (len(options) < 2 or not a.recommend):
         return _refuse(
             "a decision needs at least two --option \"<choice>: <what it means and what follows>\" "
@@ -235,7 +289,8 @@ def cmd_add(a):
         return _refuse("a decision needs --do: how to answer (e.g. \"Reply A or B\").")
     if len(steps) > MAX_STEPS:
         return _refuse(f"{len(steps)} steps; the cap is {MAX_STEPS}. Link a runbook with --ref.")
-    fields = [("task", a.task), ("why", a.why), ("do", a.do or ""), ("ref", a.ref or ""),
+    fields = [("task", a.task), ("why", a.why), ("context", a.context),
+              ("do", a.do or ""), ("ref", a.ref or ""),
               ("recommend", a.recommend or "")] + [("option", o) for o in options] \
         + [("step", s) for s in steps]
     for name, val in fields:
@@ -260,7 +315,8 @@ def cmd_add(a):
     if a.ref:
         rest += f" · _ref:_ {a.ref}"
     rest += f" · _raised {stamp}_"
-    extra = [OPTION_P + o for o in options]
+    extra = [CONTEXT_P + a.context]
+    extra += [OPTION_P + o for o in options]
     if a.recommend:
         extra.append(RECOMMEND_P + a.recommend)
     extra += [f"  {n}. {s}" for n, s in enumerate(steps, 1)]
@@ -354,12 +410,17 @@ def lint_page(path):
         m = ENTRY_RE.match(line)
         if m:
             cur = {"id": m.group("id"), "text": m.group("rest"), "options": 0, "rec": 0,
-                   "steps": 0, "decision": "_yours because:_ **decision**" in line}
+                   "steps": 0, "context": 0,
+                   "decision": "_yours because:_ **decision**" in line}
             items.append(cur)
             continue
         if cur is not None and STEP_RE.match(line):
             cur["text"] += " " + line
             cur["steps"] += 1
+            continue
+        if cur is not None and line.startswith(CONTEXT_P):
+            cur["text"] += " " + line
+            cur["context"] += 1
             continue
         if cur is not None and line.startswith((OPTION_P, RECOMMEND_P)):
             cur["text"] += " " + line
@@ -380,6 +441,9 @@ def lint_page(path):
             problems.append(f"{where}: carries a trail of dates — keep one raised date")
         if len(it["text"]) > ITEM_CAP:
             problems.append(f"{where}: {len(it['text'])} characters; the cap is {ITEM_CAP}")
+        if it["context"] < 1:
+            problems.append(f"{where}: no Context line — the operator has to work out what this is "
+                            "about before he can answer it (ruling 2026-10-21)")
         if it["decision"] and (it["options"] < 2 or it["rec"] < 1):
             problems.append(f"{where}: a decision needs two or more options, each with what it means, "
                             "and a recommendation")
@@ -417,6 +481,9 @@ def main():
     a.add_argument("--category", required=True, choices=sorted(CATEGORIES),
                    help="the operator-only thing this needs; if none fits, the item is YOURS")
     a.add_argument("--why", required=True, help="why that category applies, in this case")
+    a.add_argument("--context", required=True,
+                   help="REQUIRED, plain English, no jargon: what this is about, and what breaks "
+                        "or stays broken until it is decided")
     a.add_argument("--do", dest="do", help="decision: how to answer; action: an optional one-line summary")
     a.add_argument("--step", action="append",
                    help="action items, 1+ in order: one plain-English step each — the URL to open, "

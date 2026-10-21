@@ -144,7 +144,14 @@ PAGE = """⛔ operator-todo.md IS NOT IN SHAPE. Fix it before you stop.
 
 Operator ruling 2026-09-22: every session keeps this page, and it holds ONLY OPEN items for the
 human. A decision is asked in plain English, with the options, what each one means and what
-follows from it, and a recommendation. An action (a token, a login, a merge) carries numbered
+follows from it, and a recommendation.
+
+Operator ruling 2026-10-21: "any question I'm asked and decisions I have to make are presented to
+me with context in plain English, ALWAYS." So every item opens with --context: one or two
+sentences, no jargon, written for someone who has not seen the work — what the thing IS, and what
+breaks or stays broken until it is decided. An id, a PR number and a gate code are not context.
+THIS APPLIES TO A MESSAGE AS WELL AS TO THIS PAGE: a question put to the operator in chat carries
+the same context, in the same plain English, before the options. An action (a token, a login, a merge) carries numbered
 step-by-step instructions: the URL to open, what to click, the exact command, what they should see.
 No closed items, no narration, no history.
 

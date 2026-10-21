@@ -84,6 +84,9 @@ ANSWER_FIRST = (
 RECORD_THE_TODO = (
     "Then record it on the operator's page so it is not buried in a transcript: "
     "df-operator-todo add --id <slug> --category <decision|approval|credential|access|"
+    # --context is REQUIRED (operator ruling 2026-10-21): what it IS, in plain English,
+    # before what it needs. A question the operator has to decode is not yet a question.
+    "   --context \"<what this is about, and what breaks until it is decided>\" "
     "irreversible|attention> --task <what> --why <why that category applies> "
     "--do <exact steps> "
     "[--blocking]."
