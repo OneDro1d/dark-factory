@@ -52,7 +52,7 @@ decision or a merge without stopping every other front.
 - **At mission start**, from the notepad: `df-operator-todo init`. It is idempotent, and
   `df-mission start` runs it too.
 - **The moment an item is the operator's**:
-  `df-operator-todo add --id <slug> --category <decision|approval|credential|access|irreversible|attention> --task "<what>" --why "<why it is theirs>" --do "<the exact command, URL or PR>"`.
+  `df-operator-todo add --id <slug> --category <decision|approval|credential|access|irreversible|attention> --task "<what>" --why "<why it is theirs>" --context "A throwaway item written by a test, so the page has something on it to check." --do "<the exact command, URL or PR>"`.
   Add `--blocking` only when the loop cannot go on without it; the default is that the loop
   continues. Re-adding an id updates that entry, so a blocker re-found every iteration stays one line.
 - **When it is done**: `df-operator-todo done --id <slug> --verified "<evidence>"`, or
