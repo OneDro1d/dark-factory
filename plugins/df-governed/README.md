@@ -48,11 +48,25 @@ this method; spending it on retrieval is the exact waste the method exists to re
 
 ```sh
 df-operator-todo add  --id eso-install --category access --task "Run bash install.sh on the ESO laptop" \
-                      --why "only you can reach that machine" --do "git pull; bash install.sh" \
+                      --why "only you can reach that machine" \
+                      --context "<what this is about and what stays broken, in plain English>" \
+                      --step "Open the laptop and run: git pull" --step "Run: bash install.sh" \
                       [--blocking]
 df-operator-todo done --id eso-install (--verified "<what you saw>" | --by-operator)
 df-operator-todo list [--blocking-only]
+df-operator-todo publish            # render it to HTML and update the ONE page the human reads
+df-operator-todo publish --check    # rc 1 when that page is older than this file
 ```
+
+⛔ **The file is the source; the PAGE is what the human reads.** A markdown file at a notepad root
+is on a machine they are not at, so `publish` renders it and updates ONE Engram object in place —
+same id, same link, for ever, so it can be pinned. **Publish before every message to them, and end
+the message with the link.** The Stop gate runs `publish --check` and names a stale page.
+Operator ruling 2026-10-30: *"Every time you update things and write me a message, you update the
+same file … If you need something from me, it has to be in this file. If something is done, it has
+to be removed."* Configured per machine in the Tier-3 record (`DF_ENGRAM_PAGES_NS`,
+`DF_ENGRAM_PAGES_URL`); unset, `--check` passes and nothing is gated. What that hub is, and
+how a machine is authorised to reach it: [Engram](../../starter-kit/instance/AUTHENTICATION.md#engram).
 
 - **`--blocking` vs async.** Default is async: the loop keeps running and the human picks the item
   up when convenient. That is the normal case and the whole point — the two are separated so a

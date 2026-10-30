@@ -331,6 +331,166 @@ echo "== T: a missing page lints as MISSING, never as clean"
 OUT="$("$SCRIPT" --file "$T/absent.md" lint 2>&1)"; RC=$?
 eq "T1 rc is 2 on a missing page" "$RC" "2"
 
+
+# The page is published to Engram; what that is and how a machine reaches it:
+# [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
+echo "== W: publish — the ONE page the operator actually reads (ruling 2026-10-30)"
+# He reads an HTML page at a pinned link, not a markdown file in a private repo on a machine he is
+# not at. Everything here is about the two ways that promise breaks in practice: a SECOND object
+# (his link stops tracking reality while every report says "updated"), and a page that is simply
+# never re-published after the queue moves.
+mkdir -p "$T/w"
+FW="$T/w/operator-todo.md"
+NS="ns-under-test"
+BASE="https://engram.example.invalid/l/lib/ns"
+export DF_AGENT_ID="agent-under-test"
+"$SCRIPT" --file "$FW" init >/dev/null 2>&1
+"$SCRIPT" --file "$FW" add --id w-dec --category decision --task "Pick the tier for the guard" \
+  --why "a new risk you accept or not" \
+  --context "The guard stops the agent printing a token into a transcript. Putting it in Tier 1 gives it to every estate at once." \
+  --do "Reply A or B" --option "A: Tier 1, every estate gets it" --option "B: this estate only" \
+  --recommend "A, because the hazard is generic" >/dev/null 2>&1
+"$SCRIPT" --file "$FW" add --id w-act --category access --task "Run one install on the far box" \
+  --why "that machine is not reachable from here" --blocking \
+  --context "A machine keeps running whatever it last installed, so until this runs it has the old tool." \
+  --ref "https://example.invalid/pull/1" \
+  --step "Open the workspace and click Terminal" \
+  --step "Run: cd /home/coder/code/loom-storage" \
+  --step "Run: bash install.sh --lock=instances/far/loom.lock.json" >/dev/null 2>&1
+
+OUT="$("$SCRIPT" --file "$FW" publish --dry-run --out "$T/w/page.html" 2>&1)"; RC=$?
+eq       "W1 dry-run needs no configuration (rc 0)" "$RC" "0"
+contains "W1 reports the size" "bytes" "$OUT"
+contains "W1 counts both kinds" "1 decision(s), 1 action(s)" "$OUT"
+H="$(cat "$T/w/page.html")"
+contains "W2 the decision is labelled D1" 'id="D1"' "$H"
+contains "W2 the action is labelled A1" 'id="A1"' "$H"
+contains "W2 context is rendered" "printing a token into a transcript" "$H"
+contains "W2 the recommended option is marked" '<li class="rec">' "$H"
+contains "W2 steps are an ordered list" "<ol>" "$H"
+contains "W2 a full path survives" "/home/coder/code/loom-storage" "$H"
+contains "W2 the command is monospaced" "<code>bash install.sh" "$H"
+contains "W2 the ref becomes a link" '<a href="https://example.invalid/pull/1">' "$H"
+contains "W2 blocking is called out" "Blocking" "$H"
+contains "W2 the title names the agent and the operator" "agent-under-test: what I need from" "$H"
+
+# ⛔ A PUBLIC PAGE RENDERS WHATEVER THE QUEUE SAYS. Escaping is not cosmetic here.
+"$SCRIPT" --file "$FW" add --id w-esc --category approval --task "Approve the thing" \
+  --why "yours to approve" \
+  --context "A plain sentence followed by a tag that must never reach the browser as markup: <script>alert(1)</script>" \
+  --step "Click approve" >/dev/null 2>&1
+"$SCRIPT" --file "$FW" publish --dry-run --out "$T/w/esc.html" >/dev/null 2>&1
+H="$(cat "$T/w/esc.html")"
+contains "W3 a script tag is escaped" "&lt;script&gt;" "$H"
+absent   "W3 and never emitted as markup" "<script>" "$H"
+"$SCRIPT" --file "$FW" done --id w-esc --by-operator >/dev/null 2>&1
+
+OUT="$("$SCRIPT" --file "$FW" publish --check 2>&1)"; RC=$?
+eq       "W4 unconfigured --check PASSES (a notepad that never opted in is not gated)" "$RC" "0"
+contains "W4 and says why" "not configured" "$OUT"
+
+OUT="$(DF_ENGRAM_PAGES_NS="$NS" DF_ENGRAM_PAGES_URL="$BASE" "$SCRIPT" --file "$FW" publish --check 2>&1)"; RC=$?
+eq       "W5 configured but never published is a DEFECT (rc 1)" "$RC" "1"
+contains "W5 and names the fix" "df-operator-todo publish" "$OUT"
+
+# A stub transport: df-engram's documented test seam. No network, and it RECORDS which hub tool
+# was called, which is the only way to prove a second page was never written.
+export DF_ENGRAM_TOOLLOG="$T/w/tools.log"
+STUB="$T/w/transport.sh"
+cat > "$STUB" <<'STUBEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$DF_ENGRAM_TOOLLOG"
+if [ "${DF_STUB_LIST_BROKEN:-0}" = "1" ]; then
+  case "$1" in *engram_list) printf '{}\n'; exit 0 ;; esac
+fi
+case "$1" in
+  *engram_list)             printf '{"objects":[]}\n' ;;
+  *engram_write)            printf '{"id":"11111111-2222-3333-4444-555555555555"}\n' ;;
+  *engram_update)           printf '{"object_id":"11111111-2222-3333-4444-555555555555"}\n' ;;
+  *set_object_visibility)   printf '{"object_id":"11111111-2222-3333-4444-555555555555","visibility":"public"}\n' ;;
+  *)                        printf '{}\n' ;;
+esac
+STUBEOF
+chmod +x "$STUB"
+
+# ⛔ THE LIST MUST ANSWER BEFORE A FIRST WRITE IS ALLOWED. A store that could not answer is not an
+# absence, and treating it as one is exactly how an operator ends up with two pinned links.
+: > "$DF_ENGRAM_TOOLLOG"
+OUT="$(DF_STUB_LIST_BROKEN=1 DF_ENGRAM_TRANSPORT="$STUB" DF_ENGRAM_PAGES_NS="$NS" \
+       DF_ENGRAM_PAGES_URL="$BASE" "$SCRIPT" --file "$FW" publish 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "W6 an unlistable store REFUSES a first publish" \
+  || bad "W6 unlistable store refuses" "rc was 0"
+N="$(grep -c 'engram_write' "$DF_ENGRAM_TOOLLOG" || true)"
+eq "W6 CONTROL: and wrote NOTHING" "$N" "0"
+[ -f "$T/w/.df/operator-page.json" ] && bad "W6 no state recorded" "state file exists" \
+  || ok "W6 no state recorded either"
+
+: > "$DF_ENGRAM_TOOLLOG"
+OUT="$(DF_ENGRAM_TRANSPORT="$STUB" DF_ENGRAM_PAGES_NS="$NS" DF_ENGRAM_PAGES_URL="$BASE" \
+       "$SCRIPT" --file "$FW" publish 2>&1)"; RC=$?
+eq       "W7 a first publish succeeds" "$RC" "0"
+contains "W7 and prints the link" "$BASE/11111111-2222-3333-4444-555555555555" "$OUT"
+contains "W7 asked the object store first" "engram_list" "$(cat "$DF_ENGRAM_TOOLLOG")"
+contains "W7 then wrote the page" "engram_write" "$(cat "$DF_ENGRAM_TOOLLOG")"
+contains "W7 and set it public" "set_object_visibility" "$(cat "$DF_ENGRAM_TOOLLOG")"
+contains "W7 state records the id" "11111111-2222-3333-4444-555555555555" "$(cat "$T/w/.df/operator-page.json")"
+
+OUT="$(DF_ENGRAM_PAGES_NS="$NS" DF_ENGRAM_PAGES_URL="$BASE" "$SCRIPT" --file "$FW" publish --check 2>&1)"; RC=$?
+eq       "W8 --check passes immediately after a publish" "$RC" "0"
+contains "W8 and says so" "is current" "$OUT"
+
+# THE RED CONTROL for the whole mechanism: move the queue, and the page he can read is stale.
+"$SCRIPT" --file "$FW" add --id w-new --category approval --task "One more thing" --why "yours" \
+  --context "An item added after the page was published, so the page he is looking at is behind." \
+  --step "Say go" >/dev/null 2>&1
+OUT="$(DF_ENGRAM_PAGES_NS="$NS" DF_ENGRAM_PAGES_URL="$BASE" "$SCRIPT" --file "$FW" publish --check 2>&1)"; RC=$?
+eq       "W9 CONTROL: a changed queue makes the published page STALE (rc 1)" "$RC" "1"
+contains "W9 and says what he is reading is out of date" "OUT OF DATE" "$OUT"
+
+# ⛔ THE SECOND PUBLISH MUST UPDATE IN PLACE. A new object means a new URL, and his pin is dead.
+: > "$DF_ENGRAM_TOOLLOG"
+OUT="$(DF_ENGRAM_TRANSPORT="$STUB" DF_ENGRAM_PAGES_NS="$NS" DF_ENGRAM_PAGES_URL="$BASE" \
+       "$SCRIPT" --file "$FW" publish 2>&1)"; RC=$?
+eq       "W10 a later publish succeeds" "$RC" "0"
+contains "W10 and says it UPDATED rather than published" "updated" "$OUT"
+LOG="$(cat "$DF_ENGRAM_TOOLLOG")"
+contains "W10 it updated in place" "engram_update" "$LOG"
+N="$(grep -c 'engram_write' "$DF_ENGRAM_TOOLLOG" || true)"
+eq       "W10 and NEVER wrote a second object" "$N" "0"
+N="$(grep -c 'set_object_visibility' "$DF_ENGRAM_TOOLLOG" || true)"
+eq       "W10 nor silently re-set visibility (an unpublish is a decision)" "$N" "0"
+contains "W10 the link is unchanged" "$BASE/11111111-2222-3333-4444-555555555555" "$OUT"
+
+# A page out of shape must not be published: the HTML is rendered FROM it, to a public URL.
+printf 'a stray line of narration\n' >> "$FW"
+OUT="$(DF_ENGRAM_TRANSPORT="$STUB" DF_ENGRAM_PAGES_NS="$NS" DF_ENGRAM_PAGES_URL="$BASE" \
+       "$SCRIPT" --file "$FW" publish 2>&1)"; RC=$?
+eq       "W11 a page that fails lint REFUSES to publish (rc 2)" "$RC" "2"
+contains "W11 and says the defect would be published" "public URL" "$OUT"
+
+echo "== X: 25 KB is a ceiling the route enforces silently, so the tool enforces it loudly"
+mkdir -p "$T/x"
+FX="$T/x/operator-todo.md"
+"$SCRIPT" --file "$FX" init >/dev/null 2>&1
+SENT='A sentence of plain English that is long enough to be realistic for an operator item. '
+WHY="${SENT}${SENT}${SENT}"      # 3 x 86 = 258, inside the 400 cap
+CTX="${SENT}${SENT}${SENT}${SENT}${SENT}${SENT}"   # 6 x 86 = 516, inside the 600 cap
+i=1
+while [ "$i" -le 30 ]; do
+  "$SCRIPT" --file "$FX" add --id "x$i" --category approval --task "Approve item number $i of a page built to exceed the published size ceiling" \
+    --why "$WHY" --context "$CTX" \
+    --step "Open the page and read it" --step "Click the button" --step "Tell me when you have clicked it" >/dev/null 2>&1
+  i=$((i+1))
+done
+N="$(grep -c '^- \[ \] ' "$FX" || true)"
+eq       "X0 CONTROL: the oversized fixture really has 30 items" "$N" "30"
+OUT="$("$SCRIPT" --file "$FX" publish --dry-run 2>&1)"; RC=$?
+eq       "X1 an oversized page REFUSES (rc 2)" "$RC" "2"
+contains "X1 and names the ceiling" "25000" "$OUT"
+contains "X1 and names the hazard" "truncates" "$OUT"
+contains "X1 and names the biggest items" "Biggest items:" "$OUT"
+unset DF_AGENT_ID DF_ENGRAM_TOOLLOG
+
 printf 'passed %s  failed %s\n' "$PASS" "$FAIL"
 printf 'ASSERTIONS: %s\n' "$((PASS+FAIL))"
 [ "$FAIL" -eq 0 ] || exit 1

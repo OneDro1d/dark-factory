@@ -557,6 +557,88 @@ notshape "$M8" && ok "M8: CONTROL — the same page with the real tool does bloc
 M9="$(pfire "page9-$$" "$TX/work1.jsonl" "$TMPDIR")"
 notshape "$M9" && bad "M9: outside a notepad, nothing" "$M9" || ok "M9: outside a notepad there is no page check"
 
+
+# The page is published to Engram; what that is and how a machine is authorised to reach
+# it: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
+echo "=== N: and every session PUBLISHES it, so the human can actually read it (ruling 2026-10-30) ==="
+# Keeping the markdown page in shape (M) and DELIVERING it are different promises. An undelivered
+# one is invisible from inside the session that owes it: the file looks right, and he is reading
+# last week's queue.
+NP="$TMPDIR/npub"; mkdir -p "$NP/sub"; printf '# NOTES\n' > "$NP/NOTES.md"
+NNS="ns-under-test"
+NBASE="https://engram.example.invalid/l/lib/ns"
+"$TOOL" --file "$NP/operator-todo.md" init >/dev/null 2>&1
+"$TOOL" --file "$NP/operator-todo.md" add --id n1 --category credential --task "Sign in" \
+  --why "only you hold it" \
+  --context "A throwaway item written by a test, so the page has something on it to check." \
+  --step "Run: claude auth login" >/dev/null 2>&1
+stale() { case "$1" in *"OLDER THAN YOUR QUEUE"*) return 0;; *) return 1;; esac; }
+
+N1="$(pfire "pub1-$$" "$TX/work1.jsonl" "$NP")"
+stale "$N1" && bad "N1: unconfigured must not gate" "$N1" \
+             || ok "N1: with no pages namespace configured, nothing is gated"
+
+N2="$(pfire "pub2-$$" "$TX/work1.jsonl" "$NP" DF_ENGRAM_PAGES_NS="$NNS" DF_ENGRAM_PAGES_URL="$NBASE")"
+stale "$N2" && ok "N2: configured and never published BLOCKS the stop" || bad "N2: blocks" "$N2"
+case "$N2" in *'"decision": "block"'*) ok "N2: and it is a block, not a hint";; *) bad "N2: is a block" "$N2";; esac
+case "$N2" in *"df-operator-todo publish"*) ok "N2: the reason names the exact command";; *) bad "N2: names the command" "$N2";; esac
+
+N3="$(pfire "pub2-$$" "$TX/work2.jsonl" "$NP" DF_ENGRAM_PAGES_NS="$NNS" DF_ENGRAM_PAGES_URL="$NBASE")"
+stale "$N3" && bad "N3: the same stale version is not re-nagged" "$N3" \
+             || ok "N3: the same stale version is not re-nagged (a hub that is down must not wedge a session)"
+
+N4="$(pfire "pub4-$$" "$TX/work1.jsonl" "$NP" DF_OPERATOR_PAGE_CHECK=off DF_ENGRAM_PAGES_NS="$NNS" DF_ENGRAM_PAGES_URL="$NBASE")"
+stale "$N4" && bad "N4: the off switch" "$N4" || ok "N4: DF_OPERATOR_PAGE_CHECK=off turns this off too"
+# ⛔ CONTROL for N4: a fresh session on the same page MUST block, or N4 proves nothing.
+N5="$(pfire "pub5-$$" "$TX/work1.jsonl" "$NP" DF_ENGRAM_PAGES_NS="$NNS" DF_ENGRAM_PAGES_URL="$NBASE")"
+stale "$N5" && ok "N5: CONTROL — with the switch on, the same page does block" || bad "N5: control blocks" "$N5"
+
+# An installed tool that lints but has never heard of `publish` (argparse exits 2) must FAIL OPEN.
+# That is every machine in the fleet until its next install, and a forced turn there would be ours.
+cat > "$TMPDIR/publess" <<'PUBEOF'
+#!/bin/sh
+for a in "$@"; do
+  [ "$a" = "lint" ] && exit 0
+  [ "$a" = "publish" ] && exit 2
+done
+exit 0
+PUBEOF
+chmod +x "$TMPDIR/publess"
+N6="$(printf '{"session_id":"pub6-%s","transcript_path":"%s","cwd":"%s"}' "$$" "$TX/work1.jsonl" "$NP" \
+      | scrub_dispatch_env DF_OPERATOR_TODO_BIN="$TMPDIR/publess" DF_ENGRAM_PAGES_NS="$NNS" \
+        DF_ENGRAM_PAGES_URL="$NBASE" python3 "$HOOK" 2>/dev/null)"
+stale "$N6" && bad "N6: a tool with no publish must fail open" "$N6" \
+             || ok "N6: an installed tool with no publish fails OPEN — never a forced turn"
+
+# And once it IS published, the gate goes quiet. Published through df-engram's documented test
+# seam, so no network: the point is that the STATE the gate reads is written by the real path.
+cat > "$TMPDIR/pubstub" <<'STUBEOF'
+#!/usr/bin/env bash
+case "$1" in
+  *engram_list)   printf '{"objects":[]}\n' ;;
+  *engram_write)  printf '{"id":"99999999-8888-7777-6666-555555555555"}\n' ;;
+  *engram_update) printf '{"object_id":"99999999-8888-7777-6666-555555555555"}\n' ;;
+  *)              printf '{"ok":true}\n' ;;
+esac
+STUBEOF
+chmod +x "$TMPDIR/pubstub"
+DF_ENGRAM_TRANSPORT="$TMPDIR/pubstub" DF_ENGRAM_PAGES_NS="$NNS" DF_ENGRAM_PAGES_URL="$NBASE" \
+  "$TOOL" --file "$NP/operator-todo.md" publish >/dev/null 2>&1
+[ -f "$NP/.df/operator-page.json" ] && ok "N7: the publish recorded its state" \
+                                    || bad "N7: state recorded" "no $NP/.df/operator-page.json"
+N8="$(pfire "pub8-$$" "$TX/work1.jsonl" "$NP" DF_ENGRAM_PAGES_NS="$NNS" DF_ENGRAM_PAGES_URL="$NBASE")"
+stale "$N8" && bad "N8: a published page must not block" "$N8" \
+             || ok "N8: once published, the gate is quiet"
+
+# THE RED CONTROL: move the queue and it blocks again, in a session that had been let through.
+"$TOOL" --file "$NP/operator-todo.md" add --id n2 --category approval --task "Approve the thing" \
+  --why "yours to approve" \
+  --context "A second throwaway item, added after the page was published, so the page is behind." \
+  --step "Click approve" >/dev/null 2>&1
+N9="$(pfire "pub9-$$" "$TX/work1.jsonl" "$NP" DF_ENGRAM_PAGES_NS="$NNS" DF_ENGRAM_PAGES_URL="$NBASE")"
+stale "$N9" && ok "N9: CONTROL — a queue that moved blocks again" || bad "N9: moved queue blocks" "$N9"
+case "$N9" in *"OUT OF DATE"*) ok "N9: and says what he is reading is out of date";; *) bad "N9: says stale" "$N9";; esac
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 echo "ASSERTIONS: $((PASS + FAIL))"
