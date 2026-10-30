@@ -52,13 +52,37 @@ decision or a merge without stopping every other front.
 - **At mission start**, from the notepad: `df-operator-todo init`. It is idempotent, and
   `df-mission start` runs it too.
 - **The moment an item is the operator's**:
-  `df-operator-todo add --id <slug> --category <decision|approval|credential|access|irreversible|attention> --task "<what>" --why "<why it is theirs>" --context "A throwaway item written by a test, so the page has something on it to check." --do "<the exact command, URL or PR>"`.
+  `df-operator-todo add --id <slug> --category <decision|approval|credential|access|irreversible|attention> --task "<what>" --why "<why it is theirs>" --context "<what this is about and what stays broken, in plain English>" --do "<the exact command, URL or PR>"`.
   Add `--blocking` only when the loop cannot go on without it; the default is that the loop
   continues. Re-adding an id updates that entry, so a blocker re-found every iteration stays one line.
 - **When it is done**: `df-operator-todo done --id <slug> --verified "<evidence>"`, or
   `--by-operator` when the human says so. Never remove an item you did not see done.
 - `df-operator-todo list` prints the page. A finished item is deleted; the notepad's git history
   keeps it.
+- ⛔ **BEFORE EVERY MESSAGE TO THE OPERATOR: `df-operator-todo publish`, then end the message
+  with the link it prints.** The markdown page is the source; `publish` renders it to HTML and
+  updates ONE object in place, so the operator keeps one link and can pin it. The Stop gate runs
+  `publish --check` and names a page that is older than the queue.
+
+  Operator ruling 2026-10-30: *"one engram html accessible via a public link, with all the things
+  you need from me: decisions and actions … Every time you update things and write me a message,
+  you update the same file … If you need something from me, it has to be in this file. If
+  something is done, it has to be removed."*
+
+  - ⛔ **Never publish a second page.** The link must never change, or the pin keeps showing a
+    queue that stopped moving while every report says "updated". `publish` adopts an existing page
+    by title and then updates by id, so re-running a first publish is safe even after a timeout.
+  - ⚠️ **The page is PUBLIC** where the operator asked for a public link: no secret, no token,
+    nothing that leads to one, and no customer, client or patient data. Full repo URLs and
+    pathnames are the POINT — they are what stops the operator asking "what repo, what app" — but
+    internal hostnames and endpoints stay off it.
+  - ⚠️ **A page over 25 KB is TRUNCATED by the render route, silently**, so `publish` refuses
+    instead and names the biggest items. Close what is done; do not shorten the context.
+  - Per machine, in the Tier-3 record's `settings.env` (never in Tier 1, which is public and these
+    carry estate ids): `DF_ENGRAM_PAGES_NS`, `DF_ENGRAM_PAGES_URL`, and optionally `DF_AGENT_ID`
+    and `DF_OPERATOR_CHANNEL`. With them unset, `publish --check` passes and nothing is gated.
+  - What the page is published to, and how a machine is authorised to reach it:
+    [Engram](../../starter-kit/instance/AUTHENTICATION.md#engram).
 
 ⚠️ **Only actions waiting on the human belong there.** An FYI, a status line, a finding, or work
 you are able to do yourself is not an item: if you cannot name which of the six categories it

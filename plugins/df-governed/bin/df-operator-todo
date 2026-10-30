@@ -34,6 +34,8 @@ USAGE
                         --do "<the exact command/URL/PR>" [--blocking] [--ref <path|url>]
   df-operator-todo done --id <slug> (--verified "<evidence>" | --by-operator)
   df-operator-todo list [--blocking-only]
+  df-operator-todo publish   render this page to HTML and update the ONE page he reads, in place
+  df-operator-todo publish --check    exit 1 if what he can read is older than this file
   df-operator-todo init      create the empty page at the notepad root if absent (idempotent)
   df-operator-todo path
 
@@ -65,8 +67,12 @@ appending a second copy. A loop that runs for six hours and re-derives the same 
 iteration must not produce six identical lines; it must produce one, still true.
 """
 import argparse
+import hashlib
+import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 
@@ -470,6 +476,424 @@ def cmd_lint(a):
     return 1
 
 
+# ───────────────────────────────────────────────────────────────────────────────────────────────
+# PUBLISH — the page the operator actually reads, at ONE stable URL.
+#
+# Operator ruling 2026-10-30, in his words: "please create one engram html accessible via a public
+# link, with all the things you need from me: decisions and actions. Decisions have to be short,
+# with context in plain english. Actions have to have details step by step and what to click,
+# always full links and full pathnames, so I don't have to ask 'what repo, what app'. Only keep
+# open issues, remove all done … Every time you update things and write me a message, you update
+# the same file. I'll pin it to this channel … If you need something from me, it has to be in this
+# file. If something is done, it has to be removed."
+#
+# WHY A TOOL AND NOT A HABIT. The page already existed as markdown at the notepad root, and he
+# could not read it: it is in a private repo on a machine he is not at. The content was right and
+# the SURFACE was wrong. Everything below is the surface, and every part of it is enforced rather
+# than remembered, because "remember to re-publish before you message him" is exactly the promise
+# a session breaks on its fourteenth turn.
+#
+#  1. ONE PAGE, UPDATED IN PLACE. `engram_write` mints a NEW object every call, so publishing with
+#     it hands him a new URL per update and his pin rots silently. `engram_update` keeps the id,
+#     and MEASURED 2026-10-30 before any of this was written: it preserves `format: "html"` (read
+#     back at doc_version 2, new body, same id). The id is recorded at the first publish in
+#     <notepad>/.df/operator-page.json and reused for ever.
+#     ⛔ NEVER `write` A PAGE THAT ALREADY HAS AN ID. That is the one failure this cannot survive:
+#     the operator keeps reading a pinned page that no longer moves, while the agent reports
+#     success every time.
+#  2. THE URL CANNOT BE DERIVED, SO IT IS CONFIGURED. Neither call returns one; the render route is
+#     <base>/<object id>, and the base carries an estate's library and namespace ids. ⛔ Tier 1 is
+#     PUBLIC: nothing estate-specific is hardcoded here, the same rule df-engram follows for the
+#     hub, and the publish gate's P4 check exists because "just a default" is how an identifier
+#     reaches a public repo. It comes from DF_ENGRAM_PAGES_URL + DF_ENGRAM_PAGES_NS, set per
+#     machine in the Tier-3 record. Both unset ⇒ publishing is NOT CONFIGURED and `--check`
+#     PASSES. A feature that refuses without its dependency is right; one that stops every notepad
+#     in the fleet from ending a turn is not.
+#  3. STALE IS A DEFECT A MACHINE CAN SEE. `publish --check` compares the rendered page's digest
+#     with the one recorded at the last publish, so "I updated the page" and "I told him I updated
+#     the page" stop being the same sentence. The Stop gate runs it.
+#     ⚠️ THE DIGEST COVERS THE RENDER, NOT operator-todo.md, AND DELIBERATELY EXCLUDES THE
+#     TIMESTAMP — a digest over the whole document would differ on every render and report every
+#     page as stale for ever, which is a check that cannot pass. RENDERER is in the digest, so
+#     changing this renderer correctly marks every published page stale: it IS out of date.
+#
+# ⚠️ 25 KB IS A REAL CEILING, NOT A STYLE BUDGET — the public route truncates a larger page, and a
+# truncated queue silently loses its last items. `publish` REFUSES over the cap and names the
+# biggest items, because the alternative is a page that looks complete and is not.
+# What Engram is, and how a machine is authorised to reach it: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
+RENDERER = "1"
+PAGE_STATE_REL = os.path.join(".df", "operator-page.json")
+PAGES_NS_VAR = "DF_ENGRAM_PAGES_NS"
+PAGES_URL_VAR = "DF_ENGRAM_PAGES_URL"
+AGENT_VAR = "DF_AGENT_ID"
+CHANNEL_VAR = "DF_OPERATOR_CHANNEL"
+OPERATOR_VAR = "DF_OPERATOR_NAME"
+SIZE_CAP = 25000
+URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
+RUN_RE = re.compile(r"(?i)\b(?:then )?run\s*:\s*(\S.*)$")
+# The same command, written as "<prose>: <command>" rather than "Run: <command>".
+CMD_RE = re.compile(r"(?:(?<=: )|(?<=^))((?:bash|git|cd|claude|coder|df-[a-z-]+|gh|curl|python3|unzip|npm)\s+\S[^`]*)$")
+LETTER_RE = re.compile(r"^([A-Z])\b")
+
+CSS = (
+    ":root{--bg:#fbfaf7;--fg:#1d1d1b;--muted:#6b6a64;--card:#fff;--line:#e4e1d8;"
+    "--accent:#8a4b0f;--code:#f1eee6;--stop:#a3321c}"
+    "@media (prefers-color-scheme:dark){:root{--bg:#161614;--fg:#ecebe6;--muted:#a3a29b;"
+    "--card:#1f1f1c;--line:#34332e;--accent:#e0a35c;--code:#2a2925;--stop:#e2795e}}"
+    "body{background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,"
+    "Segoe UI,sans-serif;margin:0;padding:24px 16px}"
+    "main{max-width:860px;margin:0 auto}"
+    "h1{font-size:22px;margin:0 0 4px}"
+    "h2{font-size:17px;margin:28px 0 10px;border-bottom:1px solid var(--line);padding-bottom:4px}"
+    "h3{font-size:16px;margin:0 0 8px;line-height:1.4}"
+    ".meta{color:var(--muted);font-size:13px;margin:0}"
+    ".card{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);"
+    "border-radius:6px;padding:12px 14px;margin:10px 0}"
+    ".card.stop{border-left-color:var(--stop)}"
+    ".lab{display:inline-block;background:var(--accent);color:var(--bg);border-radius:4px;"
+    "padding:1px 6px;font:600 13px/1.5 ui-monospace,monospace;margin-right:6px;"
+    "vertical-align:1px}"
+    ".card.stop .lab{background:var(--stop)}"
+    "p{margin:8px 0}"
+    "ul,ol{margin:8px 0;padding-left:22px}"
+    "li{margin:4px 0}"
+    ".opt{list-style:none;padding-left:0}"
+    ".opt li{border-left:2px solid var(--line);padding-left:10px}"
+    ".opt li.rec{border-left-color:var(--accent)}"
+    ".rec{margin:8px 0}"
+    ".foot{color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:7px;"
+    "margin-bottom:0}"
+    "code{background:var(--code);padding:1px 4px;border-radius:4px;"
+    "font:13px/1.5 ui-monospace,monospace;word-break:break-all}"
+    "a{color:var(--accent);word-break:break-all}"
+)
+
+
+def _esc(s):
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+             .replace('"', "&quot;"))
+
+
+def _rich(s):
+    """Escape FIRST, then re-admit exactly three marks the page uses: `code`, **bold**, and a full
+    URL as a link. Nothing else is interpreted — this renders an operator's queue onto a PUBLIC
+    page, and a renderer that passes markup through is how a repo name becomes a script tag."""
+    out = _esc(s)
+    out = re.sub(r"`([^`]+)`", r"<code>\1</code>", out)
+    out = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", out)
+    return URL_RE.sub(lambda m: '<a href="%s">%s</a>' % (m.group(0), m.group(0)), out)
+
+
+def _step_html(s):
+    """A step's command gets monospaced so he can see where the prose stops and the command
+    starts — written as `Run: <cmd>` or as `<prose>: <cmd>`, and only up to an em-dash, because
+    the tail after one is always what he should SEE, never part of what he types."""
+    if "`" not in s:
+        m = RUN_RE.search(s) or CMD_RE.search(s)
+        if m:
+            cmd, tail = m.group(1).rstrip(), ""
+            for sep in (" — ", " -- "):
+                if sep in cmd:
+                    cmd, rest = cmd.split(sep, 1)
+                    tail = sep + rest
+                    break
+            s = s[:m.start(1)] + "`" + cmd.rstrip() + "`" + tail
+    return _rich(s)
+
+
+def split_rest(rest):
+    """Decompose one entry line back into the fields `add` composed it from. This is that
+    function's inverse over the tool's OWN separators, not a guess at free text."""
+    out = {"task": rest, "category": "", "why": "", "do": "", "ref": "", "raised": ""}
+    m = RAISED_RE.search(rest)
+    if m:
+        out["raised"] = m.group(1)
+        rest = rest[:m.start()]
+    for key, mark in (("ref", " · _ref:_ "), ("do", " · _do:_ ")):
+        i = rest.rfind(mark)
+        if i >= 0:
+            out[key] = rest[i + len(mark):].strip()
+            rest = rest[:i]
+    m = re.match(r"^\*\*(.*?)\*\* · _yours because:_ \*\*([a-z]+)\*\* — (.*)$", rest)
+    if m:
+        out["task"], out["category"], out["why"] = m.group(1), m.group(2), m.group(3).strip()
+    else:
+        out["task"] = rest
+    return out
+
+
+def _parts(extra):
+    ctx = [l[len(CONTEXT_P):] for l in extra if l.startswith(CONTEXT_P)]
+    opts = [l[len(OPTION_P):] for l in extra if l.startswith(OPTION_P)]
+    rec = [l[len(RECOMMEND_P):] for l in extra if l.startswith(RECOMMEND_P)]
+    steps = [re.sub(r"^\s*\d+\.\s*", "", l) for l in extra if STEP_RE.match(l)]
+    return ctx, opts, rec, steps
+
+
+def _card(label, blocking, fields, ctx, opts, rec, steps):
+    cls = "card stop" if blocking else "card"
+    h = ['<section class="%s" id="%s">' % (cls, label)]
+    h.append('<h3><span class="lab">%s</span>%s</h3>' % (label, _rich(fields["task"])))
+    for c in ctx:
+        h.append("<p>%s</p>" % _rich(c))
+    if opts:
+        pick = ""
+        if rec:
+            m = LETTER_RE.match(rec[0].strip())
+            pick = m.group(1) if m else ""
+        h.append('<ul class="opt">')
+        for o in opts:
+            m = LETTER_RE.match(o.strip())
+            mine = bool(pick) and bool(m) and m.group(1) == pick
+            h.append('<li class="rec">%s</li>' % _rich(o) if mine else "<li>%s</li>" % _rich(o))
+        h.append("</ul>")
+    for r in rec:
+        h.append('<p class="rec"><strong>My recommendation:</strong> %s</p>' % _rich(r))
+    if steps:
+        h.append("<ol>")
+        for s in steps:
+            h.append("<li>%s</li>" % _step_html(s))
+        h.append("</ol>")
+    foot = []
+    if blocking:
+        foot.append("<strong>Blocking — the loop is stopped until this is done.</strong>")
+    if fields["category"]:
+        foot.append("Yours because (<strong>%s</strong>): %s"
+                    % (_esc(fields["category"]), _rich(fields["why"])))
+    if fields["do"] and not steps:
+        foot.append("How to answer: %s" % _rich(fields["do"]))
+    if fields["ref"]:
+        foot.append(_rich(fields["ref"]))
+    if fields["raised"]:
+        foot.append("waiting since %s" % _esc(fields["raised"]))
+    h.append('<p class="foot">%s</p>' % " · ".join(foot))
+    h.append("</section>")
+    return "\n".join(h)
+
+
+def render_body(blocking, async_):
+    """The page, minus its <head> and its timestamp: deterministic, so it can be hashed.
+
+    ⚠️ ORDER IS NOT COSMETIC. Decisions first, because an unanswered decision is usually what
+    blocks the actions; within each group, BLOCKING first. A queue sorted by when it was raised
+    teaches the reader to scroll."""
+    rows = [(True, i, r, x) for i, r, x in blocking] + [(False, i, r, x) for i, r, x in async_]
+    dec, act = [], []
+    for blk, iid, rest, extra in rows:
+        f = split_rest(rest)
+        (dec if f["category"] == "decision" else act).append((blk, iid, f, extra))
+    dec.sort(key=lambda t: not t[0])
+    act.sort(key=lambda t: not t[0])
+    out = []
+    for kind, group in (("D", dec), ("A", act)):
+        if not group:
+            continue
+        out.append("<h2>%s</h2>" % ("Decisions — I need your call"
+                                    if kind == "D" else "Actions — only you can do these"))
+        for n, (blk, iid, f, extra) in enumerate(group, 1):
+            ctx, opts, rec, steps = _parts(extra)
+            out.append(_card("%s%d" % (kind, n), blk, f, ctx, opts, rec, steps))
+    if not out:
+        out.append("<h2>Nothing is waiting on you</h2><p>Every open item has a path that does not "
+                   "need you. This page is rewritten whenever that changes.</p>")
+    return "\n".join(out), len(dec), len(act)
+
+
+def _channel_link():
+    ch = os.environ.get(CHANNEL_VAR, "").strip()
+    if not ch:
+        return ""
+    if ch.startswith("http"):
+        return '<a href="%s">your channel</a>' % _esc(ch)
+    return '<a href="https://slack.com/app_redirect?channel=%s">%s</a>' % (_esc(ch), _esc(ch))
+
+
+def agent_id(path):
+    return os.environ.get(AGENT_VAR) or os.path.basename(os.path.dirname(os.path.abspath(path)))
+
+
+def page_title(path):
+    """⚠️ STABLE ACROSS UPDATES, AND DF_OPERATOR_NAME IS PART OF IT. It is the object's
+    title and the heading the operator recognises in a pin, and it is what a FIRST publish
+    looks for in the object store — so changing either variable on a machine that has no
+    state file yet would mint a SECOND page at a SECOND link.
+    Deriving it from anything that moves (an item count, a date) renames the page every
+    turn."""
+    # ⛔ NO REAL NAME HERE. Tier 1 is public and generic; the operator's name is a
+    # Tier-3 fact (DF_OPERATOR_NAME), like the hub and the namespace. The publish gate
+    # caught the first version of this line, which defaulted to a real one.
+    return "%s: what I need from %s" % (agent_id(path),
+                                        os.environ.get(OPERATOR_VAR, "the operator"))
+
+
+def render_page(path, now):
+    body, nd, na = render_body(*parse(path))
+    digest = hashlib.sha256(("%s\0%s" % (RENDERER, body)).encode("utf-8")).hexdigest()
+    title = page_title(path)
+    chan = _channel_link()
+    line = [_esc(agent_id(path))]
+    if chan:
+        line.append(chan)
+    line.append("Updated %s" % now.strftime("%Y-%m-%d %H:%M UTC"))
+    line.append("%d decision%s, %d action%s"
+                % (nd, "" if nd == 1 else "s", na, "" if na == 1 else "s"))
+    html = (
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+        "<title>%s</title>\n<style>\n%s\n</style>\n</head>\n<body>\n<main>\n"
+        "<h1>%s</h1>\n<p class=\"meta\">%s</p>\n%s\n"
+        "<p class=\"meta\" style=\"margin-top:26px\">Answer in your channel with the label — for "
+        "example <code>D2: A</code>, or <code>A3 done</code>. Only open items are here: anything "
+        "answered or finished is removed, and the history lives in GitHub and Notion. "
+        "Page digest <code>%s</code>.</p>\n</main>\n</body>\n</html>\n"
+        % (_esc(title), CSS, _esc(title), " · ".join(line), body, digest[:12]))
+    return html, digest, nd, na
+
+
+def page_state_path(todo):
+    return os.path.join(os.path.dirname(os.path.abspath(todo)), PAGE_STATE_REL)
+
+
+def read_page_state(todo):
+    try:
+        with open(page_state_path(todo), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def write_page_state(todo, state):
+    p = page_state_path(todo)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2, sort_keys=True)
+        f.write("\n")
+
+
+def _engram_bin():
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "df-engram")
+    if os.access(here, os.X_OK):
+        return here
+    return shutil.which("df-engram")
+
+
+UNPUBLISHED = (
+    "operator-todo: %d open item(s) and this page has NEVER been published.\n"
+    "He cannot read a markdown file in a private repo on a machine he is not at. Publish it:\n"
+    "  df-operator-todo publish\n"
+    "then end your message to him with the link it prints.")
+STALE = (
+    "operator-todo: the page he reads is OUT OF DATE (published digest %s, current %s).\n"
+    "Items changed since the last publish, so his pinned link shows a queue that is no longer "
+    "true — and he answers from what he can see.\n"
+    "  df-operator-todo publish\n"
+    "then end your message to him with the link.")
+
+
+def cmd_publish(a):
+    path = todo_path(a.file)
+    problems = lint_page(path)
+    if problems is None:
+        return _refuse("no page at %s. Run `df-operator-todo init` first." % path)
+    now = datetime.now(timezone.utc)
+    html, digest, nd, na = render_page(path, now)
+    state = read_page_state(path)
+    ns = os.environ.get(PAGES_NS_VAR, "").strip()
+    base = os.environ.get(PAGES_URL_VAR, "").strip().rstrip("/")
+
+    if a.check:
+        # ⚠️ Not configured is not a defect. A machine with no pages namespace has nothing to keep
+        # current, and a gate that refuses there would stop every turn on every notepad that never
+        # opted in.
+        if not ns or not base:
+            print("operator-todo: publishing is not configured here (%s / %s unset) — nothing to "
+                  "keep current." % (PAGES_NS_VAR, PAGES_URL_VAR))
+            return 0
+        if not state.get("object_id"):
+            if nd + na == 0:
+                print("operator-todo: nothing open and nothing published — consistent.")
+                return 0
+            print(UNPUBLISHED % (nd + na))
+            return 1
+        if state.get("digest") != digest:
+            print(STALE % (str(state.get("digest"))[:12], digest[:12]))
+            return 1
+        print("operator-todo: the published page is current (%d decision(s), %d action(s)) -> %s"
+              % (nd, na, state.get("url", "?")))
+        return 0
+
+    if problems:
+        return _refuse(
+            "%d lint problem(s) on %s. The page he reads is rendered FROM this file, so every "
+            "defect here is published to a public URL. Run `df-operator-todo lint`, fix, then "
+            "publish." % (len(problems), path))
+    if a.out:
+        with open(a.out, "w", encoding="utf-8") as f:
+            f.write(html)
+        print("operator-todo: rendered %d bytes -> %s" % (len(html.encode("utf-8")), a.out))
+    size = len(html.encode("utf-8"))
+    if size > SIZE_CAP:
+        rows = []
+        for i, r, x in parse(path)[0] + parse(path)[1]:
+            rows.append((len(r) + sum(len(e) for e in x), i))
+        rows.sort(reverse=True)
+        return _refuse(
+            "the rendered page is %d bytes and the cap is %d — the public route truncates a "
+            "larger page, which loses the END of your queue without saying so.\nBiggest items: "
+            "%s.\nClose what is done, or shorten their --context/--step text."
+            % (size, SIZE_CAP, ", ".join("%s (%d)" % (i, n) for n, i in rows[:4])))
+    if a.dry_run:
+        print("operator-todo: DRY RUN — %d bytes, digest %s, %d decision(s), %d action(s). "
+              "Nothing published." % (size, digest[:12], nd, na))
+        return 0
+    if not ns or not base:
+        return _refuse(
+            "publishing is not configured on this machine. Set both, per machine, in the Tier-3 "
+            "record's settings.env (never in Tier 1 — it is public and these carry estate ids):\n"
+            "  %s=<the namespace that holds shared pages>\n"
+            "  %s=<the public render base, ending in the namespace id>\n"
+            "Then: df-operator-todo publish" % (PAGES_NS_VAR, PAGES_URL_VAR))
+    tool = _engram_bin()
+    if not tool:
+        return _refuse("df-engram is not on PATH and is not beside this script; it owns the hub "
+                       "transport. Install the kit, or run `df-operator-todo publish --out <file>` "
+                       "and publish that file yourself.")
+    tmp = os.path.join(os.environ.get("TMPDIR", "/tmp"), "df-operator-page.html")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(html)
+    # --notepad is EXPLICIT because df-engram otherwise walks up from CWD for NOTES.md, and a
+    # publish is not run from a notepad every time: a Stop hook fires wherever the session
+    # happens to be. Measured as a rc-2 refusal from a repo root, by the suite.
+    cmd = [tool, "--notepad", os.path.dirname(os.path.abspath(path)),
+           "page", "--ns", ns, "--title", page_title(path), "--html", tmp]
+    if state.get("object_id"):
+        cmd += ["--id", state["object_id"]]
+    else:
+        cmd += ["--visibility", a.visibility]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    if r.returncode != 0:
+        sys.stderr.write(r.stdout + r.stderr)
+        return _refuse("df-engram page failed; NOTHING was recorded, so the next publish retries "
+                       "the same object. Fix the hub or the credential and run it again.")
+    try:
+        res = json.loads(r.stdout.strip().split("\n")[-1])
+    except Exception:
+        sys.stderr.write(r.stdout + r.stderr)
+        return _refuse("df-engram page did not return JSON; not recording an id I cannot read.")
+    oid = res.get("object_id")
+    if not oid:
+        return _refuse("df-engram page returned no object_id: " + r.stdout.strip()[:200])
+    url = "%s/%s" % (base, oid)
+    write_page_state(path, {"object_id": oid, "url": url, "digest": digest, "renderer": RENDERER,
+                            "published": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "items": nd + na, "title": page_title(path),
+                            "bytes": size})
+    print("operator-todo: %s %d decision(s) and %d action(s) -> %s"
+          % ("updated" if res.get("updated") else "published", nd, na, url))
+    print("End your message to him with that link. It never changes.")
+    return 0
+
+
 def main():
     p = argparse.ArgumentParser(prog="df-operator-todo", description=__doc__.split("\n")[0])
     p.add_argument("--file", help="explicit path (tests); default is <notepad>/" + FILENAME)
@@ -497,6 +921,17 @@ def main():
 
     li = sub.add_parser("lint", help="check the page holds only open items, in shape")
     li.set_defaults(func=cmd_lint)
+
+    pb = sub.add_parser("publish", help="update the ONE HTML page the operator reads, in place")
+    pb.add_argument("--check", action="store_true",
+                    help="exit 1 if the published page is older than this file (the Stop gate "
+                         "runs this); 0 when publishing is not configured here")
+    pb.add_argument("--dry-run", action="store_true", help="render and report; publish nothing")
+    pb.add_argument("--out", help="also write the rendered HTML here (inspection, tests)")
+    pb.add_argument("--visibility", default="public", choices=["public", "private", "inherit"],
+                    help="FIRST publish only: how the object is served. Default public — the "
+                         "operator asked for a link he can open. Later publishes never change it.")
+    pb.set_defaults(func=cmd_publish)
 
     d = sub.add_parser("done", help="remove a finished task (no history kept in the file)")
     d.add_argument("--id", required=True)
