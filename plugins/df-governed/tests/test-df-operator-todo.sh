@@ -405,9 +405,9 @@ if [ "${DF_STUB_LIST_BROKEN:-0}" = "1" ]; then
 fi
 case "$1" in
   *engram_list)             printf '{"objects":[]}\n' ;;
-  *engram_write)            printf '{"id":"11111111-2222-3333-4444-555555555555"}\n' ;;
-  *engram_update)           printf '{"object_id":"11111111-2222-3333-4444-555555555555"}\n' ;;
-  *set_object_visibility)   printf '{"object_id":"11111111-2222-3333-4444-555555555555","visibility":"public"}\n' ;;
+  *engram_write)            printf '{"id":"stub-page-object-A"}\n' ;;
+  *engram_update)           printf '{"object_id":"stub-page-object-A"}\n' ;;
+  *set_object_visibility)   printf '{"object_id":"stub-page-object-A","visibility":"public"}\n' ;;
   *)                        printf '{}\n' ;;
 esac
 STUBEOF
@@ -429,11 +429,11 @@ eq "W6 CONTROL: and wrote NOTHING" "$N" "0"
 OUT="$(DF_ENGRAM_TRANSPORT="$STUB" DF_ENGRAM_PAGES_NS="$NS" DF_ENGRAM_PAGES_URL="$BASE" \
        "$SCRIPT" --file "$FW" publish 2>&1)"; RC=$?
 eq       "W7 a first publish succeeds" "$RC" "0"
-contains "W7 and prints the link" "$BASE/11111111-2222-3333-4444-555555555555" "$OUT"
+contains "W7 and prints the link" "$BASE/stub-page-object-A" "$OUT"
 contains "W7 asked the object store first" "engram_list" "$(cat "$DF_ENGRAM_TOOLLOG")"
 contains "W7 then wrote the page" "engram_write" "$(cat "$DF_ENGRAM_TOOLLOG")"
 contains "W7 and set it public" "set_object_visibility" "$(cat "$DF_ENGRAM_TOOLLOG")"
-contains "W7 state records the id" "11111111-2222-3333-4444-555555555555" "$(cat "$T/w/.df/operator-page.json")"
+contains "W7 state records the id" "stub-page-object-A" "$(cat "$T/w/.df/operator-page.json")"
 
 OUT="$(DF_ENGRAM_PAGES_NS="$NS" DF_ENGRAM_PAGES_URL="$BASE" "$SCRIPT" --file "$FW" publish --check 2>&1)"; RC=$?
 eq       "W8 --check passes immediately after a publish" "$RC" "0"
@@ -459,7 +459,7 @@ N="$(grep -c 'engram_write' "$DF_ENGRAM_TOOLLOG" || true)"
 eq       "W10 and NEVER wrote a second object" "$N" "0"
 N="$(grep -c 'set_object_visibility' "$DF_ENGRAM_TOOLLOG" || true)"
 eq       "W10 nor silently re-set visibility (an unpublish is a decision)" "$N" "0"
-contains "W10 the link is unchanged" "$BASE/11111111-2222-3333-4444-555555555555" "$OUT"
+contains "W10 the link is unchanged" "$BASE/stub-page-object-A" "$OUT"
 
 # A page out of shape must not be published: the HTML is rendered FROM it, to a public URL.
 printf 'a stray line of narration\n' >> "$FW"

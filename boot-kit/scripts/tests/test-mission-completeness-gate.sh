@@ -616,8 +616,8 @@ cat > "$TMPDIR/pubstub" <<'STUBEOF'
 #!/usr/bin/env bash
 case "$1" in
   *engram_list)   printf '{"objects":[]}\n' ;;
-  *engram_write)  printf '{"id":"99999999-8888-7777-6666-555555555555"}\n' ;;
-  *engram_update) printf '{"object_id":"99999999-8888-7777-6666-555555555555"}\n' ;;
+  *engram_write)  printf '{"id":"stub-page-object-B"}\n' ;;
+  *engram_update) printf '{"object_id":"stub-page-object-B"}\n' ;;
   *)              printf '{"ok":true}\n' ;;
 esac
 STUBEOF
