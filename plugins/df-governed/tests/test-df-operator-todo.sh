@@ -355,7 +355,7 @@ export DF_AGENT_ID="agent-under-test"
   --context "A machine keeps running whatever it last installed, so until this runs it has the old tool." \
   --ref "https://example.invalid/pull/1" \
   --step "Open the workspace and click Terminal" \
-  --step "Run: cd /home/coder/code/loom-storage" \
+  --step "Run: cd /opt/example/kit-checkout" \
   --step "Run: bash install.sh --lock=instances/far/loom.lock.json" >/dev/null 2>&1
 
 OUT="$("$SCRIPT" --file "$FW" publish --dry-run --out "$T/w/page.html" 2>&1)"; RC=$?
@@ -368,7 +368,7 @@ contains "W2 the action is labelled A1" 'id="A1"' "$H"
 contains "W2 context is rendered" "printing a token into a transcript" "$H"
 contains "W2 the recommended option is marked" '<li class="rec">' "$H"
 contains "W2 steps are an ordered list" "<ol>" "$H"
-contains "W2 a full path survives" "/home/coder/code/loom-storage" "$H"
+contains "W2 a full path survives" "/opt/example/kit-checkout" "$H"
 contains "W2 the command is monospaced" "<code>bash install.sh" "$H"
 contains "W2 the ref becomes a link" '<a href="https://example.invalid/pull/1">' "$H"
 contains "W2 blocking is called out" "Blocking" "$H"

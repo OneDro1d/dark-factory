@@ -713,9 +713,17 @@ def agent_id(path):
 
 
 def page_title(path):
-    """⚠️ STABLE ACROSS UPDATES. It is the object's title and the heading he recognises in a pin;
-    deriving it from anything that moves (an item count, a date) renames his page every turn."""
-    return "%s: what I need from %s" % (agent_id(path), os.environ.get(OPERATOR_VAR, "Michal"))
+    """⚠️ STABLE ACROSS UPDATES, AND DF_OPERATOR_NAME IS PART OF IT. It is the object's
+    title and the heading the operator recognises in a pin, and it is what a FIRST publish
+    looks for in the object store — so changing either variable on a machine that has no
+    state file yet would mint a SECOND page at a SECOND link.
+    Deriving it from anything that moves (an item count, a date) renames the page every
+    turn."""
+    # ⛔ NO REAL NAME HERE. Tier 1 is public and generic; the operator's name is a
+    # Tier-3 fact (DF_OPERATOR_NAME), like the hub and the namespace. The publish gate
+    # caught the first version of this line, which defaulted to a real one.
+    return "%s: what I need from %s" % (agent_id(path),
+                                        os.environ.get(OPERATOR_VAR, "the operator"))
 
 
 def render_page(path, now):
