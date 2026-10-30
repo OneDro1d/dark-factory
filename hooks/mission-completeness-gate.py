@@ -162,6 +162,20 @@ History goes to NOTES.md or git, never onto the page. Then `df-operator-todo lin
 {lint}"""
 
 
+PUBLISH = """⛔ HIS PAGE IS OLDER THAN YOUR QUEUE. Publish it before you stop.
+
+He reads ONE html page at ONE pinned link, and he answers from what he can SEE. A queue that has
+changed since the last publish means the page in front of him is not the one you are working from
+— so "I updated it" and "he can read it" stop being the same sentence, and he decides from the
+older one.
+
+{out}
+
+Operator ruling 2026-10-30: *"Every time you update things and write me a message, you update the
+same file … If you need something from me, it has to be in this file. If something is done, it has
+to be removed."*"""
+
+
 def _find_notepad(start):
     d = os.path.abspath(start)
     for _ in range(12):
@@ -172,6 +186,52 @@ def _find_notepad(start):
             return None
         d = parent
     return None
+
+
+# The hub this publishes to, and how a machine is authorised to reach it:
+# [Engram](../starter-kit/instance/AUTHENTICATION.md#engram)
+def operator_page_stale(session_id, cwd):
+    """`df-operator-todo publish --check` — the block text when his page is behind, else None.
+
+    This is the half of the 2026-10-30 ruling a session cannot be trusted to remember. Keeping the
+    markdown page in shape is already checked beside this; DELIVERING it is a separate promise, and
+    an undelivered one is invisible from inside the session that owes it.
+
+    ⚠️ ONCE PER STALE VERSION, NOT ONCE PER STOP — and that limit is deliberate. A gate that
+    refused until a hub call succeeded would WEDGE a session whenever Engram is down, with no way
+    out but editing the very file it complains about. So it names the defect once for each distinct
+    version of the queue (the message carries the digest, so the digest keys the throttle), and a
+    session that genuinely cannot publish can still finish and say so out loud.
+    ⚠️ FAILS OPEN, like the lint check beside it: an old tool with no `publish` (argparse exits 2),
+    no tool at all, a timeout — every one of those is None. Exit 0 also covers "publishing is not
+    configured on this machine", so a notepad that never opted in is never gated."""
+    try:
+        notepad = _find_notepad(cwd or os.getcwd())
+        tool = os.environ.get("DF_OPERATOR_TODO_BIN") or shutil.which("df-operator-todo")
+        if not notepad or not tool:
+            return None
+        page = os.path.join(notepad, "operator-todo.md")
+        if not os.path.isfile(page):
+            return None
+        r = subprocess.run([tool, "--file", page, "publish", "--check"],
+                           capture_output=True, text=True, timeout=25)
+        if r.returncode != 1:
+            return None
+        out = (r.stdout or "").strip()
+        if not out:
+            return None
+        sig = hashlib.sha256(out.encode("utf-8")).hexdigest()[:16]
+        mark = _state_path(session_id or "nosession", ".published")
+        if os.path.exists(mark):
+            with open(mark) as f:
+                if f.read().strip() == sig:
+                    return None
+        os.makedirs(os.path.dirname(mark), exist_ok=True)
+        with open(mark, "w") as f:
+            f.write(sig)
+        return PUBLISH.format(out=out[:1500])
+    except Exception:
+        return None
 
 
 def operator_page_problem(session_id, cwd):
@@ -585,6 +645,13 @@ def main():
     page = None if os.environ.get("DF_OPERATOR_PAGE_CHECK") == "off" else operator_page_problem(sid, cwd)
     if page:
         print(json.dumps({"decision": "block", "reason": page}))
+        return
+
+    # Then whether he can READ it. Order matters: a page out of shape must not be published, so
+    # lint is the first defect and delivery is the second.
+    pub = None if os.environ.get("DF_OPERATOR_PAGE_CHECK") == "off" else operator_page_stale(sid, cwd)
+    if pub:
+        print(json.dumps({"decision": "block", "reason": pub}))
         return
 
     n = open_item_count()

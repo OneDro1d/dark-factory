@@ -781,6 +781,90 @@ def cmd_reconcile(a, notepad):
     return 0
 
 
+def page_in_store(collection, title):
+    """(id, note) for a page with this exact title, asked of the OBJECT STORE.
+
+    Why this exists at all: a page is published by TITLE the first time and by ID for ever after,
+    and `engram_write` mints a new object per call. So a first write that TIMES OUT is the one
+    fault shape that can hand the operator two pages at two URLs, with the agent recording
+    neither — exactly the duplicate-by-hand failure this whole tool was written to end, except
+    worse, because a page he has pinned silently stops moving.
+
+    ⚠️ The same discipline as find_in_store, for the same measured reason: a reply with no
+    `objects` key is a store that could not answer, NOT an absence, and only a real listing
+    licenses creating a new object. Titles are unique by construction here (`<agent>: what I need
+    from <operator>`), so a title match is identity for a page — that is a weaker authority than
+    an ENGRAM-KEY and it is the right one, because a page's body is rewritten every publish and
+    carries no stable nonce."""
+    okc, res = call("engram-prod__engram_list", {"collection": collection, "limit": 200})
+    if not okc or not isinstance(res, dict) or "objects" not in res:
+        return None, "unavailable"
+    for o in res.get("objects") or []:
+        if isinstance(o, dict) and (o.get("title") or "") == title and o.get("id"):
+            return o["id"], "already in the object store"
+    return None, "absent from the object store"
+
+
+def cmd_page(a, notepad):
+    """Publish or re-publish ONE html object: the operator's open-items page.
+
+    ⛔ NEVER A SECOND OBJECT. With --id this UPDATES in place; without one it adopts an existing
+    page of the same title before it considers writing. MEASURED 2026-10-30: `engram_update`
+    preserves `format: "html"` (read back at doc_version 2 with the new body and the same id), so
+    the id — and therefore the public URL the operator has pinned — survives every update.
+
+    Visibility is set on the FIRST publish only. Changing it later is the operator's call, not a
+    side effect of an update: an unpublish must be a decision, never a redeploy."""
+    try:
+        with open(a.html, encoding="utf-8") as f:
+            html = f.read()
+    except OSError as exc:
+        sys.stderr.write("df-engram: cannot read --html %s: %s\n" % (a.html, exc))
+        return 2
+    if not html.strip():
+        sys.stderr.write("df-engram: --html %s is empty; refusing to publish a blank page over a "
+                         "live one.\n" % a.html)
+        return 2
+    oid, updated = a.id, bool(a.id)
+    if not oid:
+        if not a.ns:
+            sys.stderr.write("df-engram: --ns is required for a first publish.\n")
+            return 2
+        found, note = page_in_store(a.ns, a.title)
+        if note == "unavailable":
+            sys.stderr.write("df-engram: the object store could not be listed, so I cannot tell "
+                             "whether this page already exists. NOT writing a second one — that "
+                             "is how an operator ends up with two links. Retry.\n")
+            return 1
+        if found:
+            oid, updated = found, True
+    if oid:
+        okc, res = call("engram-prod__engram_update",
+                        {"object_id": oid, "content": html, "title": a.title})
+    else:
+        okc, res = call("engram-prod__engram_write",
+                        {"collection": a.ns, "title": a.title, "content": html,
+                         "format": "html", "kind": "document"})
+    if not okc:
+        sys.stderr.write(
+            "df-engram: the page call is NOT PROVEN (%s).\n%s\n"
+            "⚠️ Do not simply re-run a FIRST publish: a timeout may have created the page. This "
+            "command adopts an existing page by title, so running it again is safe — but record "
+            "nothing until it prints an id.\n" % (str(res)[:200], TIMEOUT_NOTE))
+        return 1
+    got = (res.get("object_id") or res.get("id")) if isinstance(res, dict) else None
+    if not got:
+        sys.stderr.write("df-engram: no object id in the reply: %s\n" % json.dumps(res)[:300])
+        return 1
+    out = {"object_id": got, "updated": updated}
+    if a.visibility and not updated:
+        okv, resv = call("engram-prod__engram_set_object_visibility",
+                         {"object_id": got, "visibility": a.visibility})
+        out["visibility"] = a.visibility if okv else "UNPROVEN: %s" % str(resv)[:120]
+    print(json.dumps(out))
+    return 0
+
+
 def cmd_auth_check(a, notepad):
     """Say WHERE the credential comes from, and never what it is.
 
@@ -840,6 +924,17 @@ def main():
     rc.add_argument("--budget", type=int, default=0,
                     help="cap the output in BYTES (the SessionStart budget is ~400)")
     rc.set_defaults(func=cmd_recall)
+
+    pg = sub.add_parser("page", help="publish or update ONE html page in place (an operator's "
+                                     "open-items page); prints its object id as JSON")
+    pg.add_argument("--html", required=True, help="the rendered HTML file to publish")
+    pg.add_argument("--title", required=True, help="the object title; STABLE across updates — it "
+                                                   "is how a first publish finds an existing page")
+    pg.add_argument("--ns", help="namespace for a FIRST publish (ignored with --id)")
+    pg.add_argument("--id", help="the object to update in place; omit only for a first publish")
+    pg.add_argument("--visibility", choices=["public", "private", "inherit"],
+                    help="FIRST publish only: how the object is served")
+    pg.set_defaults(func=cmd_page)
 
     ac = sub.add_parser("auth-check", help="where the hub and credential resolve FROM — never the "
                                           "credential itself")
