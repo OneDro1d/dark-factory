@@ -385,9 +385,15 @@ contains "W3 a script tag is escaped" "&lt;script&gt;" "$H"
 absent   "W3 and never emitted as markup" "<script>" "$H"
 "$SCRIPT" --file "$FW" done --id w-esc --by-operator >/dev/null 2>&1
 
-OUT="$("$SCRIPT" --file "$FW" publish --check 2>&1)"; RC=$?
+# ⛔ `env -u` IS LOAD-BEARING: without it this inherits a configured machine's vars and the
+# tool correctly reports UNPUBLISHED instead, so the assertion passed on CI and failed on every
+# box that had actually opted in. A test must not depend on the invoker's environment.
+OUT="$(env -u DF_ENGRAM_PAGES_NS -u DF_ENGRAM_PAGES_URL "$SCRIPT" --file "$FW" publish --check 2>&1)"; RC=$?
 eq       "W4 unconfigured --check PASSES (a notepad that never opted in is not gated)" "$RC" "0"
 contains "W4 and says why" "not configured" "$OUT"
+# CONTROL: the same command on a CONFIGURED machine must NOT pass, or W4 proves nothing.
+OUT="$(DF_ENGRAM_PAGES_NS="$NS" DF_ENGRAM_PAGES_URL="$BASE" "$SCRIPT" --file "$FW" publish --check 2>&1)"; RC=$?
+eq       "W4 CONTROL: configured and unpublished is still a defect (rc 1)" "$RC" "1"
 
 OUT="$(DF_ENGRAM_PAGES_NS="$NS" DF_ENGRAM_PAGES_URL="$BASE" "$SCRIPT" --file "$FW" publish --check 2>&1)"; RC=$?
 eq       "W5 configured but never published is a DEFECT (rc 1)" "$RC" "1"
@@ -468,7 +474,7 @@ OUT="$(DF_ENGRAM_TRANSPORT="$STUB" DF_ENGRAM_PAGES_NS="$NS" DF_ENGRAM_PAGES_URL=
 eq       "W11 a page that fails lint REFUSES to publish (rc 2)" "$RC" "2"
 contains "W11 and says the defect would be published" "public URL" "$OUT"
 
-echo "== X: 25 KB is a ceiling the route enforces silently, so the tool enforces it loudly"
+echo "== X: the route REFUSES an over-cap page with 413 (it does not truncate), so the tool refuses first"
 mkdir -p "$T/x"
 FX="$T/x/operator-todo.md"
 "$SCRIPT" --file "$FX" init >/dev/null 2>&1
@@ -486,9 +492,26 @@ N="$(grep -c '^- \[ \] ' "$FX" || true)"
 eq       "X0 CONTROL: the oversized fixture really has 30 items" "$N" "30"
 OUT="$("$SCRIPT" --file "$FX" publish --dry-run 2>&1)"; RC=$?
 eq       "X1 an oversized page REFUSES (rc 2)" "$RC" "2"
-contains "X1 and names the ceiling" "25000" "$OUT"
-contains "X1 and names the hazard" "truncates" "$OUT"
+contains "X1 and names the stored cap" "24800" "$OUT"
+contains "X1 and names the route limit it derives from" "25600" "$OUT"
+# ⛔ THE HAZARD IS A 413, NOT A TRUNCATION. This assertion read "truncates" until 2026-11-08,
+# pinning a claim nobody had measured; three independent measurements (2026-10-23, 2026-10-28
+# and 2026-10-31) all say the route answers 413 and the page is gone for everyone.
+contains "X1 and names the real hazard" "413" "$OUT"
+absent   "X1 and no longer claims silent truncation" "truncates a" "$OUT"
 contains "X1 and names the biggest items" "Biggest items:" "$OUT"
+
+# ⛔ X2 IS THE REGRESSION TEST FOR THE DEFECT ITSELF. The route limits the RENDERED page; the
+# tool can only measure the STORED one. The old cap of 25000 left just 600 bytes of headroom
+# against a wrapper measured as large as +700, so a page of 24,901-25,000 bytes PASSED the guard
+# and then 413d - taking down the link the operator has pinned, previous version included.
+RL="$(sed -n "s/^ROUTE_LIMIT = \([0-9]*\).*/\1/p" "$SCRIPT")"
+SC="$(sed -n "s/^SIZE_CAP = ROUTE_LIMIT - WRAPPER_MAX.*/x/p" "$SCRIPT")"
+WM="$(sed -n "s/^WRAPPER_MAX = \([0-9]*\).*/\1/p" "$SCRIPT")"
+eq       "X2 the route limit is the measured 25600" "$RL" "25600"
+eq       "X2 the stored cap is DERIVED from it, not written twice" "$SC" "x"
+[ -n "$WM" ] && [ "$WM" -ge 700 ] && R2=0 || R2=1
+eq       "X2 the wrapper margin covers the worst wrapper ever measured (700)" "$R2" "0"
 unset DF_AGENT_ID DF_ENGRAM_TOOLLOG
 
 printf 'passed %s  failed %s\n' "$PASS" "$FAIL"

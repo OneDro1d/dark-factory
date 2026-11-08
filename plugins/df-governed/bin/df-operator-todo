@@ -517,9 +517,19 @@ def cmd_lint(a):
 #     page as stale for ever, which is a check that cannot pass. RENDERER is in the digest, so
 #     changing this renderer correctly marks every published page stale: it IS out of date.
 #
-# ⚠️ 25 KB IS A REAL CEILING, NOT A STYLE BUDGET — the public route truncates a larger page, and a
-# truncated queue silently loses its last items. `publish` REFUSES over the cap and names the
-# biggest items, because the alternative is a page that looks complete and is not.
+# ⛔ THE ROUTE DOES NOT TRUNCATE — IT REFUSES THE WHOLE PAGE. Measured three times, independently
+# (2026-10-23, 2026-10-28 and 2026-10-31, by three different sessions): over the limit the
+# public route answers **HTTP 413 text/plain**, body "rendered page is N bytes, over the
+# 25600-byte public limit". ⚠️ AND THE VERSION THAT WORKED A MINUTE AGO STOPS WORKING AT ONCE
+# so an over-cap publish does not cost the END of his queue — it costs the PIN. This
+# comment said "truncates silently" until 2026-11-08 and that was never measured; the three
+# measurements above all predate it and all disagree with it.
+#
+# ⚠️ THE LIMIT IS ON THE **RENDERED** PAGE, AND WE CAN ONLY MEASURE THE **STORED** ONE. The server
+# adds a wrapper, observed between +341 bytes (a live page, 2026-11-08) and +700
+# (another, 2026-10-23). A cap of 25000 on the stored page therefore PERMITTED a render of up to 25700 —
+# over the limit — so the guard could pass a page the route then refused. The margin below is
+# what makes the stored measurement a safe proxy for the rendered one.
 # What Engram is, and how a machine is authorised to reach it: [Engram](../../../starter-kit/instance/AUTHENTICATION.md#engram)
 RENDERER = "1"
 PAGE_STATE_REL = os.path.join(".df", "operator-page.json")
@@ -528,7 +538,9 @@ PAGES_URL_VAR = "DF_ENGRAM_PAGES_URL"
 AGENT_VAR = "DF_AGENT_ID"
 CHANNEL_VAR = "DF_OPERATOR_CHANNEL"
 OPERATOR_VAR = "DF_OPERATOR_NAME"
-SIZE_CAP = 25000
+ROUTE_LIMIT = 25600   # measured, the route's own number, on the RENDERED page
+WRAPPER_MAX = 800     # observed +341..+700 of server wrapper; 800 is the margin over the worst
+SIZE_CAP = ROUTE_LIMIT - WRAPPER_MAX   # what we may allow for the STORED page
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 RUN_RE = re.compile(r"(?i)\b(?:then )?run\s*:\s*(\S.*)$")
 # The same command, written as "<prose>: <command>" rather than "Run: <command>".
@@ -838,10 +850,14 @@ def cmd_publish(a):
             rows.append((len(r) + sum(len(e) for e in x), i))
         rows.sort(reverse=True)
         return _refuse(
-            "the rendered page is %d bytes and the cap is %d — the public route truncates a "
-            "larger page, which loses the END of your queue without saying so.\nBiggest items: "
-            "%s.\nClose what is done, or shorten their --context/--step text."
-            % (size, SIZE_CAP, ", ".join("%s (%d)" % (i, n) for n, i in rows[:4])))
+            "the stored page is %d bytes and the cap is %d (the route refuses a RENDERED page "
+            "over %d, and the server adds up to %d bytes of wrapper). Over it the public link "
+            "answers HTTP 413 and the page is gone for everyone — including the version that "
+            "works right now, which stops working at once. It is the PIN that breaks, not the "
+            "tail of the queue.\nBiggest items: %s.\nClose what is done. Shortening his "
+            "--context is the last resort, not the first: he asked for that context."
+            % (size, SIZE_CAP, ROUTE_LIMIT, WRAPPER_MAX,
+               ", ".join("%s (%d)" % (i, n) for n, i in rows[:4])))
     if a.dry_run:
         print("operator-todo: DRY RUN — %d bytes, digest %s, %d decision(s), %d action(s). "
               "Nothing published." % (size, digest[:12], nd, na))
@@ -888,10 +904,59 @@ def cmd_publish(a):
                             "published": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
                             "items": nd + na, "title": page_title(path),
                             "bytes": size})
+    status = _read_back(url)
+    if status is None:
+        print("operator-todo: could NOT reach the public link to check it (no network?). "
+              "The object is written; whether the route serves it is unverified.")
+    elif status != 200:
+        sys.stderr.write(
+            "operator-todo: the object was written but the PUBLIC LINK ANSWERS %d, so the page "
+            "he has pinned is not being served — and a 413 also takes down the version that "
+            "worked before this publish. Do not tell him it is updated.\n  %s\n"
+            % (status, url))
+        return 1
     print("operator-todo: %s %d decision(s) and %d action(s) -> %s"
           % ("updated" if res.get("updated") else "published", nd, na, url))
     print("End your message to him with that link. It never changes.")
     return 0
+
+
+def _read_back(url):
+    """GET the public page and return its HTTP status, or None if we could not ask.
+
+    ⛔ `df-engram page` returning 0 proves the OBJECT was written. It proves NOTHING about whether
+    the public route will serve it: the 413 is decided at render time, on the fetch. So the only
+    verdict that counts is the route's own, and this asks for it.
+
+    ⚠️ The page is served `max-age=60`, so a 200 here CAN be a cached copy of the previous version.
+    That makes this a reliable detector of a REFUSED page and not a proof of a correct one — which
+    is the asymmetry worth having, because a refused page is the failure that takes the pin down.
+    None means we could not ask (no network, DNS, timeout); the caller says so rather than passing
+    vacuously.
+    """
+    try:
+        import urllib.request
+        import urllib.error
+    except Exception:
+        return None
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (compatible) df-operator-todo page check",
+        "Accept": "text/html"})
+    try:
+        r = urllib.request.urlopen(req, timeout=30)
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception:
+        return None
+    try:
+        return getattr(r, "status", None) or r.getcode()
+    except Exception:
+        return None
+    finally:
+        try:
+            r.close()
+        except Exception:
+            pass
 
 
 def main():
