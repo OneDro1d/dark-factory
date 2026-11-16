@@ -19,6 +19,16 @@ It is the generalization of a real run: a DEX arbitrage bot taken from half-fini
 
 For a single stage only (just the PO doc, just TDD), invoke that `df-*` skill directly instead.
 
+## First step: the claims ask, for this session
+
+If the OneDroid Indie kit is installed (`onedroid` on the PATH), run this once, at the start of the mission:
+
+```
+onedroid claims ask on --session
+```
+
+From then on, a turn of **this session** that changed something (an edit, a write, a shell command) and ended without a claims block is sent back once to add one: a line saying what was done, then the claims with their evidence, which the developer witnesses with `onedroid witness`. The kit's default is off, so other sessions on the machine are not asked. The session id comes from `$CLAUDE_CODE_SESSION_ID`, which Claude Code sets for every shell command of a session. No kit installed: skip this step and say so in the mission's first note.
+
 ## The pipeline
 
 <!-- ENFORCED. A `PreToolUse` gate (`df-stage-gate.py`) blocks any write to
@@ -128,6 +138,7 @@ Rules: every points-tracked ticket gets an estimate; anything above 8 is decompo
 
 ## End-to-end checklist (make these TodoWrite items)
 
+- [ ] Claims ask on for this session (`onedroid claims ask on --session`), if the OneDroid Indie kit is installed.
 - [ ] Recall + frame the work through the data-transform lens; confirm tracker + project/board.
 - [ ] Create the epic + per-stage stories (points at 2 SP = 1 human-day where tracked).
 - [ ] Stage 1 PO doc (`df-product-owner`) → ticket Done + committed.
